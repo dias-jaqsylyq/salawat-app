@@ -1,0 +1,868 @@
+From bb049e9069ac17086733e0019101315efcd058a5 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sat, 15 Aug 2026 13:21:40 +0000
+Subject: [PATCH] Remove challenge gates and add Mawlid admin results
+
+---
+ README.md                              |  17 ++--
+ package.json                           |   2 +-
+ src/api/adminPeriod.test.ts            | 107 +++++++++++++++++++++++++
+ src/api/adminPeriod.ts                 |  42 ++++++++++
+ src/api/indefiniteAfterWindow.test.ts  |  59 ++++++++++++++
+ src/api/indefiniteBeforeWindow.test.ts |  94 ++++++++++++++++++++++
+ src/api/routes/adminLeaderboard.ts     |  31 +++++++
+ src/api/routes/adminStatus.ts          |   8 +-
+ src/api/routes/dayOverride.ts          |   2 +-
+ src/api/routes/export.ts               |  36 ++++++++-
+ src/api/routes/progressFields.ts       |  28 +++----
+ src/api/routes/register.ts             |   6 --
+ src/api/server.ts                      |  15 +++-
+ src/db/repository.ts                   |  32 +++++---
+ src/scheduler/reminder.ts              |   7 +-
+ src/utils/challenge.ts                 |  16 ++--
+ src/utils/streak.ts                    |   4 +-
+ 17 files changed, 447 insertions(+), 59 deletions(-)
+ create mode 100644 src/api/adminPeriod.test.ts
+ create mode 100644 src/api/adminPeriod.ts
+ create mode 100644 src/api/indefiniteAfterWindow.test.ts
+ create mode 100644 src/api/indefiniteBeforeWindow.test.ts
+ create mode 100644 src/api/routes/adminLeaderboard.ts
+
+diff --git a/README.md b/README.md
+index fcd2afc..7424e65 100644
+--- a/README.md
++++ b/README.md
+@@ -26,7 +26,7 @@ cp .env.example .env
+ 
+ Open `.env` and set:
+ - `BOT_TOKEN` — **your real bot token from BotFather.** Gitignored, never committed.
+-- `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` — actual Gregorian dates of this year's Mawlid month, `YYYY-MM-DD` (start must be on or before end). Registration is blocked after the end date; logging and progress still work. Daily reminders are **not** gated on this window — they send whenever enabled.
++- `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` — informational Gregorian bounds of this year's Mawlid period, `YYYY-MM-DD` (start must be on or before end). They never gate registration, logging, streaks, or reminders; only Admin Mawlid results/CSV use them as a filter.
+ - `TIMEZONE`, `REMINDER_TIME`, `DB_PATH` — defaults: `Asia/Hong_Kong`, `20:00`, `./data/salawat.db`.
+ - `PORT` — API port (defaults to `3000` locally; Railway injects this automatically in production).
+ - `CORS_ORIGIN` — origin(s) allowed to call the API. Defaults to `*` (dev only). **In production (`NODE_ENV=production`) this must be set to the real Vercel domain** (not `*`) or the process refuses to start.
+@@ -74,7 +74,6 @@ Unauthenticated:
+ - `goal`: **daily** salawat target — integer, `1`…`100000000` inclusive (stored as `users.goal`)
+ → `200 { success: true, user: { id, nickname, goal } }` (idempotent — calling it again for an already-registered user just returns their existing record unchanged)
+ → `400 { success: false, error: "invalid_nickname" | "invalid_goal" }`
+-→ `403 { success: false, error: "challenge_not_started" | "challenge_ended" }`
+ → `409 { success: false, error: "nickname_taken" }`
+ → `429 { success: false, error: "rate_limited" }`
+ 
+@@ -83,7 +82,7 @@ Unauthenticated:
+ - Rate limits: 30 requests/minute/user and 50_000 salawat/calendar day (challenge `TIMEZONE`)
+ → `200 { success: true, newTotal: number, newTodayTotal: number }`
+ → `400 { success: false, error: "invalid_count" }`
+-→ `403 { success: false, error: "not_registered" | "challenge_not_started" | "challenge_ended" }`
++→ `403 { success: false, error: "not_registered" }`
+ → `429 { success: false, error: "rate_limited" }`
+ 
+ **GET /api/progress**
+@@ -92,13 +91,13 @@ Unauthenticated:
+ - `total`: all-time sum
+ - `todayTotal` / `newTodayTotal`: salawat logged so far on the current calendar day in `TIMEZONE` (not UTC midnight)
+ - `dailyGoal`: daily target (`users.goal`)
+-- `streak`: consecutive TIMEZONE days (walking backward from today) where that day is effectively met. Today uses live logs only (overrides ignored). Past days use a per-day override when set, otherwise `total ≥ dailyGoal`. Streak does not extend before `CHALLENGE_START_DATE`.
+-- `last7Days`: array of 7 `{ date, total, metGoal, locked }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`). `total` is always from logs; `metGoal` for past days follows override when present. Days before `max(CHALLENGE_START_DATE, user.created_at day)` have `locked: true` (not missed / not makeup-eligible).
++- `streak`: consecutive TIMEZONE days (walking backward from today) where that day is effectively met. Today uses live logs only (overrides ignored). Past days use a per-day override when set, otherwise `total ≥ dailyGoal`. Streak does not extend before the user's registration day.
++- `last7Days`: array of 7 `{ date, total, metGoal, locked }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`). `total` is always from logs; `metGoal` for past days follows override when present. Days before the user's registration day have `locked: true` (not missed / not makeup-eligible).
+ - `challengeStatus`: `"not_started" | "active" | "ended"`
+ 
+ **PUT /api/day-override** — body `{ date: string, met: boolean }`
+ - Sets a per-day met/missed override for makeup (does **not** change logged salawat totals)
+-- `date` must be a past day in the visible last-7 window (`today-6` … `today-1` in `TIMEZONE`); today, future, and days before the user’s eligibility floor (`max(CHALLENGE_START_DATE, registration day)`) are rejected
++- `date` must be a past day in the visible last-7 window (`today-6` … `today-1` in `TIMEZONE`); today, future, and days before registration are rejected
+ - → `200 { success: true, streak, last7Days }`
+ - → `400 { success: false, error: "invalid_date" | "invalid_met" | "date_not_editable" }`
+ - → `403 { success: false, error: "not_registered" }`
+@@ -132,7 +131,9 @@ Unauthenticated:
+ 
+ The following Mini App admin routes require authenticated Telegram id to match `ADMIN_TELEGRAM_ID`:
+ 
+-- **GET /api/admin/stats** → `{ participantCount }`
++- **GET /api/admin/stats** → `{ participantCount, mawlidStartDate, mawlidEndDate }`
++- **GET /api/admin/leaderboard?period=all|mawlid** → live ranked totals for all logs or only the configured Mawlid period
++- **GET /api/admin/export-csv?period=all|mawlid** → authenticated CSV download for the selected result period
+ - **POST /api/admin/broadcast** — JSON:
+   - `{ type: "text", message }` supports non-nested `**bold**`, `*italic*`, `_italic_`
+   - `{ type: "link", url, message? }` sends an optional caption plus previewable URL
+@@ -141,7 +142,7 @@ The following Mini App admin routes require authenticated Telegram id to match `
+ 
+ Broadcast responses are `{ success, participantCount, sentCount, failedCount }`. Sends are sequential and error-tolerant: one failed DM does not stop later recipients. A concurrent request returns `409 broadcast_in_progress`.
+ 
+-**GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`
++**GET /api/admin/export?key=…&period=all|mawlid** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`; defaults to all-time
+ - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
+ - Telegram profile name fields are stored from `initData.user` at registration and refreshed on later authenticated requests; existing users stay null until they open the app again
+ → `401 unauthorized` if key wrong
+diff --git a/package.json b/package.json
+index 0e9f646..4eaf1e1 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+     "start": "node dist/index.js",
+     "typecheck": "tsc --noEmit",
+-    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts",
++    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts",
+     "backup": "bash scripts/backup-db.sh"
+   },
+   "dependencies": {
+diff --git a/src/api/adminPeriod.test.ts b/src/api/adminPeriod.test.ts
+new file mode 100644
+index 0000000..e996ff6
+--- /dev/null
++++ b/src/api/adminPeriod.test.ts
+@@ -0,0 +1,107 @@
++import assert from "node:assert/strict";
++import { it } from "node:test";
++import type { Request, Response } from "express";
++
++process.env.BOT_TOKEN = "admin-period-test";
++process.env.CHALLENGE_START_DATE = "2026-08-15";
++process.env.CHALLENGE_END_DATE = "2026-09-13";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++process.env.DB_PATH = ":memory:";
++
++const { db } = await import("../db/client.js");
++const {
++  getExportRows,
++  getJamaatTotal,
++  getLeaderboard,
++} = await import("../db/repository.js");
++const { getChallengeWindowUtc } = await import("../utils/challenge.js");
++const { buildExportCsv } = await import("./routes/export.js");
++const { adminLeaderboardRoute } = await import("./routes/adminLeaderboard.js");
++
++function insertUser(telegramId: number, nickname: string): number {
++  const result = db
++    .prepare("INSERT INTO users (telegram_id, nickname, goal) VALUES (?, ?, 100)")
++    .run(telegramId, nickname);
++  return Number(result.lastInsertRowid);
++}
++
++function insertLog(userId: number, count: number, loggedAt: string): void {
++  db.prepare(
++    "INSERT INTO logs (user_id, count, logged_at) VALUES (?, ?, ?)"
++  ).run(userId, count, loggedAt);
++}
++
++it("separates all-time and inclusive Mawlid results/exports", () => {
++  const alpha = insertUser(830000001, "Alpha");
++  const beta = insertUser(830000002, "Beta");
++  insertUser(830000003, "Gamma");
++
++  // HKT window is [2026-08-14 16:00 UTC, 2026-09-13 16:00 UTC).
++  insertLog(alpha, 1, "2026-08-14 15:59:59"); // before
++  insertLog(alpha, 10, "2026-08-14 16:00:00"); // start boundary
++  insertLog(alpha, 20, "2026-09-13 15:59:59"); // end date, included
++  insertLog(alpha, 100, "2026-09-13 16:00:00"); // after
++  insertLog(beta, 30, "2026-08-20 00:00:00"); // inside
++
++  const window = getChallengeWindowUtc();
++  assert.deepEqual(window, {
++    startUtc: "2026-08-14 16:00:00",
++    endUtc: "2026-09-13 16:00:00",
++  });
++
++  assert.deepEqual(
++    getLeaderboard().map(({ nickname, total }) => ({ nickname, total })),
++    [
++      { nickname: "Alpha", total: 131 },
++      { nickname: "Beta", total: 30 },
++      { nickname: "Gamma", total: 0 },
++    ]
++  );
++  assert.equal(getJamaatTotal(), 161);
++
++  assert.deepEqual(
++    getLeaderboard(window).map(({ nickname, total }) => ({ nickname, total })),
++    [
++      { nickname: "Alpha", total: 30 },
++      { nickname: "Beta", total: 30 },
++      { nickname: "Gamma", total: 0 },
++    ]
++  );
++  assert.equal(getJamaatTotal(window), 60);
++  assert.deepEqual(
++    getExportRows(window).map(({ nickname, total }) => ({ nickname, total })),
++    [
++      { nickname: "Alpha", total: 30 },
++      { nickname: "Beta", total: 30 },
++      { nickname: "Gamma", total: 0 },
++    ]
++  );
++
++  const csv = buildExportCsv("mawlid");
++  assert.match(csv, /^rank,nickname,/);
++  assert.match(csv, /\n1,Alpha,/);
++  assert.match(csv, /\n1,Beta,/);
++  assert.match(csv, /\n3,Gamma,/);
++
++  let status = 200;
++  let responseBody: any;
++  const res = {
++    status(code: number) {
++      status = code;
++      return this;
++    },
++    json(value: any) {
++      responseBody = value;
++      return this;
++    },
++  } as unknown as Response;
++  adminLeaderboardRoute(
++    { query: { period: "invalid" } } as unknown as Request,
++    res
++  );
++  assert.equal(status, 400);
++  assert.deepEqual(responseBody, {
++    success: false,
++    error: "invalid_period",
++  });
++});
+diff --git a/src/api/adminPeriod.ts b/src/api/adminPeriod.ts
+new file mode 100644
+index 0000000..5b8e111
+--- /dev/null
++++ b/src/api/adminPeriod.ts
+@@ -0,0 +1,42 @@
++import { config } from "../config.js";
++import type { LogWindow } from "../db/repository.js";
++import {
++  formatDateParts,
++  getChallengeWindowUtc,
++  getTodayInTimezone,
++} from "../utils/challenge.js";
++
++export type LeaderboardPeriod = "all" | "mawlid";
++
++export function parseLeaderboardPeriod(value: unknown): LeaderboardPeriod | null {
++  if (value === undefined || value === "all") return "all";
++  if (value === "mawlid") return "mawlid";
++  return null;
++}
++
++export function logWindowForPeriod(period: LeaderboardPeriod): LogWindow | undefined {
++  return period === "mawlid" ? getChallengeWindowUtc() : undefined;
++}
++
++export function periodMetadata(period: LeaderboardPeriod): {
++  period: LeaderboardPeriod;
++  periodStart?: string;
++  periodEnd?: string;
++} {
++  if (period === "all") return { period };
++  return {
++    period,
++    periodStart: formatDateParts(config.challengeStartDate),
++    periodEnd: formatDateParts(config.challengeEndDate),
++  };
++}
++
++export function exportFilename(period: LeaderboardPeriod): string {
++  if (period === "mawlid") {
++    return `salawat-leaderboard-mawlid-${formatDateParts(
++      config.challengeStartDate
++    )}-to-${formatDateParts(config.challengeEndDate)}.csv`;
++  }
++  const today = formatDateParts(getTodayInTimezone(config.timezone));
++  return `salawat-leaderboard-all-time-${today}.csv`;
++}
+diff --git a/src/api/indefiniteAfterWindow.test.ts b/src/api/indefiniteAfterWindow.test.ts
+new file mode 100644
+index 0000000..2e2e6f5
+--- /dev/null
++++ b/src/api/indefiniteAfterWindow.test.ts
+@@ -0,0 +1,59 @@
++import assert from "node:assert/strict";
++import { it } from "node:test";
++import type { Request, Response } from "express";
++
++process.env.BOT_TOKEN = "after-window-test";
++process.env.CHALLENGE_START_DATE = "2020-01-01";
++process.env.CHALLENGE_END_DATE = "2020-01-31";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++process.env.DB_PATH = ":memory:";
++
++const { registerRoute } = await import("./routes/register.js");
++const { logRoute } = await import("./routes/log.js");
++
++function responseCapture(): {
++  res: Response;
++  getStatus: () => number;
++  getBody: () => any;
++} {
++  let status = 200;
++  let body: any;
++  const res = {
++    status(code: number) {
++      status = code;
++      return this;
++    },
++    json(value: any) {
++      body = value;
++      return this;
++    },
++  } as unknown as Response;
++  return { res, getStatus: () => status, getBody: () => body };
++}
++
++it("registers and logs after informational end", () => {
++  const telegramId = 820000001;
++  const registration = responseCapture();
++  registerRoute(
++    {
++      telegramId,
++      telegramProfile: {
++        telegramUsername: "after_window",
++        telegramFirstName: "After",
++        telegramLastName: "Window",
++      },
++      body: { nickname: "After Window", goal: 100 },
++    } as Request,
++    registration.res
++  );
++  assert.equal(registration.getStatus(), 200);
++  assert.equal(registration.getBody().success, true);
++
++  const logging = responseCapture();
++  logRoute(
++    { telegramId, body: { count: 5 } } as Request,
++    logging.res
++  );
++  assert.equal(logging.getStatus(), 200);
++  assert.equal(logging.getBody().newTotal, 5);
++});
+diff --git a/src/api/indefiniteBeforeWindow.test.ts b/src/api/indefiniteBeforeWindow.test.ts
+new file mode 100644
+index 0000000..8a70bf4
+--- /dev/null
++++ b/src/api/indefiniteBeforeWindow.test.ts
+@@ -0,0 +1,94 @@
++import assert from "node:assert/strict";
++import { it } from "node:test";
++import type { Request, Response } from "express";
++import type { Bot } from "grammy";
++import type { MyContext } from "../context.js";
++
++process.env.BOT_TOKEN = "before-window-test";
++process.env.CHALLENGE_START_DATE = "2099-01-01";
++process.env.CHALLENGE_END_DATE = "2100-01-01";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++process.env.REMINDER_TIME = "20:00";
++process.env.DB_PATH = ":memory:";
++
++const { registerRoute } = await import("./routes/register.js");
++const { logRoute } = await import("./routes/log.js");
++const { progressRoute } = await import("./routes/progress.js");
++const { sendDueReminders } = await import("../scheduler/reminder.js");
++
++function responseCapture(): {
++  res: Response;
++  getStatus: () => number;
++  getBody: () => any;
++} {
++  let status = 200;
++  let body: any;
++  const res = {
++    status(code: number) {
++      status = code;
++      return this;
++    },
++    json(value: any) {
++      body = value;
++      return this;
++    },
++  } as unknown as Response;
++  return { res, getStatus: () => status, getBody: () => body };
++}
++
++it("registers, logs, and counts streak before informational start", async () => {
++  const telegramId = 810000001;
++  const registration = responseCapture();
++  registerRoute(
++    {
++      telegramId,
++      telegramProfile: {
++        telegramUsername: "before_window",
++        telegramFirstName: "Before",
++        telegramLastName: "Window",
++      },
++      body: { nickname: "Before Window", goal: 100 },
++    } as Request,
++    registration.res
++  );
++  assert.equal(registration.getStatus(), 200);
++  assert.equal(registration.getBody().success, true);
++
++  const logging = responseCapture();
++  logRoute(
++    { telegramId, body: { count: 101 } } as Request,
++    logging.res
++  );
++  assert.equal(logging.getStatus(), 200);
++  assert.equal(logging.getBody().newTodayTotal, 101);
++
++  const progress = responseCapture();
++  progressRoute({ telegramId } as Request, progress.res);
++  const body = progress.getBody();
++  assert.equal(body.challengeStatus, "not_started");
++  assert.equal(body.todayTotal, 101);
++  assert.equal(body.dailyGoal, 100);
++  assert.equal(body.streak, 1);
++  assert.deepEqual(body.last7Days.at(-1), {
++    date: body.last7Days.at(-1).date,
++    total: 101,
++    metGoal: true,
++    locked: false,
++  });
++
++  const sentAt: number[] = [];
++  const bot = {
++    api: {
++      async sendMessage(chatId: number) {
++        sentAt.push(chatId);
++        return {};
++      },
++    },
++  } as unknown as Bot<MyContext>;
++
++  // All are 20:00 Asia/Hong_Kong: before, inside, and after the date window.
++  await sendDueReminders(bot, new Date("2098-06-01T12:00:00Z"));
++  await sendDueReminders(bot, new Date("2099-06-01T12:00:00Z"));
++  await sendDueReminders(bot, new Date("2101-06-01T12:00:00Z"));
++  assert.deepEqual(sentAt, [telegramId, telegramId, telegramId]);
++});
+diff --git a/src/api/routes/adminLeaderboard.ts b/src/api/routes/adminLeaderboard.ts
+new file mode 100644
+index 0000000..d4be922
+--- /dev/null
++++ b/src/api/routes/adminLeaderboard.ts
+@@ -0,0 +1,31 @@
++import type { Request, Response } from "express";
++import { getJamaatTotal, getLeaderboard } from "../../db/repository.js";
++import {
++  logWindowForPeriod,
++  parseLeaderboardPeriod,
++  periodMetadata,
++} from "../adminPeriod.js";
++
++export function adminLeaderboardRoute(req: Request, res: Response): void {
++  const period = parseLeaderboardPeriod(req.query.period);
++  if (!period) {
++    res.status(400).json({ success: false, error: "invalid_period" });
++    return;
++  }
++
++  const window = logWindowForPeriod(period);
++  const rows = getLeaderboard(window);
++  let rank = 1;
++  const leaderboard = rows.map((row, index) => {
++    if (index > 0 && row.total < rows[index - 1]!.total) {
++      rank = index + 1;
++    }
++    return { rank, nickname: row.nickname, total: row.total };
++  });
++
++  res.json({
++    ...periodMetadata(period),
++    jamaatTotal: getJamaatTotal(window),
++    leaderboard,
++  });
++}
+diff --git a/src/api/routes/adminStatus.ts b/src/api/routes/adminStatus.ts
+index 35bc748..cf583cf 100644
+--- a/src/api/routes/adminStatus.ts
++++ b/src/api/routes/adminStatus.ts
+@@ -1,5 +1,7 @@
+ import type { Request, Response } from "express";
++import { config } from "../../config.js";
+ import { getParticipantCount } from "../../db/repository.js";
++import { formatDateParts } from "../../utils/challenge.js";
+ import { isAdminTelegramId } from "../adminAuth.js";
+ 
+ export function isAdminRoute(req: Request, res: Response): void {
+@@ -7,5 +9,9 @@ export function isAdminRoute(req: Request, res: Response): void {
+ }
+ 
+ export function adminStatsRoute(_req: Request, res: Response): void {
+-  res.json({ participantCount: getParticipantCount() });
++  res.json({
++    participantCount: getParticipantCount(),
++    mawlidStartDate: formatDateParts(config.challengeStartDate),
++    mawlidEndDate: formatDateParts(config.challengeEndDate),
++  });
+ }
+diff --git a/src/api/routes/dayOverride.ts b/src/api/routes/dayOverride.ts
+index 4e9b73e..5c97b7c 100644
+--- a/src/api/routes/dayOverride.ts
++++ b/src/api/routes/dayOverride.ts
+@@ -38,7 +38,7 @@ export function putDayOverrideRoute(req: Request, res: Response) {
+     return;
+   }
+ 
+-  // Days before the user was eligible (challenge start / registration) are locked.
++  // Days before the user registered are locked.
+   if (date < earliestEligibleKey) {
+     res.status(400).json({ success: false, error: "date_not_editable" });
+     return;
+diff --git a/src/api/routes/export.ts b/src/api/routes/export.ts
+index 670720e..bba785f 100644
+--- a/src/api/routes/export.ts
++++ b/src/api/routes/export.ts
+@@ -1,6 +1,12 @@
+ import type { Request, Response } from "express";
+ import { config } from "../../config.js";
+ import { getExportRows } from "../../db/repository.js";
++import {
++  exportFilename,
++  logWindowForPeriod,
++  parseLeaderboardPeriod,
++  type LeaderboardPeriod,
++} from "../adminPeriod.js";
+ 
+ /**
+  * Prize-time CSV export. Auth: ?key= or X-Admin-Key header matching ADMIN_EXPORT_SECRET.
+@@ -22,7 +28,31 @@ export function exportRoute(req: Request, res: Response) {
+     return;
+   }
+ 
+-  const rows = getExportRows();
++  sendPeriodCsv(req, res);
++}
++
++/** Telegram-initData + requireAdmin auth is applied in server.ts. */
++export function adminExportCsvRoute(req: Request, res: Response): void {
++  sendPeriodCsv(req, res);
++}
++
++function sendPeriodCsv(req: Request, res: Response): void {
++  const period = parseLeaderboardPeriod(req.query.period);
++  if (!period) {
++    res.status(400).json({ success: false, error: "invalid_period" });
++    return;
++  }
++  const csv = buildExportCsv(period);
++  res.setHeader("Content-Type", "text/csv; charset=utf-8");
++  res.setHeader(
++    "Content-Disposition",
++    `attachment; filename="${exportFilename(period)}"`
++  );
++  res.send(csv);
++}
++
++export function buildExportCsv(period: LeaderboardPeriod): string {
++  const rows = getExportRows(logWindowForPeriod(period));
+   let rank = 1;
+   const ranked = rows.map((row, i) => {
+     if (i > 0 && row.total < rows[i - 1]!.total) {
+@@ -39,9 +69,7 @@ export function exportRoute(req: Request, res: Response) {
+     ),
+   ];
+ 
+-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+-  res.setHeader("Content-Disposition", 'attachment; filename="salawat-export.csv"');
+-  res.send(lines.join("\n") + "\n");
++  return lines.join("\n") + "\n";
+ }
+ 
+ function csvEscape(value: string): string {
+diff --git a/src/api/routes/progressFields.ts b/src/api/routes/progressFields.ts
+index 5271715..c475b90 100644
+--- a/src/api/routes/progressFields.ts
++++ b/src/api/routes/progressFields.ts
+@@ -5,7 +5,7 @@ import {
+   getUserTodayTotal,
+   getUserTotal,
+ } from "../../db/repository.js";
+-import type { DateParts, User } from "../../types.js";
++import type { User } from "../../types.js";
+ import {
+   dayKeyFromSqliteUtc,
+   formatDateParts,
+@@ -18,12 +18,6 @@ import {
+ } from "../../utils/challenge.js";
+ import { bucketLogsByDay, buildLast7Days, computeStreak } from "../../utils/streak.js";
+ 
+-function maxDateParts(a: DateParts, b: DateParts): DateParts {
+-  const aEpoch = Date.UTC(a.year, a.month - 1, a.day);
+-  const bEpoch = Date.UTC(b.year, b.month - 1, b.day);
+-  return aEpoch >= bEpoch ? a : b;
+-}
+-
+ /** Shared streak + last7Days (+ totals) for progress and day-override responses. */
+ export function computeUserProgressFields(user: User) {
+   const total = getUserTotal(user.id);
+@@ -37,19 +31,17 @@ export function computeUserProgressFields(user: User) {
+   }
+   const windowStartKey = formatDateParts(windowStart);
+   const todayKey = formatDateParts(todayParts);
+-  const challengeStartKey = formatDateParts(config.challengeStartDate);
+ 
+-  // Floor eligibility at the later of challenge start and the user's registration day.
++  // A user becomes eligible on their own registration day, regardless of the
++  // informational Mawlid start/end dates.
+   const registrationKey = dayKeyFromSqliteUtc(user.created_at, config.timezone);
+   const registrationParts = parseDateKey(registrationKey);
+-  const earliestEligible = maxDateParts(config.challengeStartDate, registrationParts);
+-  const earliestEligibleKey = formatDateParts(earliestEligible);
++  const earliestEligibleKey = registrationKey;
+ 
+-  // Fetch logs from the earlier of challenge start and the visible 7-day window.
++  // Fetch enough history for the complete streak as well as the visible week.
+   const logsFromKey =
+-    windowStartKey < challengeStartKey ? windowStartKey : challengeStartKey;
+-  const logsFromParts =
+-    logsFromKey === challengeStartKey ? config.challengeStartDate : windowStart;
++    windowStartKey < registrationKey ? windowStartKey : registrationKey;
++  const logsFromParts = parseDateKey(logsFromKey);
+   const logsStartUtc = getUtcRangeForDate(logsFromParts).startUtc;
+ 
+   const logs = getUserLogsSince(user.id, logsStartUtc);
+@@ -57,20 +49,20 @@ export function computeUserProgressFields(user: User) {
+     dayKeyFromSqliteUtc(loggedAt, config.timezone)
+   );
+ 
+-  const overrides = getDayOverrides(user.id, windowStartKey, todayKey);
++  const overrides = getDayOverrides(user.id, registrationKey, todayKey);
+   const dailyGoal = user.goal;
+   const streak = computeStreak(
+     dailyGoal,
+     totalsByDate,
+     todayParts,
+-    earliestEligible,
++    registrationParts,
+     overrides
+   );
+   const last7Days = buildLast7Days(
+     dailyGoal,
+     totalsByDate,
+     todayParts,
+-    earliestEligible,
++    registrationParts,
+     overrides
+   );
+ 
+diff --git a/src/api/routes/register.ts b/src/api/routes/register.ts
+index 502679a..9d6378c 100644
+--- a/src/api/routes/register.ts
++++ b/src/api/routes/register.ts
+@@ -2,7 +2,6 @@ import type { Request, Response } from "express";
+ import { MAX_GOAL, REGISTER_RATE_LIMIT_PER_MINUTE } from "../../config.js";
+ import { allowRequest } from "../rateLimit.js";
+ import { createUser, getUserByTelegramId, isNicknameTaken } from "../../db/repository.js";
+-import { hasChallengeEnded } from "../../utils/challenge.js";
+ 
+ export function registerRoute(req: Request, res: Response) {
+   const { nickname, goal } = req.body ?? {};
+@@ -21,11 +20,6 @@ export function registerRoute(req: Request, res: Response) {
+     return;
+   }
+ 
+-  if (hasChallengeEnded()) {
+-    res.status(403).json({ success: false, error: "challenge_ended" });
+-    return;
+-  }
+-
+   const existing = getUserByTelegramId(req.telegramId);
+   if (existing) {
+     res.json({
+diff --git a/src/api/server.ts b/src/api/server.ts
+index 2e8c087..de1dee9 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -9,11 +9,12 @@ import { registerRoute } from "./routes/register.js";
+ import { logRoute } from "./routes/log.js";
+ import { progressRoute } from "./routes/progress.js";
+ import { leaderboardRoute } from "./routes/leaderboard.js";
+-import { exportRoute } from "./routes/export.js";
++import { adminExportCsvRoute, exportRoute } from "./routes/export.js";
+ import { resetRoute } from "./routes/reset.js";
+ import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
+ import { putDayOverrideRoute } from "./routes/dayOverride.js";
+ import { adminStatsRoute, isAdminRoute } from "./routes/adminStatus.js";
++import { adminLeaderboardRoute } from "./routes/adminLeaderboard.js";
+ import { createBroadcastRoute } from "./routes/broadcast.js";
+ import {
+   adminPdfUpload,
+@@ -43,6 +44,18 @@ export function createApiServer(bot: Bot<MyContext>) {
+   app.patch("/api/profile", telegramAuth, patchProfileRoute);
+   app.get("/api/is-admin", telegramAuth, isAdminRoute);
+   app.get("/api/admin/stats", telegramAuth, requireAdmin, adminStatsRoute);
++  app.get(
++    "/api/admin/leaderboard",
++    telegramAuth,
++    requireAdmin,
++    adminLeaderboardRoute
++  );
++  app.get(
++    "/api/admin/export-csv",
++    telegramAuth,
++    requireAdmin,
++    adminExportCsvRoute
++  );
+   app.post(
+     "/api/admin/broadcast",
+     telegramAuth,
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index bce002b..322df56 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -1,6 +1,11 @@
+ import { db } from "./client.js";
+ import type { ExportRow, LeaderboardRow, TelegramProfile, User } from "../types.js";
+ 
++export interface LogWindow {
++  startUtc: string;
++  endUtc: string;
++}
++
+ export function getUserByTelegramId(telegramId: number): User | undefined {
+   return db
+     .prepare("SELECT * FROM users WHERE telegram_id = ?")
+@@ -139,25 +144,29 @@ export function upsertDayOverride(userId: number, day: string, met: boolean): vo
+   ).run(userId, day, met ? 1 : 0);
+ }
+ 
+-export function getLeaderboard(): LeaderboardRow[] {
++export function getLeaderboard(window?: LogWindow): LeaderboardRow[] {
++  const dateJoin = window
++    ? "AND l.logged_at >= ? AND l.logged_at < ?"
++    : "";
+   return db
+     .prepare(
+       `SELECT u.nickname AS nickname,
+               u.telegram_id AS telegram_id,
+               COALESCE(SUM(l.count), 0) AS total
+        FROM users u
+-       LEFT JOIN logs l ON l.user_id = u.id
++       LEFT JOIN logs l ON l.user_id = u.id ${dateJoin}
+        GROUP BY u.id
+        ORDER BY total DESC, u.nickname ASC`
+     )
+-    .all() as LeaderboardRow[];
++    .all(...(window ? [window.startUtc, window.endUtc] : [])) as LeaderboardRow[];
+ }
+ 
+-/** Sum of all registered users' all-time salawat totals. */
+-export function getJamaatTotal(): number {
++/** Sum all logs, optionally restricted to a UTC half-open window. */
++export function getJamaatTotal(window?: LogWindow): number {
++  const where = window ? "WHERE logged_at >= ? AND logged_at < ?" : "";
+   const row = db
+-    .prepare(`SELECT COALESCE(SUM(count), 0) AS total FROM logs`)
+-    .get() as { total: number };
++    .prepare(`SELECT COALESCE(SUM(count), 0) AS total FROM logs ${where}`)
++    .get(...(window ? [window.startUtc, window.endUtc] : [])) as { total: number };
+   return row.total;
+ }
+ 
+@@ -225,7 +234,10 @@ export function resetAllChallengeData(): {
+ }
+ 
+ /** Full leaderboard rows for admin CSV export (includes telegram_id + goal + profile). */
+-export function getExportRows(): ExportRow[] {
++export function getExportRows(window?: LogWindow): ExportRow[] {
++  const dateJoin = window
++    ? "AND l.logged_at >= ? AND l.logged_at < ?"
++    : "";
+   return db
+     .prepare(
+       `SELECT u.nickname AS nickname,
+@@ -236,9 +248,9 @@ export function getExportRows(): ExportRow[] {
+               u.goal AS goal,
+               COALESCE(SUM(l.count), 0) AS total
+        FROM users u
+-       LEFT JOIN logs l ON l.user_id = u.id
++       LEFT JOIN logs l ON l.user_id = u.id ${dateJoin}
+        GROUP BY u.id
+        ORDER BY total DESC, u.nickname ASC`
+     )
+-    .all() as ExportRow[];
++    .all(...(window ? [window.startUtc, window.endUtc] : [])) as ExportRow[];
+ }
+diff --git a/src/scheduler/reminder.ts b/src/scheduler/reminder.ts
+index 29335cf..20df57c 100644
+--- a/src/scheduler/reminder.ts
++++ b/src/scheduler/reminder.ts
+@@ -30,7 +30,10 @@ function effectiveReminderTime(user: User): string {
+   return formatReminderHhMm(config.reminderTime);
+ }
+ 
+-async function sendDueReminders(bot: Bot<MyContext>) {
++export async function sendDueReminders(
++  bot: Bot<MyContext>,
++  now: Date = new Date()
++) {
+   if (sending) {
+     console.warn("Skipping reminder tick — previous send still in flight");
+     return;
+@@ -38,7 +41,7 @@ async function sendDueReminders(bot: Bot<MyContext>) {
+ 
+   sending = true;
+   try {
+-    const nowHhMm = currentHhMmInTimezone();
++    const nowHhMm = currentHhMmInTimezone(now);
+     const users = getUsersWithRemindersEnabled();
+     for (const user of users) {
+       if (effectiveReminderTime(user) !== nowHhMm) continue;
+diff --git a/src/utils/challenge.ts b/src/utils/challenge.ts
+index af7d664..4fc7d82 100644
+--- a/src/utils/challenge.ts
++++ b/src/utils/challenge.ts
+@@ -52,11 +52,6 @@ export function hasChallengeEnded(now: Date = new Date()): boolean {
+   return toEpochDay(today) > toEpochDay(config.challengeEndDate);
+ }
+ 
+-/** Inclusive window: started and not yet past the end date. */
+-export function isChallengeActive(now: Date = new Date()): boolean {
+-  return hasChallengeStarted(now) && !hasChallengeEnded(now);
+-}
+-
+ export type ChallengeStatus = "not_started" | "active" | "ended";
+ 
+ export function getChallengeStatus(now: Date = new Date()): ChallengeStatus {
+@@ -157,6 +152,17 @@ export function getTodayUtcRange(now: Date = new Date()): { startUtc: string; en
+   return getUtcRangeForDate(getTodayInTimezone(config.timezone, now), config.timezone);
+ }
+ 
++/**
++ * Informational Mawlid period as a UTC half-open range. The configured end
++ * calendar date is inclusive in TIMEZONE.
++ */
++export function getChallengeWindowUtc(): { startUtc: string; endUtc: string } {
++  return {
++    startUtc: getUtcRangeForDate(config.challengeStartDate, config.timezone).startUtc,
++    endUtc: getUtcRangeForDate(config.challengeEndDate, config.timezone).endUtc,
++  };
++}
++
+ /**
+  * Map a SQLite UTC `logged_at` (`YYYY-MM-DD HH:MM:SS`) to a calendar day key in `timeZone`.
+  */
+diff --git a/src/utils/streak.ts b/src/utils/streak.ts
+index 7d33612..a117896 100644
+--- a/src/utils/streak.ts
++++ b/src/utils/streak.ts
+@@ -9,7 +9,7 @@ export interface DayBreakdown {
+   date: string;
+   total: number;
+   metGoal: boolean;
+-  /** True for days before the user was eligible (challenge start / registration). */
++  /** True for days before the user registered. */
+   locked: boolean;
+ }
+ 
+@@ -35,7 +35,7 @@ function isBefore(day: DateParts, earliest: DateParts): boolean {
+  * - Today counts only from real logs (overrides ignored — today is locked).
+  * - If today is unmet, walking starts at yesterday (today still in progress).
+  * - Past days use effectiveMet (override authoritative when present).
+- * - Days before `earliestParts` (challenge start / registration) stop the walk.
++ * - Days before `earliestParts` (the user's registration day) stop the walk.
+  */
+ export function computeStreak(
+   dailyGoal: number,
+-- 
+2.43.0
+

@@ -1,0 +1,440 @@
+From a5b35dbe5e3faab219bb4da3317fe6b7283007f2 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sat, 15 Aug 2026 16:54:56 +0000
+Subject: [PATCH] Add user progress reset with retained Jamaat totals
+
+---
+ README.md                        |  12 ++-
+ package.json                     |   2 +-
+ src/api/adminBroadcast.test.ts   |   2 +
+ src/api/resetProgress.test.ts    | 126 +++++++++++++++++++++++++++++++
+ src/api/routes/progressFields.ts |  18 ++---
+ src/api/routes/resetProgress.ts  |  31 ++++++++
+ src/api/server.ts                |   2 +
+ src/db/client.ts                 |   2 +
+ src/db/repository.ts             |  64 +++++++++++++++-
+ src/db/schema.sql                |   2 +
+ src/types.ts                     |   4 +
+ 11 files changed, 251 insertions(+), 14 deletions(-)
+ create mode 100644 src/api/resetProgress.test.ts
+ create mode 100644 src/api/routes/resetProgress.ts
+
+diff --git a/README.md b/README.md
+index 7424e65..9e537f1 100644
+--- a/README.md
++++ b/README.md
+@@ -104,7 +104,7 @@ Unauthenticated:
+ 
+ **GET /api/leaderboard**
+ → `200 { jamaatTotal, leaderboard: [{ nickname, total, rank, isYou }] }`
+-- `jamaatTotal`: sum of all registered users' all-time totals
++- `jamaatTotal`: active log sums plus contributions retained by users who reset without dropping from Jamaat; individual leaderboard rows show active personal totals only
+ - `isYou`: `true` for the authenticated requester's row (for Mini App “(You)” highlighting) — Telegram ids are not exposed
+ - Competition ranks (ties share a rank: 1, 1, 3)
+ 
+@@ -124,6 +124,16 @@ Unauthenticated:
+ → `409 { success: false, error: "nickname_taken" }`
+ → `429 { success: false, error: "rate_limited" }`
+ 
++**POST /api/reset-progress** — body `{ dropFromJamaat?: boolean }` (defaults `false`)
++- Deletes the authenticated user's logs and day-goal overrides; keeps nickname, goal, Telegram profile, and reminder settings
++- Starts a new personal progress epoch so pre-reset days are locked/not missed
++- `dropFromJamaat: false`: moves the current net total into a retained all-time Jamaat counter, keeping `jamaatTotal` unchanged
++- `dropFromJamaat: true`: clears active and previously retained contribution for that user
++- Retained contribution affects unfiltered all-time Jamaat total only; Mawlid filtered totals/CSV remain based on timestamped active logs
++→ `200 { success: true, dropFromJamaat, total: 0, deleted: { logs, dayGoalOverrides } }`
++→ `400 invalid_drop_from_jamaat`
++→ `403 not_registered`
++
+ **Reminders:** a minute cron in `TIMEZONE` messages each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm`. Global `REMINDER_TIME` is the default when `reminder_time` is null. Sends **independent of** `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` (before start and after end included). Turn reminders off in Settings to stop DMs. Overlapping ticks are skipped while a send is in flight. No catch-up if the process was down during a user’s minute.
+ 
+ **GET /api/is-admin**
+diff --git a/package.json b/package.json
+index 4eaf1e1..0b62021 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+     "start": "node dist/index.js",
+     "typecheck": "tsc --noEmit",
+-    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts",
++    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts src/api/resetProgress.test.ts",
+     "backup": "bash scripts/backup-db.sh"
+   },
+   "dependencies": {
+diff --git a/src/api/adminBroadcast.test.ts b/src/api/adminBroadcast.test.ts
+index b708cc2..94f7dce 100644
+--- a/src/api/adminBroadcast.test.ts
++++ b/src/api/adminBroadcast.test.ts
+@@ -34,6 +34,8 @@ function user(id: number): User {
+     telegram_username: null,
+     telegram_first_name: null,
+     telegram_last_name: null,
++    retained_jamaat_total: 0,
++    progress_started_at: null,
+     created_at: "2026-08-01 00:00:00",
+   };
+ }
+diff --git a/src/api/resetProgress.test.ts b/src/api/resetProgress.test.ts
+new file mode 100644
+index 0000000..159895b
+--- /dev/null
++++ b/src/api/resetProgress.test.ts
+@@ -0,0 +1,126 @@
++import assert from "node:assert/strict";
++import { it } from "node:test";
++import type { Request, Response } from "express";
++
++process.env.BOT_TOKEN = "reset-progress-test";
++process.env.CHALLENGE_START_DATE = "2026-08-01";
++process.env.CHALLENGE_END_DATE = "2026-08-31";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++process.env.DB_PATH = ":memory:";
++
++const { db } = await import("../db/client.js");
++const {
++  addLog,
++  createUser,
++  getDayOverrides,
++  getJamaatTotal,
++  getUserByTelegramId,
++  getUserTotal,
++  upsertDayOverride,
++} = await import("../db/repository.js");
++const { getChallengeWindowUtc } = await import("../utils/challenge.js");
++const { computeUserProgressFields } = await import("./routes/progressFields.js");
++const { resetProgressRoute } = await import("./routes/resetProgress.js");
++
++function capture(): { res: Response; status: () => number; body: () => any } {
++  let status = 200;
++  let body: any;
++  const res = {
++    status(code: number) {
++      status = code;
++      return this;
++    },
++    json(value: any) {
++      body = value;
++      return this;
++    },
++  } as unknown as Response;
++  return { res, status: () => status, body: () => body };
++}
++
++function callReset(
++  telegramId: number,
++  body: unknown
++): { status: number; body: any } {
++  const result = capture();
++  resetProgressRoute(
++    { telegramId, body } as unknown as Request,
++    result.res
++  );
++  return { status: result.status(), body: result.body() };
++}
++
++it("soft resets repeatedly, then fully drops retained Jamaat contribution", () => {
++  const telegramId = 840000001;
++  const user = createUser(
++    telegramId,
++    "Reset User",
++    100,
++    {
++      telegramUsername: "reset_user",
++      telegramFirstName: "Reset",
++      telegramLastName: "User",
++    }
++  );
++  db.prepare(
++    "UPDATE users SET reminder_enabled = 0, reminder_time = '21:30' WHERE id = ?"
++  ).run(user.id);
++
++  addLog(user.id, 100);
++  upsertDayOverride(user.id, "2026-08-14", true);
++  assert.equal(getUserTotal(user.id), 100);
++  assert.equal(getJamaatTotal(), 100);
++  assert.equal(getJamaatTotal(getChallengeWindowUtc()), 100);
++
++  const first = callReset(telegramId, {});
++  assert.equal(first.status, 200);
++  assert.equal(first.body.success, true);
++  assert.equal(first.body.dropFromJamaat, false);
++  assert.equal(first.body.total, 0);
++  assert.equal(first.body.deleted.logs, 1);
++  assert.equal(first.body.deleted.dayGoalOverrides, 1);
++  assert.equal(getUserTotal(user.id), 0);
++  assert.equal(getJamaatTotal(), 100);
++  // Retained carry has no timestamps and intentionally affects all-time only.
++  assert.equal(getJamaatTotal(getChallengeWindowUtc()), 0);
++  assert.equal(getDayOverrides(user.id, "2026-08-01", "2026-08-31").size, 0);
++
++  const afterFirst = getUserByTelegramId(telegramId)!;
++  assert.equal(afterFirst.nickname, "Reset User");
++  assert.equal(afterFirst.goal, 100);
++  assert.equal(afterFirst.reminder_enabled, 0);
++  assert.equal(afterFirst.reminder_time, "21:30");
++  assert.equal(afterFirst.retained_jamaat_total, 100);
++  assert.ok(afterFirst.progress_started_at);
++  const progress = computeUserProgressFields(afterFirst);
++  assert.equal(progress.total, 0);
++  assert.equal(progress.streak, 0);
++  assert.equal(progress.last7Days.at(-2)?.locked, true);
++  assert.equal(progress.last7Days.at(-1)?.locked, false);
++
++  addLog(user.id, 50);
++  assert.equal(getJamaatTotal(), 150);
++  const second = callReset(telegramId, { dropFromJamaat: false });
++  assert.equal(second.status, 200);
++  assert.equal(getUserByTelegramId(telegramId)!.retained_jamaat_total, 150);
++  assert.equal(getJamaatTotal(), 150);
++
++  addLog(user.id, 25);
++  assert.equal(getJamaatTotal(), 175);
++  const dropped = callReset(telegramId, { dropFromJamaat: true });
++  assert.equal(dropped.status, 200);
++  assert.equal(dropped.body.dropFromJamaat, true);
++  assert.equal(getUserByTelegramId(telegramId)!.retained_jamaat_total, 0);
++  assert.equal(getUserTotal(user.id), 0);
++  assert.equal(getJamaatTotal(), 0);
++});
++
++it("defaults false, validates body, and requires registration", () => {
++  const invalid = callReset(840000001, { dropFromJamaat: "yes" });
++  assert.equal(invalid.status, 400);
++  assert.equal(invalid.body.error, "invalid_drop_from_jamaat");
++
++  const missing = callReset(999999999, {});
++  assert.equal(missing.status, 403);
++  assert.equal(missing.body.error, "not_registered");
++});
+diff --git a/src/api/routes/progressFields.ts b/src/api/routes/progressFields.ts
+index c475b90..ca787a2 100644
+--- a/src/api/routes/progressFields.ts
++++ b/src/api/routes/progressFields.ts
+@@ -32,15 +32,15 @@ export function computeUserProgressFields(user: User) {
+   const windowStartKey = formatDateParts(windowStart);
+   const todayKey = formatDateParts(todayParts);
+ 
+-  // A user becomes eligible on their own registration day, regardless of the
+-  // informational Mawlid start/end dates.
+-  const registrationKey = dayKeyFromSqliteUtc(user.created_at, config.timezone);
+-  const registrationParts = parseDateKey(registrationKey);
+-  const earliestEligibleKey = registrationKey;
++  // Personal progress starts at registration, or at the latest reset epoch.
++  const progressStart = user.progress_started_at ?? user.created_at;
++  const progressStartKey = dayKeyFromSqliteUtc(progressStart, config.timezone);
++  const progressStartParts = parseDateKey(progressStartKey);
++  const earliestEligibleKey = progressStartKey;
+ 
+   // Fetch enough history for the complete streak as well as the visible week.
+   const logsFromKey =
+-    windowStartKey < registrationKey ? windowStartKey : registrationKey;
++    windowStartKey < progressStartKey ? windowStartKey : progressStartKey;
+   const logsFromParts = parseDateKey(logsFromKey);
+   const logsStartUtc = getUtcRangeForDate(logsFromParts).startUtc;
+ 
+@@ -49,20 +49,20 @@ export function computeUserProgressFields(user: User) {
+     dayKeyFromSqliteUtc(loggedAt, config.timezone)
+   );
+ 
+-  const overrides = getDayOverrides(user.id, registrationKey, todayKey);
++  const overrides = getDayOverrides(user.id, progressStartKey, todayKey);
+   const dailyGoal = user.goal;
+   const streak = computeStreak(
+     dailyGoal,
+     totalsByDate,
+     todayParts,
+-    registrationParts,
++    progressStartParts,
+     overrides
+   );
+   const last7Days = buildLast7Days(
+     dailyGoal,
+     totalsByDate,
+     todayParts,
+-    registrationParts,
++    progressStartParts,
+     overrides
+   );
+ 
+diff --git a/src/api/routes/resetProgress.ts b/src/api/routes/resetProgress.ts
+new file mode 100644
+index 0000000..916bb6e
+--- /dev/null
++++ b/src/api/routes/resetProgress.ts
+@@ -0,0 +1,31 @@
++import type { Request, Response } from "express";
++import { resetUserProgress } from "../../db/repository.js";
++
++export function resetProgressRoute(req: Request, res: Response): void {
++  const body = req.body ?? {};
++  const hasDrop = Object.prototype.hasOwnProperty.call(body, "dropFromJamaat");
++  if (hasDrop && typeof body.dropFromJamaat !== "boolean") {
++    res.status(400).json({
++      success: false,
++      error: "invalid_drop_from_jamaat",
++    });
++    return;
++  }
++
++  const dropFromJamaat = body.dropFromJamaat ?? false;
++  const result = resetUserProgress(req.telegramId, dropFromJamaat);
++  if (!result) {
++    res.status(403).json({ success: false, error: "not_registered" });
++    return;
++  }
++
++  res.json({
++    success: true,
++    dropFromJamaat,
++    total: 0,
++    deleted: {
++      logs: result.logsDeleted,
++      dayGoalOverrides: result.dayGoalOverridesDeleted,
++    },
++  });
++}
+diff --git a/src/api/server.ts b/src/api/server.ts
+index de1dee9..dd16952 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -11,6 +11,7 @@ import { progressRoute } from "./routes/progress.js";
+ import { leaderboardRoute } from "./routes/leaderboard.js";
+ import { adminExportCsvRoute, exportRoute } from "./routes/export.js";
+ import { resetRoute } from "./routes/reset.js";
++import { resetProgressRoute } from "./routes/resetProgress.js";
+ import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
+ import { putDayOverrideRoute } from "./routes/dayOverride.js";
+ import { adminStatsRoute, isAdminRoute } from "./routes/adminStatus.js";
+@@ -42,6 +43,7 @@ export function createApiServer(bot: Bot<MyContext>) {
+   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
+   app.get("/api/profile", telegramAuth, getProfileRoute);
+   app.patch("/api/profile", telegramAuth, patchProfileRoute);
++  app.post("/api/reset-progress", telegramAuth, resetProgressRoute);
+   app.get("/api/is-admin", telegramAuth, isAdminRoute);
+   app.get("/api/admin/stats", telegramAuth, requireAdmin, adminStatsRoute);
+   app.get(
+diff --git a/src/db/client.ts b/src/db/client.ts
+index 2938484..3cacd1e 100644
+--- a/src/db/client.ts
++++ b/src/db/client.ts
+@@ -35,3 +35,5 @@ ensureUserColumn("reminder_time", "TEXT");
+ ensureUserColumn("telegram_username", "TEXT");
+ ensureUserColumn("telegram_first_name", "TEXT");
+ ensureUserColumn("telegram_last_name", "TEXT");
++ensureUserColumn("retained_jamaat_total", "INTEGER NOT NULL DEFAULT 0");
++ensureUserColumn("progress_started_at", "TEXT");
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index 322df56..ef006ba 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -163,10 +163,23 @@ export function getLeaderboard(window?: LogWindow): LeaderboardRow[] {
+ 
+ /** Sum all logs, optionally restricted to a UTC half-open window. */
+ export function getJamaatTotal(window?: LogWindow): number {
+-  const where = window ? "WHERE logged_at >= ? AND logged_at < ?" : "";
++  if (!window) {
++    const row = db
++      .prepare(
++        `SELECT
++           (SELECT COALESCE(SUM(count), 0) FROM logs) +
++           (SELECT COALESCE(SUM(retained_jamaat_total), 0) FROM users) AS total`
++      )
++      .get() as { total: number };
++    return row.total;
++  }
+   const row = db
+-    .prepare(`SELECT COALESCE(SUM(count), 0) AS total FROM logs ${where}`)
+-    .get(...(window ? [window.startUtc, window.endUtc] : [])) as { total: number };
++    .prepare(
++      `SELECT COALESCE(SUM(count), 0) AS total
++       FROM logs
++       WHERE logged_at >= ? AND logged_at < ?`
++    )
++    .get(window.startUtc, window.endUtc) as { total: number };
+   return row.total;
+ }
+ 
+@@ -218,6 +231,51 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
+   })();
+ }
+ 
++export interface ResetUserProgressResult {
++  logsDeleted: number;
++  dayGoalOverridesDeleted: number;
++  retainedJamaatTotal: number;
++}
++
++/**
++ * Clear one user's active progress without deleting their profile.
++ * A soft reset moves the current net log sum into the all-time Jamaat carry;
++ * a hard drop clears both active logs and all prior retained contribution.
++ */
++export function resetUserProgress(
++  telegramId: number,
++  dropFromJamaat: boolean
++): ResetUserProgressResult | undefined {
++  const reset = db.transaction(() => {
++    const user = getUserByTelegramId(telegramId);
++    if (!user) return undefined;
++
++    const currentTotal = getUserTotal(user.id);
++    const retainedJamaatTotal = dropFromJamaat
++      ? 0
++      : user.retained_jamaat_total + currentTotal;
++    const dayGoalOverridesDeleted = db
++      .prepare("DELETE FROM day_goal_overrides WHERE user_id = ?")
++      .run(user.id).changes;
++    const logsDeleted = db
++      .prepare("DELETE FROM logs WHERE user_id = ?")
++      .run(user.id).changes;
++    db.prepare(
++      `UPDATE users
++       SET retained_jamaat_total = ?,
++           progress_started_at = datetime('now')
++       WHERE id = ?`
++    ).run(retainedJamaatTotal, user.id);
++
++    return {
++      logsDeleted,
++      dayGoalOverridesDeleted,
++      retainedJamaatTotal,
++    };
++  });
++  return reset();
++}
++
+ /** Delete all challenge data so participants must re-register. Returns row counts removed. */
+ export function resetAllChallengeData(): {
+   dayGoalOverrides: number;
+diff --git a/src/db/schema.sql b/src/db/schema.sql
+index 559cb1a..f1aeb74 100644
+--- a/src/db/schema.sql
++++ b/src/db/schema.sql
+@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS users (
+   telegram_username TEXT,
+   telegram_first_name TEXT,
+   telegram_last_name TEXT,
++  retained_jamaat_total INTEGER NOT NULL DEFAULT 0,
++  progress_started_at TEXT,
+   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+ 
+diff --git a/src/types.ts b/src/types.ts
+index 5da785f..ce19fa9 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -11,6 +11,10 @@ export interface User {
+   telegram_username: string | null;
+   telegram_first_name: string | null;
+   telegram_last_name: string | null;
++  /** Prior net logs retained only in the unfiltered Jamaat total after a soft reset. */
++  retained_jamaat_total: number;
++  /** Current personal-progress epoch; null means original registration time. */
++  progress_started_at: string | null;
+   created_at: string;
+ }
+ 
+-- 
+2.43.0
+

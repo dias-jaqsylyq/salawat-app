@@ -1,0 +1,34 @@
+{
+  "name": "salawat-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for a month-long Salawat Challenge among friends during Mawlid month",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/adminUsers.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts src/api/resetProgress.test.ts src/api/realName.test.ts src/api/fastingReminder.test.ts src/api/registration.pending.test.ts",
+    "backup": "bash scripts/backup-db.sh"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "grammy": "^1.45.1",
+    "multer": "^2.2.0",
+    "node-cron": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3"
+  }
+}

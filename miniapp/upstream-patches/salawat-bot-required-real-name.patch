@@ -1,0 +1,687 @@
+From 9068b1ee97a4cf9540f4c5ab1b4c3abe85814b34 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 16 Aug 2026 01:29:12 +0000
+Subject: [PATCH] Add required real_name for registration and admin export
+
+Require a private real name at register time, expose needsRealName
+on progress for legacy users, accept write-only realName on profile
+PATCH, and include the name only on admin leaderboard/CSV.
+---
+ README.md                              |  24 +--
+ package.json                           |   2 +-
+ src/api/adminBroadcast.test.ts         |   1 +
+ src/api/adminPeriod.test.ts            |   2 +-
+ src/api/indefiniteAfterWindow.test.ts  |   2 +-
+ src/api/indefiniteBeforeWindow.test.ts |   2 +-
+ src/api/realName.test.ts               | 207 +++++++++++++++++++++++++
+ src/api/realName.ts                    |  19 +++
+ src/api/routes/adminLeaderboard.ts     |   2 +-
+ src/api/routes/export.ts               |   4 +-
+ src/api/routes/profile.ts              |  22 ++-
+ src/api/routes/progress.ts             |   2 +
+ src/api/routes/register.ts             |  18 ++-
+ src/db/client.ts                       |   1 +
+ src/db/repository.ts                   |  19 ++-
+ src/db/schema.sql                      |   1 +
+ src/types.ts                           |   4 +
+ 17 files changed, 305 insertions(+), 27 deletions(-)
+ create mode 100644 src/api/realName.test.ts
+ create mode 100644 src/api/realName.ts
+
+diff --git a/README.md b/README.md
+index 9e537f1..dfab160 100644
+--- a/README.md
++++ b/README.md
+@@ -69,11 +69,12 @@ Requests with a missing or invalid header get `401 { success: false, error: "mis
+ Unauthenticated:
+ - **GET /health** → `200 { ok: true }` (for Railway / uptime checks)
+ 
+-**POST /api/register** — body `{ nickname: string, goal: number }`
+-- `nickname`: trimmed length 1–50, case-insensitive unique across users
++**POST /api/register** — body `{ realName: string, nickname: string, goal: number }`
++- `realName`: trimmed length 1–100; stored as `users.real_name`; admin-only (never returned from public APIs)
++- `nickname`: trimmed length 1–50, case-insensitive unique across users; must differ from `realName` case-insensitively
+ - `goal`: **daily** salawat target — integer, `1`…`100000000` inclusive (stored as `users.goal`)
+-→ `200 { success: true, user: { id, nickname, goal } }` (idempotent — calling it again for an already-registered user just returns their existing record unchanged)
+-→ `400 { success: false, error: "invalid_nickname" | "invalid_goal" }`
++→ `200 { success: true, user: { id, nickname, goal } }` (idempotent — calling it again for an already-registered user just returns their existing record unchanged; does not write `real_name`)
++→ `400 { success: false, error: "invalid_nickname" | "invalid_goal" | "invalid_real_name" | "nickname_matches_real_name" }`
+ → `409 { success: false, error: "nickname_taken" }`
+ → `429 { success: false, error: "rate_limited" }`
+ 
+@@ -87,12 +88,13 @@ Unauthenticated:
+ 
+ **GET /api/progress**
+ → `200 { registered: false, challengeStatus, challengeStartDate, challengeEndDate }` if not yet registered
+-→ `200 { registered: true, nickname, total, todayTotal, dailyGoal, streak, last7Days, daysLeft, challengeStatus, challengeStartDate, challengeEndDate }`
++→ `200 { registered: true, nickname, total, todayTotal, dailyGoal, streak, last7Days, daysLeft, needsRealName, challengeStatus, challengeStartDate, challengeEndDate }`
+ - `total`: all-time sum
+ - `todayTotal` / `newTodayTotal`: salawat logged so far on the current calendar day in `TIMEZONE` (not UTC midnight)
+ - `dailyGoal`: daily target (`users.goal`)
+ - `streak`: consecutive TIMEZONE days (walking backward from today) where that day is effectively met. Today uses live logs only (overrides ignored). Past days use a per-day override when set, otherwise `total ≥ dailyGoal`. Streak does not extend before the user's registration day.
+ - `last7Days`: array of 7 `{ date, total, metGoal, locked }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`). `total` is always from logs; `metGoal` for past days follows override when present. Days before the user's registration day have `locked: true` (not missed / not makeup-eligible).
++- `needsRealName`: `true` when `users.real_name` is null/empty (legacy users); the Mini App shows a one-time prompt. The name itself is never returned.
+ - `challengeStatus`: `"not_started" | "active" | "ended"`
+ 
+ **PUT /api/day-override** — body `{ date: string, met: boolean }`
+@@ -113,13 +115,15 @@ Unauthenticated:
+ - `reminderTime`: effective `HH:mm` in challenge `TIMEZONE` (`users.reminder_time` if set, else global `REMINDER_TIME`)
+ → `403 { success: false, error: "not_registered" }`
+ 
+-**PATCH /api/profile** — body (all fields optional; at least one required): `{ nickname?, dailyGoal?, reminderEnabled?, reminderTime? }`
+-- Same nickname / daily-goal rules as register
++**PATCH /api/profile** — body (all fields optional; at least one required): `{ nickname?, dailyGoal?, reminderEnabled?, reminderTime?, realName? }`
++- Same nickname / daily-goal / real-name rules as register
++- `realName` is write-only (used by the one-time completion prompt); GET/PATCH responses never include it
++- Nickname and real name must differ case-insensitively (new or existing values)
+ - `reminderEnabled`: boolean
+ - `reminderTime`: `HH:mm` (24h), or `null` to clear override and use global `REMINDER_TIME`
+ - Rate limit: 5 requests/minute/user
+ → `200` same shape as GET
+-→ `400 { success: false, error: "invalid_body" | "invalid_nickname" | "invalid_goal" | "invalid_reminder_enabled" | "invalid_reminder_time" }`
++→ `400 { success: false, error: "invalid_body" | "invalid_nickname" | "invalid_goal" | "invalid_real_name" | "nickname_matches_real_name" | "invalid_reminder_enabled" | "invalid_reminder_time" }`
+ → `403 { success: false, error: "not_registered" }`
+ → `409 { success: false, error: "nickname_taken" }`
+ → `429 { success: false, error: "rate_limited" }`
+@@ -142,7 +146,7 @@ Unauthenticated:
+ The following Mini App admin routes require authenticated Telegram id to match `ADMIN_TELEGRAM_ID`:
+ 
+ - **GET /api/admin/stats** → `{ participantCount, mawlidStartDate, mawlidEndDate }`
+-- **GET /api/admin/leaderboard?period=all|mawlid** → live ranked totals for all logs or only the configured Mawlid period
++- **GET /api/admin/leaderboard?period=all|mawlid** → live ranked totals `{ rank, nickname, realName, total }` for all logs or only the configured Mawlid period
+ - **GET /api/admin/export-csv?period=all|mawlid** → authenticated CSV download for the selected result period
+ - **POST /api/admin/broadcast** — JSON:
+   - `{ type: "text", message }` supports non-nested `**bold**`, `*italic*`, `_italic_`
+@@ -152,7 +156,7 @@ The following Mini App admin routes require authenticated Telegram id to match `
+ 
+ Broadcast responses are `{ success, participantCount, sentCount, failedCount }`. Sends are sequential and error-tolerant: one failed DM does not stop later recipients. A concurrent request returns `409 broadcast_in_progress`.
+ 
+-**GET /api/admin/export?key=…&period=all|mawlid** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`; defaults to all-time
++**GET /api/admin/export?key=…&period=all|mawlid** (or header `X-Admin-Key`) — CSV of `rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`; defaults to all-time
+ - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
+ - Telegram profile name fields are stored from `initData.user` at registration and refreshed on later authenticated requests; existing users stay null until they open the app again
+ → `401 unauthorized` if key wrong
+diff --git a/package.json b/package.json
+index 0b62021..2c5290b 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+     "start": "node dist/index.js",
+     "typecheck": "tsc --noEmit",
+-    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts src/api/resetProgress.test.ts",
++    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts src/api/indefiniteBeforeWindow.test.ts src/api/indefiniteAfterWindow.test.ts src/api/adminPeriod.test.ts src/api/resetProgress.test.ts src/api/realName.test.ts",
+     "backup": "bash scripts/backup-db.sh"
+   },
+   "dependencies": {
+diff --git a/src/api/adminBroadcast.test.ts b/src/api/adminBroadcast.test.ts
+index 94f7dce..52f08d1 100644
+--- a/src/api/adminBroadcast.test.ts
++++ b/src/api/adminBroadcast.test.ts
+@@ -34,6 +34,7 @@ function user(id: number): User {
+     telegram_username: null,
+     telegram_first_name: null,
+     telegram_last_name: null,
++    real_name: null,
+     retained_jamaat_total: 0,
+     progress_started_at: null,
+     created_at: "2026-08-01 00:00:00",
+diff --git a/src/api/adminPeriod.test.ts b/src/api/adminPeriod.test.ts
+index e996ff6..207d4df 100644
+--- a/src/api/adminPeriod.test.ts
++++ b/src/api/adminPeriod.test.ts
+@@ -78,7 +78,7 @@ it("separates all-time and inclusive Mawlid results/exports", () => {
+   );
+ 
+   const csv = buildExportCsv("mawlid");
+-  assert.match(csv, /^rank,nickname,/);
++  assert.match(csv, /^rank,nickname,real_name,/);
+   assert.match(csv, /\n1,Alpha,/);
+   assert.match(csv, /\n1,Beta,/);
+   assert.match(csv, /\n3,Gamma,/);
+diff --git a/src/api/indefiniteAfterWindow.test.ts b/src/api/indefiniteAfterWindow.test.ts
+index 2e2e6f5..e934733 100644
+--- a/src/api/indefiniteAfterWindow.test.ts
++++ b/src/api/indefiniteAfterWindow.test.ts
+@@ -42,7 +42,7 @@ it("registers and logs after informational end", () => {
+         telegramFirstName: "After",
+         telegramLastName: "Window",
+       },
+-      body: { nickname: "After Window", goal: 100 },
++      body: { nickname: "After Window", realName: "After Window User", goal: 100 },
+     } as Request,
+     registration.res
+   );
+diff --git a/src/api/indefiniteBeforeWindow.test.ts b/src/api/indefiniteBeforeWindow.test.ts
+index 8a70bf4..e11983d 100644
+--- a/src/api/indefiniteBeforeWindow.test.ts
++++ b/src/api/indefiniteBeforeWindow.test.ts
+@@ -47,7 +47,7 @@ it("registers, logs, and counts streak before informational start", async () =>
+         telegramFirstName: "Before",
+         telegramLastName: "Window",
+       },
+-      body: { nickname: "Before Window", goal: 100 },
++      body: { nickname: "Before Window", realName: "Before Window User", goal: 100 },
+     } as Request,
+     registration.res
+   );
+diff --git a/src/api/realName.test.ts b/src/api/realName.test.ts
+new file mode 100644
+index 0000000..c918306
+--- /dev/null
++++ b/src/api/realName.test.ts
+@@ -0,0 +1,207 @@
++import assert from "node:assert/strict";
++import { it } from "node:test";
++import type { Request, Response } from "express";
++
++process.env.BOT_TOKEN = "real-name-test";
++process.env.CHALLENGE_START_DATE = "2026-08-01";
++process.env.CHALLENGE_END_DATE = "2026-08-31";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++process.env.DB_PATH = ":memory:";
++
++const { db } = await import("../db/client.js");
++const { createUser, getUserByTelegramId } = await import("../db/repository.js");
++const { registerRoute } = await import("./routes/register.js");
++const { progressRoute } = await import("./routes/progress.js");
++const { getProfileRoute, patchProfileRoute } = await import("./routes/profile.js");
++const { leaderboardRoute } = await import("./routes/leaderboard.js");
++const { adminLeaderboardRoute } = await import("./routes/adminLeaderboard.js");
++const { buildExportCsv } = await import("./routes/export.js");
++
++function capture(): { res: Response; status: () => number; body: () => any } {
++  let status = 200;
++  let body: any;
++  const res = {
++    status(code: number) {
++      status = code;
++      return this;
++    },
++    json(value: any) {
++      body = value;
++      return this;
++    },
++  } as unknown as Response;
++  return { res, status: () => status, body: () => body };
++}
++
++function telegramProfile(telegramId: number) {
++  return {
++    telegramUsername: `user_${telegramId}`,
++    telegramFirstName: "First",
++    telegramLastName: "Last",
++  };
++}
++
++function callRegister(telegramId: number, body: unknown) {
++  const result = capture();
++  registerRoute(
++    { telegramId, telegramProfile: telegramProfile(telegramId), body } as Request,
++    result.res
++  );
++  return { status: result.status(), body: result.body() };
++}
++
++function callProgress(telegramId: number) {
++  const result = capture();
++  progressRoute({ telegramId } as Request, result.res);
++  return { status: result.status(), body: result.body() };
++}
++
++function callProfileGet(telegramId: number) {
++  const result = capture();
++  getProfileRoute({ telegramId } as Request, result.res);
++  return { status: result.status(), body: result.body() };
++}
++
++function callProfilePatch(telegramId: number, body: unknown) {
++  const result = capture();
++  patchProfileRoute({ telegramId, body } as Request, result.res);
++  return { status: result.status(), body: result.body() };
++}
++
++function callLeaderboard(telegramId: number) {
++  const result = capture();
++  leaderboardRoute({ telegramId } as Request, result.res);
++  return { status: result.status(), body: result.body() };
++}
++
++function callAdminLeaderboard() {
++  const result = capture();
++  adminLeaderboardRoute({ query: { period: "all" } } as unknown as Request, result.res);
++  return { status: result.status(), body: result.body() };
++}
++
++function assertNoRealNameKeys(value: unknown): void {
++  const json = JSON.stringify(value);
++  assert.equal(json.includes("realName"), false, `public JSON leaked realName: ${json}`);
++  assert.equal(json.includes("real_name"), false, `public JSON leaked real_name: ${json}`);
++}
++
++it("requires a valid real name that differs from nickname", () => {
++  const missing = callRegister(850000001, { nickname: "Ali", goal: 100 });
++  assert.equal(missing.status, 400);
++  assert.deepEqual(missing.body, { success: false, error: "invalid_real_name" });
++
++  const tooLong = callRegister(850000002, {
++    nickname: "Ali",
++    goal: 100,
++    realName: "A".repeat(101),
++  });
++  assert.equal(tooLong.status, 400);
++  assert.deepEqual(tooLong.body, { success: false, error: "invalid_real_name" });
++
++  const match = callRegister(850000003, {
++    nickname: "Ali Nurlanov",
++    goal: 100,
++    realName: "ali nurlanov",
++  });
++  assert.equal(match.status, 400);
++  assert.deepEqual(match.body, { success: false, error: "nickname_matches_real_name" });
++
++  const trailing = callRegister(850000004, {
++    nickname: "Ali",
++    goal: 100,
++    realName: "ali ",
++  });
++  assert.equal(trailing.status, 400);
++  assert.deepEqual(trailing.body, { success: false, error: "nickname_matches_real_name" });
++
++  const ok = callRegister(850000005, {
++    nickname: "Ali",
++    goal: 100,
++    realName: "Ali Nurlanov",
++  });
++  assert.equal(ok.status, 200);
++  assert.equal(ok.body.success, true);
++  assert.deepEqual(ok.body.user, { id: ok.body.user.id, nickname: "Ali", goal: 100 });
++  assertNoRealNameKeys(ok.body);
++
++  const stored = getUserByTelegramId(850000005);
++  assert.equal(stored?.real_name, "Ali Nurlanov");
++
++  const progress = callProgress(850000005);
++  assert.equal(progress.status, 200);
++  assert.equal(progress.body.registered, true);
++  assert.equal(progress.body.needsRealName, false);
++  assertNoRealNameKeys(progress.body);
++});
++
++it("flags legacy users and lets PATCH set a real name without leaking it", () => {
++  const telegramId = 850000010;
++  createUser(telegramId, "LegacyNick", 100, telegramProfile(telegramId), null);
++  assert.equal(getUserByTelegramId(telegramId)?.real_name, null);
++
++  const before = callProgress(telegramId);
++  assert.equal(before.body.registered, true);
++  assert.equal(before.body.needsRealName, true);
++  assertNoRealNameKeys(before.body);
++
++  const profile = callProfileGet(telegramId);
++  assert.equal(profile.status, 200);
++  assertNoRealNameKeys(profile.body);
++
++  const matchCurrent = callProfilePatch(telegramId, { realName: "legacynick" });
++  assert.equal(matchCurrent.status, 400);
++  assert.deepEqual(matchCurrent.body, { success: false, error: "nickname_matches_real_name" });
++
++  const saved = callProfilePatch(telegramId, { realName: " Legacy Person " });
++  assert.equal(saved.status, 200);
++  assert.equal(saved.body.nickname, "LegacyNick");
++  assertNoRealNameKeys(saved.body);
++  assert.equal(getUserByTelegramId(telegramId)?.real_name, "Legacy Person");
++
++  const after = callProgress(telegramId);
++  assert.equal(after.body.needsRealName, false);
++  assertNoRealNameKeys(after.body);
++
++  const nicknameClash = callProfilePatch(telegramId, { nickname: "legacy person" });
++  assert.equal(nicknameClash.status, 400);
++  assert.deepEqual(nicknameClash.body, {
++    success: false,
++    error: "nickname_matches_real_name",
++  });
++});
++
++it("keeps real names off public leaderboard and on admin results/CSV", () => {
++  const named = callRegister(850000020, {
++    nickname: "PublicNick",
++    goal: 50,
++    realName: "Private Person",
++  });
++  assert.equal(named.status, 200);
++
++  const publicBoard = callLeaderboard(850000020);
++  assert.equal(publicBoard.status, 200);
++  const publicRow = publicBoard.body.leaderboard.find(
++    (entry: { nickname: string }) => entry.nickname === "PublicNick"
++  );
++  assert.equal(publicRow?.nickname, "PublicNick");
++  assert.equal(publicRow?.isYou, true);
++  assertNoRealNameKeys(publicBoard.body);
++
++  const adminBoard = callAdminLeaderboard();
++  assert.equal(adminBoard.status, 200);
++  const row = adminBoard.body.leaderboard.find((entry: { nickname: string }) => entry.nickname === "PublicNick");
++  assert.equal(row.realName, "Private Person");
++
++  const csv = buildExportCsv("all");
++  assert.match(csv, /^rank,nickname,real_name,/);
++  assert.match(csv, /,PublicNick,Private Person,/);
++
++  db.prepare("UPDATE users SET real_name = NULL WHERE telegram_id = ?").run(850000020);
++  const unnamedAdmin = callAdminLeaderboard();
++  const unnamed = unnamedAdmin.body.leaderboard.find(
++    (entry: { nickname: string }) => entry.nickname === "PublicNick"
++  );
++  assert.equal(unnamed.realName, null);
++  assert.match(buildExportCsv("all"), /,PublicNick,,/);
++});
+diff --git a/src/api/realName.ts b/src/api/realName.ts
+new file mode 100644
+index 0000000..fc80c16
+--- /dev/null
++++ b/src/api/realName.ts
+@@ -0,0 +1,19 @@
++export const REAL_NAME_MAX_LENGTH = 100;
++
++/** Trim and accept a 1–100 character real name, or null if invalid. */
++export function parseRealName(value: unknown): string | null {
++  if (typeof value !== "string") return null;
++  const trimmed = value.trim();
++  if (trimmed.length === 0 || trimmed.length > REAL_NAME_MAX_LENGTH) {
++    return null;
++  }
++  return trimmed;
++}
++
++export function nicknameMatchesRealName(nickname: string, realName: string): boolean {
++  return nickname.trim().toLowerCase() === realName.trim().toLowerCase();
++}
++
++export function userNeedsRealName(realName: string | null | undefined): boolean {
++  return !realName;
++}
+diff --git a/src/api/routes/adminLeaderboard.ts b/src/api/routes/adminLeaderboard.ts
+index d4be922..0d334f6 100644
+--- a/src/api/routes/adminLeaderboard.ts
++++ b/src/api/routes/adminLeaderboard.ts
+@@ -20,7 +20,7 @@ export function adminLeaderboardRoute(req: Request, res: Response): void {
+     if (index > 0 && row.total < rows[index - 1]!.total) {
+       rank = index + 1;
+     }
+-    return { rank, nickname: row.nickname, total: row.total };
++    return { rank, nickname: row.nickname, realName: row.real_name ?? null, total: row.total };
+   });
+ 
+   res.json({
+diff --git a/src/api/routes/export.ts b/src/api/routes/export.ts
+index bba785f..5b2c787 100644
+--- a/src/api/routes/export.ts
++++ b/src/api/routes/export.ts
+@@ -62,10 +62,10 @@ export function buildExportCsv(period: LeaderboardPeriod): string {
+   });
+ 
+   const lines = [
+-    "rank,nickname,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal",
++    "rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal",
+     ...ranked.map(
+       (r) =>
+-        `${r.rank},${csvEscape(r.nickname)},${r.telegram_id},${csvEscape(r.telegram_username ?? "")},${csvEscape(r.telegram_first_name ?? "")},${csvEscape(r.telegram_last_name ?? "")},${r.total},${r.goal}`
++        `${r.rank},${csvEscape(r.nickname)},${csvEscape(r.real_name ?? "")},${r.telegram_id},${csvEscape(r.telegram_username ?? "")},${csvEscape(r.telegram_first_name ?? "")},${csvEscape(r.telegram_last_name ?? "")},${r.total},${r.goal}`
+     ),
+   ];
+ 
+diff --git a/src/api/routes/profile.ts b/src/api/routes/profile.ts
+index 0bb735a..ae1abfb 100644
+--- a/src/api/routes/profile.ts
++++ b/src/api/routes/profile.ts
+@@ -9,6 +9,7 @@ import {
+ } from "../../config.js";
+ import { allowRequest } from "../rateLimit.js";
+ import { getUserByTelegramId, isNicknameTaken, updateUserProfile } from "../../db/repository.js";
++import { nicknameMatchesRealName, parseRealName } from "../realName.js";
+ import type { User } from "../../types.js";
+ 
+ function effectiveReminderTime(user: User): string {
+@@ -42,8 +43,9 @@ export function patchProfileRoute(req: Request, res: Response) {
+   const hasDailyGoal = Object.prototype.hasOwnProperty.call(body, "dailyGoal");
+   const hasReminderEnabled = Object.prototype.hasOwnProperty.call(body, "reminderEnabled");
+   const hasReminderTime = Object.prototype.hasOwnProperty.call(body, "reminderTime");
++  const hasRealName = Object.prototype.hasOwnProperty.call(body, "realName");
+ 
+-  if (!hasNickname && !hasDailyGoal && !hasReminderEnabled && !hasReminderTime) {
++  if (!hasNickname && !hasDailyGoal && !hasReminderEnabled && !hasReminderTime && !hasRealName) {
+     res.status(400).json({ success: false, error: "invalid_body" });
+     return;
+   }
+@@ -103,11 +105,29 @@ export function patchProfileRoute(req: Request, res: Response) {
+     }
+   }
+ 
++  let realName: string | undefined;
++  if (hasRealName) {
++    const parsedRealName = parseRealName(body.realName);
++    if (!parsedRealName) {
++      res.status(400).json({ success: false, error: "invalid_real_name" });
++      return;
++    }
++    realName = parsedRealName;
++  }
++
++  const effectiveNickname = nickname ?? user.nickname;
++  const effectiveRealName = realName ?? user.real_name;
++  if (effectiveRealName && nicknameMatchesRealName(effectiveNickname, effectiveRealName)) {
++    res.status(400).json({ success: false, error: "nickname_matches_real_name" });
++    return;
++  }
++
+   const updated = updateUserProfile(req.telegramId, {
+     nickname,
+     goal: dailyGoal,
+     reminderEnabled,
+     reminderTime,
++    realName,
+   });
+ 
+   res.json(profileResponse(updated));
+diff --git a/src/api/routes/progress.ts b/src/api/routes/progress.ts
+index ecc6d26..52bef05 100644
+--- a/src/api/routes/progress.ts
++++ b/src/api/routes/progress.ts
+@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
+ import { config } from "../../config.js";
+ import { getUserByTelegramId } from "../../db/repository.js";
+ import { formatDateParts, getChallengeStatus } from "../../utils/challenge.js";
++import { userNeedsRealName } from "../realName.js";
+ import { computeUserProgressFields } from "./progressFields.js";
+ 
+ function challengeMeta() {
+@@ -30,6 +31,7 @@ export function progressRoute(req: Request, res: Response) {
+     streak: fields.streak,
+     last7Days: fields.last7Days,
+     daysLeft: fields.daysLeft,
++    needsRealName: userNeedsRealName(user.real_name),
+     ...challengeMeta(),
+   });
+ }
+diff --git a/src/api/routes/register.ts b/src/api/routes/register.ts
+index 9d6378c..be2d28d 100644
+--- a/src/api/routes/register.ts
++++ b/src/api/routes/register.ts
+@@ -2,9 +2,10 @@ import type { Request, Response } from "express";
+ import { MAX_GOAL, REGISTER_RATE_LIMIT_PER_MINUTE } from "../../config.js";
+ import { allowRequest } from "../rateLimit.js";
+ import { createUser, getUserByTelegramId, isNicknameTaken } from "../../db/repository.js";
++import { nicknameMatchesRealName, parseRealName } from "../realName.js";
+ 
+ export function registerRoute(req: Request, res: Response) {
+-  const { nickname, goal } = req.body ?? {};
++  const { nickname, goal, realName } = req.body ?? {};
+ 
+   if (typeof nickname !== "string" || nickname.trim().length === 0 || nickname.trim().length > 50) {
+     res.status(400).json({ success: false, error: "invalid_nickname" });
+@@ -15,6 +16,18 @@ export function registerRoute(req: Request, res: Response) {
+     return;
+   }
+ 
++  const parsedRealName = parseRealName(realName);
++  if (!parsedRealName) {
++    res.status(400).json({ success: false, error: "invalid_real_name" });
++    return;
++  }
++
++  const trimmed = nickname.trim();
++  if (nicknameMatchesRealName(trimmed, parsedRealName)) {
++    res.status(400).json({ success: false, error: "nickname_matches_real_name" });
++    return;
++  }
++
+   if (!allowRequest(req.telegramId, REGISTER_RATE_LIMIT_PER_MINUTE)) {
+     res.status(429).json({ success: false, error: "rate_limited" });
+     return;
+@@ -29,14 +42,13 @@ export function registerRoute(req: Request, res: Response) {
+     return;
+   }
+ 
+-  const trimmed = nickname.trim();
+   if (isNicknameTaken(trimmed)) {
+     res.status(409).json({ success: false, error: "nickname_taken" });
+     return;
+   }
+ 
+   try {
+-    const user = createUser(req.telegramId, trimmed, goal, req.telegramProfile);
++    const user = createUser(req.telegramId, trimmed, goal, req.telegramProfile, parsedRealName);
+     res.json({ success: true, user: { id: user.id, nickname: user.nickname, goal: user.goal } });
+   } catch (err) {
+     // Parallel first-time register: UNIQUE(telegram_id) — treat as idempotent success.
+diff --git a/src/db/client.ts b/src/db/client.ts
+index 3cacd1e..c7ed6cb 100644
+--- a/src/db/client.ts
++++ b/src/db/client.ts
+@@ -35,5 +35,6 @@ ensureUserColumn("reminder_time", "TEXT");
+ ensureUserColumn("telegram_username", "TEXT");
+ ensureUserColumn("telegram_first_name", "TEXT");
+ ensureUserColumn("telegram_last_name", "TEXT");
++ensureUserColumn("real_name", "TEXT");
+ ensureUserColumn("retained_jamaat_total", "INTEGER NOT NULL DEFAULT 0");
+ ensureUserColumn("progress_started_at", "TEXT");
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index ef006ba..5f75cee 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -34,14 +34,16 @@ export function createUser(
+     telegramUsername: null,
+     telegramFirstName: null,
+     telegramLastName: null,
+-  }
++  },
++  realName: string | null = null
+ ): User {
+   const result = db
+     .prepare(
+       `INSERT INTO users (
+          telegram_id, nickname, goal,
+-         telegram_username, telegram_first_name, telegram_last_name
+-       ) VALUES (?, ?, ?, ?, ?, ?)`
++         telegram_username, telegram_first_name, telegram_last_name,
++         real_name
++       ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+     )
+     .run(
+       telegramId,
+@@ -49,7 +51,8 @@ export function createUser(
+       goal,
+       profile.telegramUsername,
+       profile.telegramFirstName,
+-      profile.telegramLastName
++      profile.telegramLastName,
++      realName
+     );
+   return getUserByTelegramId(telegramId) ?? (() => {
+     throw new Error(`Failed to load user just created (rowid ${result.lastInsertRowid})`);
+@@ -151,6 +154,7 @@ export function getLeaderboard(window?: LogWindow): LeaderboardRow[] {
+   return db
+     .prepare(
+       `SELECT u.nickname AS nickname,
++              u.real_name AS real_name,
+               u.telegram_id AS telegram_id,
+               COALESCE(SUM(l.count), 0) AS total
+        FROM users u
+@@ -205,6 +209,7 @@ export interface UserProfileUpdate {
+   reminderEnabled?: boolean;
+   /** HH:mm override, or null to clear back to global default. */
+   reminderTime?: string | null;
++  realName?: string;
+ }
+ 
+ export function updateUserProfile(telegramId: number, update: UserProfileUpdate): User {
+@@ -219,12 +224,13 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
+     update.reminderEnabled !== undefined ? (update.reminderEnabled ? 1 : 0) : user.reminder_enabled;
+   const reminderTime =
+     update.reminderTime !== undefined ? update.reminderTime : user.reminder_time;
++  const realName = update.realName !== undefined ? update.realName : user.real_name;
+ 
+   db.prepare(
+     `UPDATE users
+-     SET nickname = ?, goal = ?, reminder_enabled = ?, reminder_time = ?
++     SET nickname = ?, goal = ?, reminder_enabled = ?, reminder_time = ?, real_name = ?
+      WHERE telegram_id = ?`
+-  ).run(nickname, goal, reminderEnabled, reminderTime, telegramId);
++  ).run(nickname, goal, reminderEnabled, reminderTime, realName, telegramId);
+ 
+   return getUserByTelegramId(telegramId) ?? (() => {
+     throw new Error(`Failed to reload user ${telegramId} after profile update`);
+@@ -299,6 +305,7 @@ export function getExportRows(window?: LogWindow): ExportRow[] {
+   return db
+     .prepare(
+       `SELECT u.nickname AS nickname,
++              u.real_name AS real_name,
+               u.telegram_id AS telegram_id,
+               u.telegram_username AS telegram_username,
+               u.telegram_first_name AS telegram_first_name,
+diff --git a/src/db/schema.sql b/src/db/schema.sql
+index f1aeb74..98df176 100644
+--- a/src/db/schema.sql
++++ b/src/db/schema.sql
+@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS users (
+   telegram_username TEXT,
+   telegram_first_name TEXT,
+   telegram_last_name TEXT,
++  real_name TEXT,
+   retained_jamaat_total INTEGER NOT NULL DEFAULT 0,
+   progress_started_at TEXT,
+   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+diff --git a/src/types.ts b/src/types.ts
+index ce19fa9..ef77030 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -11,6 +11,8 @@ export interface User {
+   telegram_username: string | null;
+   telegram_first_name: string | null;
+   telegram_last_name: string | null;
++  /** User-typed legal name. Admin-only; never returned from public APIs. */
++  real_name: string | null;
+   /** Prior net logs retained only in the unfiltered Jamaat total after a soft reset. */
+   retained_jamaat_total: number;
+   /** Current personal-progress epoch; null means original registration time. */
+@@ -34,12 +36,14 @@ export interface LogEntry {
+ 
+ export interface LeaderboardRow {
+   nickname: string;
++  real_name: string | null;
+   total: number;
+   telegram_id: number;
+ }
+ 
+ export interface ExportRow {
+   nickname: string;
++  real_name: string | null;
+   telegram_id: number;
+   telegram_username: string | null;
+   telegram_first_name: string | null;
+-- 
+2.43.0
+

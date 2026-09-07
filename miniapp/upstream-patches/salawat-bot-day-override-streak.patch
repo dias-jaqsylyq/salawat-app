@@ -1,0 +1,564 @@
+From ba063585c402791213189bf10a754de2280d9146 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 11 Aug 2026 06:31:09 +0000
+Subject: [PATCH] Add per-day goal overrides for streak makeup
+
+Past days in the last-7 window can be forced met/missed via
+day_goal_overrides; streak and last7Days treat overrides as
+authoritative. Today stays locked to live logs. Widen log fetch
+to cover the visible week before challenge start.
+---
+ README.md                        |  11 ++-
+ src/api/routes/dayOverride.ts    |  56 ++++++++++++++++
+ src/api/routes/progress.ts       |  41 +++---------
+ src/api/routes/progressFields.ts |  69 +++++++++++++++++++
+ src/api/server.ts                |   2 +
+ src/db/repository.ts             |  31 +++++++++
+ src/db/schema.sql                |   9 +++
+ src/utils/streak.test.ts         | 111 ++++++++++++++++++++++++++++++-
+ src/utils/streak.ts              |  41 +++++++++---
+ 9 files changed, 328 insertions(+), 43 deletions(-)
+ create mode 100644 src/api/routes/dayOverride.ts
+ create mode 100644 src/api/routes/progressFields.ts
+
+diff --git a/README.md b/README.md
+index e6879a4..39ac24f 100644
+--- a/README.md
++++ b/README.md
+@@ -91,10 +91,17 @@ Unauthenticated:
+ - `total`: all-time sum
+ - `todayTotal` / `newTodayTotal`: salawat logged so far on the current calendar day in `TIMEZONE` (not UTC midnight)
+ - `dailyGoal`: daily target (`users.goal`)
+-- `streak`: consecutive TIMEZONE days (walking backward from today) where that day's total ≥ `dailyGoal`. Today only counts once met; if today is still unmet, counting starts at yesterday. A completed missed day resets the streak to 0 (no grace period). Streak does not extend before `CHALLENGE_START_DATE`.
+-- `last7Days`: array of 7 `{ date, total, metGoal }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`)
++- `streak`: consecutive TIMEZONE days (walking backward from today) where that day is effectively met. Today uses live logs only (overrides ignored). Past days use a per-day override when set, otherwise `total ≥ dailyGoal`. Streak does not extend before `CHALLENGE_START_DATE`.
++- `last7Days`: array of 7 `{ date, total, metGoal }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`). `total` is always from logs; `metGoal` for past days follows override when present.
+ - `challengeStatus`: `"not_started" | "active" | "ended"`
+ 
++**PUT /api/day-override** — body `{ date: string, met: boolean }`
++- Sets a per-day met/missed override for makeup (does **not** change logged salawat totals)
++- `date` must be a past day in the visible last-7 window (`today-6` … `today-1` in `TIMEZONE`); today and future are rejected
++- → `200 { success: true, streak, last7Days }`
++- → `400 { success: false, error: "invalid_date" | "invalid_met" | "date_not_editable" }`
++- → `403 { success: false, error: "not_registered" }`
++
+ **GET /api/leaderboard**
+ → `200 { jamaatTotal, leaderboard: [{ nickname, total, rank, telegramId }] }`
+ - `jamaatTotal`: sum of all registered users' all-time totals
+diff --git a/src/api/routes/dayOverride.ts b/src/api/routes/dayOverride.ts
+new file mode 100644
+index 0000000..027615e
+--- /dev/null
++++ b/src/api/routes/dayOverride.ts
+@@ -0,0 +1,56 @@
++import type { Request, Response } from "express";
++import { getUserByTelegramId, upsertDayOverride } from "../../db/repository.js";
++import { formatDateParts, parseDateKey, subtractOneCalendarDay } from "../../utils/challenge.js";
++import { computeUserProgressFields } from "./progressFields.js";
++
++const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
++
++export function putDayOverrideRoute(req: Request, res: Response) {
++  const user = getUserByTelegramId(req.telegramId);
++  if (!user) {
++    res.status(403).json({ success: false, error: "not_registered" });
++    return;
++  }
++
++  const { date, met } = req.body ?? {};
++  if (typeof date !== "string" || !DAY_RE.test(date)) {
++    res.status(400).json({ success: false, error: "invalid_date" });
++    return;
++  }
++  if (typeof met !== "boolean") {
++    res.status(400).json({ success: false, error: "invalid_met" });
++    return;
++  }
++
++  // Reject malformed calendar keys (e.g. 2026-02-31).
++  const parts = parseDateKey(date);
++  if (formatDateParts(parts) !== date) {
++    res.status(400).json({ success: false, error: "invalid_date" });
++    return;
++  }
++
++  const fields = computeUserProgressFields(user);
++  const { todayKey, windowStartKey } = fields;
++
++  // Today and future locked; only past days in the visible window.
++  if (date >= todayKey || date < windowStartKey) {
++    res.status(400).json({ success: false, error: "date_not_editable" });
++    return;
++  }
++
++  // Extra guard: must be at least yesterday within window (today-6 .. today-1).
++  const yesterdayKey = formatDateParts(subtractOneCalendarDay(fields.todayParts));
++  if (date > yesterdayKey) {
++    res.status(400).json({ success: false, error: "date_not_editable" });
++    return;
++  }
++
++  upsertDayOverride(user.id, date, met);
++
++  const updated = computeUserProgressFields(user);
++  res.json({
++    success: true,
++    streak: updated.streak,
++    last7Days: updated.last7Days,
++  });
++}
+diff --git a/src/api/routes/progress.ts b/src/api/routes/progress.ts
+index e3f9e7c..ecc6d26 100644
+--- a/src/api/routes/progress.ts
++++ b/src/api/routes/progress.ts
+@@ -1,16 +1,8 @@
+ import type { Request, Response } from "express";
+ import { config } from "../../config.js";
+-import { getUserByTelegramId, getUserLogsSince, getUserTodayTotal, getUserTotal } from "../../db/repository.js";
+-import {
+-  dayKeyFromSqliteUtc,
+-  formatDateParts,
+-  getChallengeStatus,
+-  getDaysLeft,
+-  getTodayInTimezone,
+-  getTodayUtcRange,
+-  getUtcRangeForDate,
+-} from "../../utils/challenge.js";
+-import { bucketLogsByDay, buildLast7Days, computeStreak } from "../../utils/streak.js";
++import { getUserByTelegramId } from "../../db/repository.js";
++import { formatDateParts, getChallengeStatus } from "../../utils/challenge.js";
++import { computeUserProgressFields } from "./progressFields.js";
+ 
+ function challengeMeta() {
+   return {
+@@ -27,30 +19,17 @@ export function progressRoute(req: Request, res: Response) {
+     return;
+   }
+ 
+-  const total = getUserTotal(user.id);
+-  const { startUtc, endUtc } = getTodayUtcRange();
+-  const todayTotal = getUserTodayTotal(user.id, startUtc, endUtc);
+-
+-  const todayParts = getTodayInTimezone(config.timezone);
+-  const challengeStartUtc = getUtcRangeForDate(config.challengeStartDate).startUtc;
+-  const logs = getUserLogsSince(user.id, challengeStartUtc);
+-  const totalsByDate = bucketLogsByDay(logs, (loggedAt) =>
+-    dayKeyFromSqliteUtc(loggedAt, config.timezone)
+-  );
+-
+-  const dailyGoal = user.goal;
+-  const streak = computeStreak(dailyGoal, totalsByDate, todayParts, config.challengeStartDate);
+-  const last7Days = buildLast7Days(dailyGoal, totalsByDate, todayParts);
++  const fields = computeUserProgressFields(user);
+ 
+   res.json({
+     registered: true,
+     nickname: user.nickname,
+-    total,
+-    todayTotal,
+-    dailyGoal,
+-    streak,
+-    last7Days,
+-    daysLeft: getDaysLeft(),
++    total: fields.total,
++    todayTotal: fields.todayTotal,
++    dailyGoal: fields.dailyGoal,
++    streak: fields.streak,
++    last7Days: fields.last7Days,
++    daysLeft: fields.daysLeft,
+     ...challengeMeta(),
+   });
+ }
+diff --git a/src/api/routes/progressFields.ts b/src/api/routes/progressFields.ts
+new file mode 100644
+index 0000000..409ed34
+--- /dev/null
++++ b/src/api/routes/progressFields.ts
+@@ -0,0 +1,69 @@
++import { config } from "../../config.js";
++import {
++  getDayOverrides,
++  getUserLogsSince,
++  getUserTodayTotal,
++  getUserTotal,
++} from "../../db/repository.js";
++import type { User } from "../../types.js";
++import {
++  dayKeyFromSqliteUtc,
++  formatDateParts,
++  getDaysLeft,
++  getTodayInTimezone,
++  getTodayUtcRange,
++  getUtcRangeForDate,
++  subtractOneCalendarDay,
++} from "../../utils/challenge.js";
++import { bucketLogsByDay, buildLast7Days, computeStreak } from "../../utils/streak.js";
++
++/** Shared streak + last7Days (+ totals) for progress and day-override responses. */
++export function computeUserProgressFields(user: User) {
++  const total = getUserTotal(user.id);
++  const { startUtc, endUtc } = getTodayUtcRange();
++  const todayTotal = getUserTodayTotal(user.id, startUtc, endUtc);
++
++  const todayParts = getTodayInTimezone(config.timezone);
++  let windowStart = todayParts;
++  for (let i = 0; i < 6; i++) {
++    windowStart = subtractOneCalendarDay(windowStart);
++  }
++  const windowStartKey = formatDateParts(windowStart);
++  const todayKey = formatDateParts(todayParts);
++  const challengeStartKey = formatDateParts(config.challengeStartDate);
++
++  // Fetch logs from the earlier of challenge start and the visible 7-day window.
++  const logsFromKey =
++    windowStartKey < challengeStartKey ? windowStartKey : challengeStartKey;
++  const logsFromParts =
++    logsFromKey === challengeStartKey ? config.challengeStartDate : windowStart;
++  const logsStartUtc = getUtcRangeForDate(logsFromParts).startUtc;
++
++  const logs = getUserLogsSince(user.id, logsStartUtc);
++  const totalsByDate = bucketLogsByDay(logs, (loggedAt) =>
++    dayKeyFromSqliteUtc(loggedAt, config.timezone)
++  );
++
++  const overrides = getDayOverrides(user.id, windowStartKey, todayKey);
++  const dailyGoal = user.goal;
++  const streak = computeStreak(
++    dailyGoal,
++    totalsByDate,
++    todayParts,
++    config.challengeStartDate,
++    overrides
++  );
++  const last7Days = buildLast7Days(dailyGoal, totalsByDate, todayParts, overrides);
++
++  return {
++    total,
++    todayTotal,
++    dailyGoal,
++    streak,
++    last7Days,
++    daysLeft: getDaysLeft(),
++    todayParts,
++    windowStartKey,
++    todayKey,
++  };
++}
+diff --git a/src/api/server.ts b/src/api/server.ts
+index 9a0c37d..bb0ffc4 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -8,6 +8,7 @@ import { progressRoute } from "./routes/progress.js";
+ import { leaderboardRoute } from "./routes/leaderboard.js";
+ import { exportRoute } from "./routes/export.js";
+ import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
++import { putDayOverrideRoute } from "./routes/dayOverride.js";
+ 
+ export function createApiServer() {
+   const app = express();
+@@ -25,6 +26,7 @@ export function createApiServer() {
+   app.post("/api/register", telegramAuth, registerRoute);
+   app.post("/api/log", telegramAuth, logRoute);
+   app.get("/api/progress", telegramAuth, progressRoute);
++  app.put("/api/day-override", telegramAuth, putDayOverrideRoute);
+   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
+   app.get("/api/profile", telegramAuth, getProfileRoute);
+   app.patch("/api/profile", telegramAuth, patchProfileRoute);
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index 16e1f50..546fbd4 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -68,6 +68,37 @@ export function getUserLogsSince(
+     .all(userId, startUtc) as { logged_at: string; count: number }[];
+ }
+ 
++/** Day goal overrides in [fromDay, toDay] inclusive (YYYY-MM-DD keys). */
++export function getDayOverrides(
++  userId: number,
++  fromDay: string,
++  toDay: string
++): Map<string, boolean> {
++  const rows = db
++    .prepare(
++      `SELECT day, met
++       FROM day_goal_overrides
++       WHERE user_id = ? AND day >= ? AND day <= ?`
++    )
++    .all(userId, fromDay, toDay) as { day: string; met: number }[];
++  const map = new Map<string, boolean>();
++  for (const row of rows) {
++    map.set(row.day, row.met === 1);
++  }
++  return map;
++}
++
++/** Upsert a per-day met/missed override (does not change logs). */
++export function upsertDayOverride(userId: number, day: string, met: boolean): void {
++  db.prepare(
++    `INSERT INTO day_goal_overrides (user_id, day, met, updated_at)
++     VALUES (?, ?, ?, datetime('now'))
++     ON CONFLICT(user_id, day) DO UPDATE SET
++       met = excluded.met,
++       updated_at = excluded.updated_at`
++  ).run(userId, day, met ? 1 : 0);
++}
++
+ export function getLeaderboard(): LeaderboardRow[] {
+   return db
+     .prepare(
+diff --git a/src/db/schema.sql b/src/db/schema.sql
+index 4c2eec3..dfe7b97 100644
+--- a/src/db/schema.sql
++++ b/src/db/schema.sql
+@@ -16,3 +16,12 @@ CREATE TABLE IF NOT EXISTS logs (
+ );
+ 
+ CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id);
++
++/** Per-day goal met/missed overrides (makeup) — does not change logged salawat. */
++CREATE TABLE IF NOT EXISTS day_goal_overrides (
++  user_id INTEGER NOT NULL REFERENCES users(id),
++  day TEXT NOT NULL,
++  met INTEGER NOT NULL,
++  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
++  PRIMARY KEY (user_id, day)
++);
+diff --git a/src/utils/streak.test.ts b/src/utils/streak.test.ts
+index f2ca9c1..854ecaf 100644
+--- a/src/utils/streak.test.ts
++++ b/src/utils/streak.test.ts
+@@ -1,6 +1,6 @@
+ import assert from "node:assert/strict";
+ import { describe, it } from "node:test";
+-import { buildLast7Days, computeStreak } from "./streak.js";
++import { buildLast7Days, computeStreak, effectiveMet } from "./streak.js";
+ import type { DateParts } from "../types.js";
+ 
+ const today: DateParts = { year: 2026, month: 8, day: 11 };
+@@ -10,6 +10,22 @@ function totals(entries: Record<string, number>): Map<string, number> {
+   return new Map(Object.entries(entries));
+ }
+ 
++function overrides(entries: Record<string, boolean>): Map<string, boolean> {
++  return new Map(Object.entries(entries));
++}
++
++describe("effectiveMet", () => {
++  it("uses override when present", () => {
++    assert.equal(effectiveMet("2026-08-10", 0, 100, overrides({ "2026-08-10": true })), true);
++    assert.equal(effectiveMet("2026-08-10", 200, 100, overrides({ "2026-08-10": false })), false);
++  });
++
++  it("falls back to total >= goal when no override", () => {
++    assert.equal(effectiveMet("2026-08-10", 100, 100), true);
++    assert.equal(effectiveMet("2026-08-10", 40, 100), false);
++  });
++});
++
+ describe("computeStreak", () => {
+   it("counts today + prior consecutive met days", () => {
+     const streak = computeStreak(
+@@ -65,7 +81,7 @@ describe("computeStreak", () => {
+     assert.equal(streak, 0);
+   });
+ 
+-  it("treats empty days as misses (no grace period)", () => {
++  it("treats empty days as misses unless overridden", () => {
+     const streak = computeStreak(
+       100,
+       totals({
+@@ -93,6 +109,71 @@ describe("computeStreak", () => {
+     );
+     assert.equal(streak, 2);
+   });
++
++  it("override met on zero-total past day counts toward streak only for that day", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-09": 0,
++        "2026-08-10": 0,
++        "2026-08-11": 100,
++      }),
++      today,
++      earliest,
++      overrides({ "2026-08-10": true })
++    );
++    // today met + override-met yesterday; Aug 9 still missed → streak 2
++    assert.equal(streak, 2);
++  });
++
++  it("override missed on logged-met past day breaks streak there only", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-09": 100,
++        "2026-08-10": 150,
++        "2026-08-11": 100,
++      }),
++      today,
++      earliest,
++      overrides({ "2026-08-10": false })
++    );
++    // today met; yesterday force-missed → streak 1
++    assert.equal(streak, 1);
++  });
++
++  it("mix of real-met, override-met, and missed recalculates correctly", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-07": 100, // real met
++        "2026-08-08": 0, // override met
++        "2026-08-09": 0, // missed
++        "2026-08-10": 0, // override met
++        "2026-08-11": 50, // today unmet → start at yesterday
++      }),
++      today,
++      earliest,
++      overrides({ "2026-08-08": true, "2026-08-10": true })
++    );
++    // walk: 10 met, 9 miss → streak 1
++    assert.equal(streak, 1);
++  });
++
++  it("ignores override on today (today locked to logs)", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-10": 100,
++        "2026-08-11": 10,
++      }),
++      today,
++      earliest,
++      overrides({ "2026-08-11": true })
++    );
++    // today still unmet via logs → start yesterday → streak 1
++    assert.equal(streak, 1);
++  });
+ });
+ 
+ describe("buildLast7Days", () => {
+@@ -114,4 +195,30 @@ describe("buildLast7Days", () => {
+     assert.deepEqual(days[2], { date: "2026-08-07", total: 0, metGoal: false });
+     assert.deepEqual(days[6], { date: "2026-08-11", total: 45, metGoal: false });
+   });
++
++  it("keeps log totals while metGoal follows override; neighbors unchanged", () => {
++    const days = buildLast7Days(
++      100,
++      totals({
++        "2026-08-09": 0,
++        "2026-08-10": 200,
++        "2026-08-11": 45,
++      }),
++      today,
++      overrides({ "2026-08-09": true, "2026-08-10": false })
++    );
++    assert.deepEqual(days[4], { date: "2026-08-09", total: 0, metGoal: true });
++    assert.deepEqual(days[5], { date: "2026-08-10", total: 200, metGoal: false });
++    assert.deepEqual(days[6], { date: "2026-08-11", total: 45, metGoal: false });
++  });
++
++  it("does not apply override to today", () => {
++    const days = buildLast7Days(
++      100,
++      totals({ "2026-08-11": 10 }),
++      today,
++      overrides({ "2026-08-11": true })
++    );
++    assert.deepEqual(days[6], { date: "2026-08-11", total: 10, metGoal: false });
++  });
+ });
+diff --git a/src/utils/streak.ts b/src/utils/streak.ts
+index 786ca62..f2402ee 100644
+--- a/src/utils/streak.ts
++++ b/src/utils/streak.ts
+@@ -11,23 +11,37 @@ export interface DayBreakdown {
+   metGoal: boolean;
+ }
+ 
++/** Override wins when present; otherwise total >= dailyGoal. */
++export function effectiveMet(
++  date: string,
++  total: number,
++  dailyGoal: number,
++  overrides?: Map<string, boolean>
++): boolean {
++  if (overrides?.has(date)) return overrides.get(date)!;
++  return total >= dailyGoal;
++}
++
+ /**
+  * Consecutive met days walking backward from today.
+- * - Today counts only if todayTotal >= dailyGoal.
++ * - Today counts only from real logs (overrides ignored — today is locked).
+  * - If today is unmet, walking starts at yesterday (today still in progress).
+- * - A past day with total < dailyGoal stops the streak (no grace period).
++ * - Past days use effectiveMet (override authoritative when present).
+  * - Days before `earliestParts` (challenge start) are ignored / stop the walk.
+  */
+ export function computeStreak(
+   dailyGoal: number,
+   totalsByDate: Map<string, number>,
+   todayParts: DateParts,
+-  earliestParts?: DateParts
++  earliestParts?: DateParts,
++  overrides?: Map<string, boolean>
+ ): number {
+   if (dailyGoal <= 0) return 0;
+ 
+   let day = todayParts;
+-  const todayTotal = totalsByDate.get(formatDateParts(day)) ?? 0;
++  const todayKey = formatDateParts(day);
++  const todayTotal = totalsByDate.get(todayKey) ?? 0;
++  // Today is locked to live logs — never apply overrides.
+   if (todayTotal < dailyGoal) {
+     day = subtractOneCalendarDay(day);
+   }
+@@ -44,8 +58,13 @@ export function computeStreak(
+       if (dayEpoch < earliestEpoch) break;
+     }
+ 
+-    const total = totalsByDate.get(formatDateParts(day)) ?? 0;
+-    if (total < dailyGoal) break;
++    const date = formatDateParts(day);
++    const total = totalsByDate.get(date) ?? 0;
++    const isToday = date === todayKey;
++    const met = isToday
++      ? total >= dailyGoal
++      : effectiveMet(date, total, dailyGoal, overrides);
++    if (!met) break;
+     streak += 1;
+     day = subtractOneCalendarDay(day);
+   }
+@@ -56,18 +75,24 @@ export function computeStreak(
+ export function buildLast7Days(
+   dailyGoal: number,
+   totalsByDate: Map<string, number>,
+-  todayParts: DateParts
++  todayParts: DateParts,
++  overrides?: Map<string, boolean>
+ ): DayBreakdown[] {
+   let day = todayParts;
+   for (let i = 0; i < 6; i++) {
+     day = subtractOneCalendarDay(day);
+   }
+ 
++  const todayKey = formatDateParts(todayParts);
+   const days: DayBreakdown[] = [];
+   for (let i = 0; i < 7; i++) {
+     const date = formatDateParts(day);
+     const total = totalsByDate.get(date) ?? 0;
+-    days.push({ date, total, metGoal: total >= dailyGoal });
++    const metGoal =
++      date === todayKey
++        ? total >= dailyGoal
++        : effectiveMet(date, total, dailyGoal, overrides);
++    days.push({ date, total, metGoal });
+     day = addOneCalendarDay(day);
+   }
+   return days;
+-- 
+2.43.0
+

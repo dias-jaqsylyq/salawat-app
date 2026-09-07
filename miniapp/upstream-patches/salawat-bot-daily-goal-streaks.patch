@@ -1,0 +1,569 @@
+From e23685dbe4b16f55f4d5283b4b0a95733ed72097 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 11 Aug 2026 04:41:38 +0000
+Subject: [PATCH] Add daily goal, streak, and last7Days to progress API.
+
+Reinterpret users.goal as a daily target. Progress now returns
+dailyGoal, streak (TIMEZONE-aware, no grace period), and last7Days.
+Includes unit tests for streak rules and HKT day boundaries.
+---
+ README.md                       |  13 ++--
+ package.json                    |   1 +
+ src/api/routes/export.ts        |   2 +-
+ src/api/routes/progress.ts      |  24 +++++--
+ src/config.ts                   |   2 +-
+ src/db/repository.ts            |  15 ++++
+ src/utils/challenge.day.test.ts |  34 ++++++++++
+ src/utils/challenge.ts          |  55 ++++++++++-----
+ src/utils/dates.ts              |  24 +++++++
+ src/utils/streak.test.ts        | 117 ++++++++++++++++++++++++++++++++
+ src/utils/streak.ts             |  87 ++++++++++++++++++++++++
+ 11 files changed, 345 insertions(+), 29 deletions(-)
+ create mode 100644 src/utils/challenge.day.test.ts
+ create mode 100644 src/utils/dates.ts
+ create mode 100644 src/utils/streak.test.ts
+ create mode 100644 src/utils/streak.ts
+
+diff --git a/README.md b/README.md
+index cb1c0ed..a18edc9 100644
+--- a/README.md
++++ b/README.md
+@@ -70,7 +70,7 @@ Unauthenticated:
+ 
+ **POST /api/register** — body `{ nickname: string, goal: number }`
+ - `nickname`: trimmed length 1–50, case-insensitive unique across users
+-- `goal`: integer, `1`…`100000000` inclusive
++- `goal`: **daily** salawat target — integer, `1`…`100000000` inclusive (stored as `users.goal`)
+ → `200 { success: true, user: { id, nickname, goal } }` (idempotent — calling it again for an already-registered user just returns their existing record unchanged)
+ → `400 { success: false, error: "invalid_nickname" | "invalid_goal" }`
+ → `403 { success: false, error: "challenge_not_started" | "challenge_ended" }`
+@@ -87,15 +87,18 @@ Unauthenticated:
+ 
+ **GET /api/progress**
+ → `200 { registered: false, challengeStatus, challengeStartDate, challengeEndDate }` if not yet registered
+-→ `200 { registered: true, nickname, total, todayTotal, goal, percentComplete, daysLeft, challengeStatus, challengeStartDate, challengeEndDate }`
++→ `200 { registered: true, nickname, total, todayTotal, dailyGoal, streak, last7Days, daysLeft, challengeStatus, challengeStartDate, challengeEndDate }`
++- `total`: all-time sum
+ - `todayTotal` / `newTodayTotal`: salawat logged so far on the current calendar day in `TIMEZONE` (not UTC midnight)
++- `dailyGoal`: daily target (`users.goal`)
++- `streak`: consecutive TIMEZONE days (walking backward from today) where that day's total ≥ `dailyGoal`. Today only counts once met; if today is still unmet, counting starts at yesterday. A completed missed day resets the streak to 0 (no grace period). Streak does not extend before `CHALLENGE_START_DATE`.
++- `last7Days`: array of 7 `{ date, total, metGoal }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`)
+ - `challengeStatus`: `"not_started" | "active" | "ended"`
+-- `percentComplete`: capped at 100
+ 
+ **GET /api/leaderboard**
+ → `200 { leaderboard: [{ nickname, total, rank }] }` — competition ranks (ties share a rank: 1, 1, 3)
+ 
+-**GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,total,goal`
++**GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,total,daily_goal`
+ - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
+ → `401 unauthorized` if key wrong
+ 
+@@ -128,4 +131,4 @@ Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on th
+ - `/start`, `/help` — both reply with a short message pointing at the chat menu button, which opens the Mini App.
+ 
+ ## Notes / v1 scope
+-Per-user reminder times, streaks, group-chat announcements, multi-timezone support, and manual count correction remain out of scope. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Registration, logging, progress, and leaderboard live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.
++Per-user reminder times, group-chat announcements, multi-timezone support, and manual count correction remain out of scope. Daily goals and streaks are included via `/api/progress`. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Registration, logging, progress, and leaderboard live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.
+diff --git a/package.json b/package.json
+index 99045a6..0686bb4 100644
+--- a/package.json
++++ b/package.json
+@@ -10,6 +10,7 @@
+     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+     "start": "node dist/index.js",
+     "typecheck": "tsc --noEmit",
++    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts",
+     "backup": "bash scripts/backup-db.sh"
+   },
+   "dependencies": {
+diff --git a/src/api/routes/export.ts b/src/api/routes/export.ts
+index 25aa714..7cbd2a6 100644
+--- a/src/api/routes/export.ts
++++ b/src/api/routes/export.ts
+@@ -32,7 +32,7 @@ export function exportRoute(req: Request, res: Response) {
+   });
+ 
+   const lines = [
+-    "rank,nickname,telegram_id,total,goal",
++    "rank,nickname,telegram_id,total,daily_goal",
+     ...ranked.map(
+       (r) =>
+         `${r.rank},${csvEscape(r.nickname)},${r.telegram_id},${r.total},${r.goal}`
+diff --git a/src/api/routes/progress.ts b/src/api/routes/progress.ts
+index 05b8534..e3f9e7c 100644
+--- a/src/api/routes/progress.ts
++++ b/src/api/routes/progress.ts
+@@ -1,13 +1,16 @@
+ import type { Request, Response } from "express";
+ import { config } from "../../config.js";
+-import { getUserByTelegramId, getUserTodayTotal, getUserTotal } from "../../db/repository.js";
++import { getUserByTelegramId, getUserLogsSince, getUserTodayTotal, getUserTotal } from "../../db/repository.js";
+ import {
++  dayKeyFromSqliteUtc,
+   formatDateParts,
+   getChallengeStatus,
+   getDaysLeft,
+-  getPercentComplete,
++  getTodayInTimezone,
+   getTodayUtcRange,
++  getUtcRangeForDate,
+ } from "../../utils/challenge.js";
++import { bucketLogsByDay, buildLast7Days, computeStreak } from "../../utils/streak.js";
+ 
+ function challengeMeta() {
+   return {
+@@ -27,13 +30,26 @@ export function progressRoute(req: Request, res: Response) {
+   const total = getUserTotal(user.id);
+   const { startUtc, endUtc } = getTodayUtcRange();
+   const todayTotal = getUserTodayTotal(user.id, startUtc, endUtc);
++
++  const todayParts = getTodayInTimezone(config.timezone);
++  const challengeStartUtc = getUtcRangeForDate(config.challengeStartDate).startUtc;
++  const logs = getUserLogsSince(user.id, challengeStartUtc);
++  const totalsByDate = bucketLogsByDay(logs, (loggedAt) =>
++    dayKeyFromSqliteUtc(loggedAt, config.timezone)
++  );
++
++  const dailyGoal = user.goal;
++  const streak = computeStreak(dailyGoal, totalsByDate, todayParts, config.challengeStartDate);
++  const last7Days = buildLast7Days(dailyGoal, totalsByDate, todayParts);
++
+   res.json({
+     registered: true,
+     nickname: user.nickname,
+     total,
+     todayTotal,
+-    goal: user.goal,
+-    percentComplete: getPercentComplete(total, user.goal),
++    dailyGoal,
++    streak,
++    last7Days,
+     daysLeft: getDaysLeft(),
+     ...challengeMeta(),
+   });
+diff --git a/src/config.ts b/src/config.ts
+index c869285..48c5696 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -47,7 +47,7 @@ if (toEpochDay(challengeStartDate) > toEpochDay(challengeEndDate)) {
+ 
+ /** Per-request log count ceiling (friend-group sanity cap). */
+ export const MAX_LOG_COUNT = 10_000;
+-/** Registration goal ceiling (friend-group sanity cap). */
++/** Registration daily-goal ceiling (friend-group sanity cap). */
+ export const MAX_GOAL = 100_000_000;
+ 
+ /** Max POST /api/log requests per telegram user per rolling minute. */
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index ff71974..6c77382 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -53,6 +53,21 @@ export function getUserTodayTotal(userId: number, startUtc: string, endUtc: stri
+   return row.total;
+ }
+ 
++/** Individual log counts at/after startUtc (for TIMEZONE day bucketing). */
++export function getUserLogsSince(
++  userId: number,
++  startUtc: string
++): { logged_at: string; count: number }[] {
++  return db
++    .prepare(
++      `SELECT logged_at, count
++       FROM logs
++       WHERE user_id = ? AND logged_at >= ?
++       ORDER BY logged_at ASC`
++    )
++    .all(userId, startUtc) as { logged_at: string; count: number }[];
++}
++
+ export function getLeaderboard(): LeaderboardRow[] {
+   return db
+     .prepare(
+diff --git a/src/utils/challenge.day.test.ts b/src/utils/challenge.day.test.ts
+new file mode 100644
+index 0000000..45c6077
+--- /dev/null
++++ b/src/utils/challenge.day.test.ts
+@@ -0,0 +1,34 @@
++import assert from "node:assert/strict";
++import { before, describe, it } from "node:test";
++
++process.env.BOT_TOKEN ??= "test-token";
++process.env.CHALLENGE_START_DATE ??= "2026-08-01";
++process.env.CHALLENGE_END_DATE ??= "2026-08-31";
++process.env.TIMEZONE = "Asia/Hong_Kong";
++
++describe("TIMEZONE day boundaries (Asia/Hong_Kong)", () => {
++  let dayKeyFromSqliteUtc: typeof import("./challenge.js").dayKeyFromSqliteUtc;
++  let getUtcRangeForDate: typeof import("./challenge.js").getUtcRangeForDate;
++  let parseDateKey: typeof import("./challenge.js").parseDateKey;
++
++  before(async () => {
++    const mod = await import("./challenge.js");
++    dayKeyFromSqliteUtc = mod.dayKeyFromSqliteUtc;
++    getUtcRangeForDate = mod.getUtcRangeForDate;
++    parseDateKey = mod.parseDateKey;
++  });
++
++  it("maps UTC timestamps just before/after HKT midnight to correct dates", () => {
++    // HKT = UTC+8. 2026-08-11 00:00 HKT = 2026-08-10 16:00 UTC
++    assert.equal(dayKeyFromSqliteUtc("2026-08-10 15:59:59", "Asia/Hong_Kong"), "2026-08-10");
++    assert.equal(dayKeyFromSqliteUtc("2026-08-10 16:00:00", "Asia/Hong_Kong"), "2026-08-11");
++    assert.equal(dayKeyFromSqliteUtc("2026-08-11 15:59:59", "Asia/Hong_Kong"), "2026-08-11");
++    assert.equal(dayKeyFromSqliteUtc("2026-08-11 16:00:00", "Asia/Hong_Kong"), "2026-08-12");
++  });
++
++  it("getUtcRangeForDate returns HKT midnight as UTC bounds", () => {
++    const { startUtc, endUtc } = getUtcRangeForDate(parseDateKey("2026-08-11"), "Asia/Hong_Kong");
++    assert.equal(startUtc, "2026-08-10 16:00:00");
++    assert.equal(endUtc, "2026-08-11 16:00:00");
++  });
++});
+diff --git a/src/utils/challenge.ts b/src/utils/challenge.ts
+index c5dcf3a..af7d664 100644
+--- a/src/utils/challenge.ts
++++ b/src/utils/challenge.ts
+@@ -1,5 +1,18 @@
+ import { config } from "../config.js";
+ import type { DateParts } from "../types.js";
++import {
++  addOneCalendarDay,
++  formatDateParts,
++  parseDateKey,
++  subtractOneCalendarDay,
++} from "./dates.js";
++
++export {
++  addOneCalendarDay,
++  formatDateParts,
++  parseDateKey,
++  subtractOneCalendarDay,
++} from "./dates.js";
+ 
+ /** Returns today's calendar date (Y/M/D) as observed in the given IANA timezone. */
+ export function getTodayInTimezone(timeZone: string, now: Date = new Date()): DateParts {
+@@ -52,23 +65,11 @@ export function getChallengeStatus(now: Date = new Date()): ChallengeStatus {
+   return "active";
+ }
+ 
+-/** Format DateParts as YYYY-MM-DD for API clients. */
+-export function formatDateParts(parts: DateParts): string {
+-  const mm = String(parts.month).padStart(2, "0");
+-  const dd = String(parts.day).padStart(2, "0");
+-  return `${parts.year}-${mm}-${dd}`;
+-}
+-
+ /** Calendar day key (YYYY-MM-DD) in the challenge timezone — for daily caps. */
+ export function getDayKeyInTimezone(now: Date = new Date()): string {
+   return formatDateParts(getTodayInTimezone(config.timezone, now));
+ }
+ 
+-function addOneCalendarDay(parts: DateParts): DateParts {
+-  const next = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + 1));
+-  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
+-}
+-
+ /** Convert a wall-clock time in `timeZone` to the corresponding UTC Date. */
+ function zonedTimeToUtc(
+   year: number,
+@@ -127,13 +128,15 @@ function formatSqliteUtc(date: Date): string {
+ }
+ 
+ /**
+- * UTC half-open [start, end) for the calendar day containing `now` in `TIMEZONE`.
++ * UTC half-open [start, end) for a calendar day in `timeZone`.
+  * String format matches `logs.logged_at` (`datetime('now')` UTC text).
+  */
+-export function getTodayUtcRange(now: Date = new Date()): { startUtc: string; endUtc: string } {
+-  const today = getTodayInTimezone(config.timezone, now);
+-  const tomorrow = addOneCalendarDay(today);
+-  const start = zonedTimeToUtc(today.year, today.month, today.day, 0, 0, 0, config.timezone);
++export function getUtcRangeForDate(
++  parts: DateParts,
++  timeZone: string = config.timezone
++): { startUtc: string; endUtc: string } {
++  const tomorrow = addOneCalendarDay(parts);
++  const start = zonedTimeToUtc(parts.year, parts.month, parts.day, 0, 0, 0, timeZone);
+   const end = zonedTimeToUtc(
+     tomorrow.year,
+     tomorrow.month,
+@@ -141,11 +144,27 @@ export function getTodayUtcRange(now: Date = new Date()): { startUtc: string; en
+     0,
+     0,
+     0,
+-    config.timezone
++    timeZone
+   );
+   return { startUtc: formatSqliteUtc(start), endUtc: formatSqliteUtc(end) };
+ }
+ 
++/**
++ * UTC half-open [start, end) for the calendar day containing `now` in `TIMEZONE`.
++ * String format matches `logs.logged_at` (`datetime('now')` UTC text).
++ */
++export function getTodayUtcRange(now: Date = new Date()): { startUtc: string; endUtc: string } {
++  return getUtcRangeForDate(getTodayInTimezone(config.timezone, now), config.timezone);
++}
++
++/**
++ * Map a SQLite UTC `logged_at` (`YYYY-MM-DD HH:MM:SS`) to a calendar day key in `timeZone`.
++ */
++export function dayKeyFromSqliteUtc(loggedAt: string, timeZone: string = config.timezone): string {
++  const iso = loggedAt.includes("T") ? loggedAt : `${loggedAt.replace(" ", "T")}Z`;
++  return formatDateParts(getTodayInTimezone(timeZone, new Date(iso)));
++}
++
+ export function getPercentComplete(total: number, goal: number): number {
+   if (goal <= 0) return 0;
+   return Math.min(100, Math.round((total / goal) * 1000) / 10); // one decimal place, capped at 100
+diff --git a/src/utils/dates.ts b/src/utils/dates.ts
+new file mode 100644
+index 0000000..15d0b4a
+--- /dev/null
++++ b/src/utils/dates.ts
+@@ -0,0 +1,24 @@
++import type { DateParts } from "../types.js";
++
++/** Format DateParts as YYYY-MM-DD for API clients. */
++export function formatDateParts(parts: DateParts): string {
++  const mm = String(parts.month).padStart(2, "0");
++  const dd = String(parts.day).padStart(2, "0");
++  return `${parts.year}-${mm}-${dd}`;
++}
++
++/** Parse DateParts from a YYYY-MM-DD key. */
++export function parseDateKey(date: string): DateParts {
++  const [year, month, day] = date.split("-").map(Number);
++  return { year: year!, month: month!, day: day! };
++}
++
++export function addOneCalendarDay(parts: DateParts): DateParts {
++  const next = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + 1));
++  return { year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() };
++}
++
++export function subtractOneCalendarDay(parts: DateParts): DateParts {
++  const prev = new Date(Date.UTC(parts.year, parts.month - 1, parts.day - 1));
++  return { year: prev.getUTCFullYear(), month: prev.getUTCMonth() + 1, day: prev.getUTCDate() };
++}
+diff --git a/src/utils/streak.test.ts b/src/utils/streak.test.ts
+new file mode 100644
+index 0000000..f2ca9c1
+--- /dev/null
++++ b/src/utils/streak.test.ts
+@@ -0,0 +1,117 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import { buildLast7Days, computeStreak } from "./streak.js";
++import type { DateParts } from "../types.js";
++
++const today: DateParts = { year: 2026, month: 8, day: 11 };
++const earliest: DateParts = { year: 2026, month: 8, day: 1 };
++
++function totals(entries: Record<string, number>): Map<string, number> {
++  return new Map(Object.entries(entries));
++}
++
++describe("computeStreak", () => {
++  it("counts today + prior consecutive met days", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-09": 100,
++        "2026-08-10": 150,
++        "2026-08-11": 100,
++      }),
++      today,
++      earliest
++    );
++    assert.equal(streak, 3);
++  });
++
++  it("skips unmet today and counts from yesterday (day in progress)", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-09": 100,
++        "2026-08-10": 100,
++        "2026-08-11": 45,
++      }),
++      today,
++      earliest
++    );
++    assert.equal(streak, 2);
++  });
++
++  it("resets when yesterday was missed even if today is met", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-10": 40,
++        "2026-08-11": 120,
++      }),
++      today,
++      earliest
++    );
++    assert.equal(streak, 1);
++  });
++
++  it("is 0 when today unmet and yesterday missed", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-10": 0,
++        "2026-08-11": 50,
++      }),
++      today,
++      earliest
++    );
++    assert.equal(streak, 0);
++  });
++
++  it("treats empty days as misses (no grace period)", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-08-08": 100,
++        // 2026-08-09 missing
++        "2026-08-10": 100,
++        "2026-08-11": 100,
++      }),
++      today,
++      earliest
++    );
++    assert.equal(streak, 2);
++  });
++
++  it("does not extend before challenge start", () => {
++    const streak = computeStreak(
++      100,
++      totals({
++        "2026-07-31": 999,
++        "2026-08-01": 100,
++        "2026-08-02": 100,
++      }),
++      { year: 2026, month: 8, day: 2 },
++      { year: 2026, month: 8, day: 1 }
++    );
++    assert.equal(streak, 2);
++  });
++});
++
++describe("buildLast7Days", () => {
++  it("returns 7 days oldest→newest ending today", () => {
++    const days = buildLast7Days(
++      100,
++      totals({
++        "2026-08-05": 120,
++        "2026-08-06": 40,
++        "2026-08-11": 45,
++      }),
++      today
++    );
++    assert.equal(days.length, 7);
++    assert.equal(days[0]!.date, "2026-08-05");
++    assert.equal(days[6]!.date, "2026-08-11");
++    assert.deepEqual(days[0], { date: "2026-08-05", total: 120, metGoal: true });
++    assert.deepEqual(days[1], { date: "2026-08-06", total: 40, metGoal: false });
++    assert.deepEqual(days[2], { date: "2026-08-07", total: 0, metGoal: false });
++    assert.deepEqual(days[6], { date: "2026-08-11", total: 45, metGoal: false });
++  });
++});
+diff --git a/src/utils/streak.ts b/src/utils/streak.ts
+new file mode 100644
+index 0000000..786ca62
+--- /dev/null
++++ b/src/utils/streak.ts
+@@ -0,0 +1,87 @@
++import type { DateParts } from "../types.js";
++import {
++  addOneCalendarDay,
++  formatDateParts,
++  subtractOneCalendarDay,
++} from "./dates.js";
++
++export interface DayBreakdown {
++  date: string;
++  total: number;
++  metGoal: boolean;
++}
++
++/**
++ * Consecutive met days walking backward from today.
++ * - Today counts only if todayTotal >= dailyGoal.
++ * - If today is unmet, walking starts at yesterday (today still in progress).
++ * - A past day with total < dailyGoal stops the streak (no grace period).
++ * - Days before `earliestParts` (challenge start) are ignored / stop the walk.
++ */
++export function computeStreak(
++  dailyGoal: number,
++  totalsByDate: Map<string, number>,
++  todayParts: DateParts,
++  earliestParts?: DateParts
++): number {
++  if (dailyGoal <= 0) return 0;
++
++  let day = todayParts;
++  const todayTotal = totalsByDate.get(formatDateParts(day)) ?? 0;
++  if (todayTotal < dailyGoal) {
++    day = subtractOneCalendarDay(day);
++  }
++
++  let streak = 0;
++  while (true) {
++    if (earliestParts) {
++      const dayEpoch = Date.UTC(day.year, day.month - 1, day.day);
++      const earliestEpoch = Date.UTC(
++        earliestParts.year,
++        earliestParts.month - 1,
++        earliestParts.day
++      );
++      if (dayEpoch < earliestEpoch) break;
++    }
++
++    const total = totalsByDate.get(formatDateParts(day)) ?? 0;
++    if (total < dailyGoal) break;
++    streak += 1;
++    day = subtractOneCalendarDay(day);
++  }
++  return streak;
++}
++
++/** Exactly 7 days ending with today, oldest → newest. */
++export function buildLast7Days(
++  dailyGoal: number,
++  totalsByDate: Map<string, number>,
++  todayParts: DateParts
++): DayBreakdown[] {
++  let day = todayParts;
++  for (let i = 0; i < 6; i++) {
++    day = subtractOneCalendarDay(day);
++  }
++
++  const days: DayBreakdown[] = [];
++  for (let i = 0; i < 7; i++) {
++    const date = formatDateParts(day);
++    const total = totalsByDate.get(date) ?? 0;
++    days.push({ date, total, metGoal: total >= dailyGoal });
++    day = addOneCalendarDay(day);
++  }
++  return days;
++}
++
++/** Aggregate log rows into TIMEZONE day totals. */
++export function bucketLogsByDay(
++  rows: { logged_at: string; count: number }[],
++  dayKeyFn: (loggedAt: string) => string
++): Map<string, number> {
++  const totals = new Map<string, number>();
++  for (const row of rows) {
++    const key = dayKeyFn(row.logged_at);
++    totals.set(key, (totals.get(key) ?? 0) + row.count);
++  }
++  return totals;
++}
+-- 
+2.43.0
+

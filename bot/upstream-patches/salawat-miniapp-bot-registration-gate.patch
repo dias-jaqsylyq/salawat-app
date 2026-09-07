@@ -1,0 +1,268 @@
+From 3902cd30369e10c0d8cf1be860a302b47cfdeb8e Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 16 Aug 2026 05:07:43 +0000
+Subject: [PATCH] Direct unregistered users to bot /start for signup
+
+Remove Mini App RegistrationScreen; show a finish-in-bot gate when
+progress returns registered:false.
+---
+ README.md                                    |   2 +-
+ src/App.tsx                                  |   4 +-
+ src/api/client.ts                            |  13 --
+ src/api/errors.ts                            |   4 +-
+ src/screens/IncompleteRegistrationScreen.tsx |  13 ++
+ src/screens/RegistrationScreen.tsx           | 141 -------------------
+ 6 files changed, 19 insertions(+), 158 deletions(-)
+ create mode 100644 src/screens/IncompleteRegistrationScreen.tsx
+ delete mode 100644 src/screens/RegistrationScreen.tsx
+
+diff --git a/README.md b/README.md
+index b58e495..794db14 100644
+--- a/README.md
++++ b/README.md
+@@ -40,7 +40,7 @@ npm run preview     # preview the production build locally
+ ## Structure
+ - `src/telegram/` — `window.Telegram.WebApp` bootstrapping (`useTelegram` hook) and ambient types.
+ - `src/api/` — fetch client (attaches `Authorization: tma <initData>` to every request) and response types mirroring the backend contract exactly.
+-- `src/screens/` — Registration (one-time gate, includes private real name), optional real-name completion prompt for legacy users, Log Salawat, My Progress (with Settings), Leaderboard.
++- `src/screens/` — Incomplete-registration gate (directs users to bot `/start`), optional real-name completion prompt for legacy users, Log Salawat, My Progress (with Settings), Leaderboard, Admin.
+ - `src/components/` — `TabBar`, `ProgressBar` (visual width clamped to 100%, numeric label uncapped).
+ - `App.tsx` — checks `GET /api/progress` on load to decide registration-gate, real-name prompt (`needsRealName`), or main app; holds the tab state and shared progress data.
+ 
+diff --git a/src/App.tsx b/src/App.tsx
+index 8ff3dd1..22d5012 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -3,7 +3,7 @@ import { useTelegram } from "./telegram/useTelegram.ts";
+ import { getIsAdmin, getProgress } from "./api/client.ts";
+ import { messageForApiError } from "./api/errors.ts";
+ import type { DayBreakdown, RegisteredProgress } from "./api/types.ts";
+-import RegistrationScreen from "./screens/RegistrationScreen.tsx";
++import IncompleteRegistrationScreen from "./screens/IncompleteRegistrationScreen.tsx";
+ import RealNamePromptScreen from "./screens/RealNamePromptScreen.tsx";
+ import LogSalawatScreen from "./screens/LogSalawatScreen.tsx";
+ import ProgressScreen from "./screens/ProgressScreen.tsx";
+@@ -230,7 +230,7 @@ export default function App() {
+   }
+ 
+   if (state.status === "needs-registration") {
+-    return <RegistrationScreen initData={initData} onRegistered={() => void loadProgress()} />;
++    return <IncompleteRegistrationScreen />;
+   }
+ 
+   if (state.status === "needs-real-name") {
+diff --git a/src/api/client.ts b/src/api/client.ts
+index 08d0c16..0fa578b 100644
+--- a/src/api/client.ts
++++ b/src/api/client.ts
+@@ -11,7 +11,6 @@ import type {
+   ProfileResponse,
+   ProfileUpdate,
+   ProgressResponse,
+-  RegisterResponse,
+   ResetProgressResponse,
+ } from "./types.ts";
+ 
+@@ -62,18 +61,6 @@ async function multipartRequest<T>(
+   return body as T;
+ }
+ 
+-export function register(
+-  initData: string,
+-  realName: string,
+-  nickname: string,
+-  goal: number
+-): Promise<RegisterResponse> {
+-  return request(initData, "/api/register", {
+-    method: "POST",
+-    body: JSON.stringify({ realName, nickname, goal }),
+-  });
+-}
+-
+ export function logSalawat(initData: string, count: number): Promise<LogResponse> {
+   return request(initData, "/api/log", {
+     method: "POST",
+diff --git a/src/api/errors.ts b/src/api/errors.ts
+index 4ef0685..41538ad 100644
+--- a/src/api/errors.ts
++++ b/src/api/errors.ts
+@@ -31,7 +31,9 @@ export function messageForApiError(err: unknown, fallback: string): string {
+     case "rate_limited":
+       return "You're doing that too fast — wait a moment and try again.";
+     case "not_registered":
+-      return "Please register first.";
++      return "Please finish /start in the bot chat first.";
++    case "register_via_bot":
++      return "Registration happens in the bot — send /start there.";
+     case "not_admin":
+       return "This account does not have admin access.";
+     case "broadcast_in_progress":
+diff --git a/src/screens/IncompleteRegistrationScreen.tsx b/src/screens/IncompleteRegistrationScreen.tsx
+new file mode 100644
+index 0000000..b3a9d48
+--- /dev/null
++++ b/src/screens/IncompleteRegistrationScreen.tsx
+@@ -0,0 +1,13 @@
++/** Shown when someone opens the Mini App before finishing bot /start signup. */
++export default function IncompleteRegistrationScreen() {
++  return (
++    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 text-center">
++      <h1 className="text-lg font-semibold text-foreground">Finish signup in the bot</h1>
++      <p className="mt-3 max-w-sm text-sm text-muted-foreground">
++        Registration now happens in the Salawat Challenge bot chat. Open the bot, send{" "}
++        <span className="font-medium text-foreground">/start</span>, and complete the short
++        conversation. Then come back here via the menu button.
++      </p>
++    </div>
++  );
++}
+diff --git a/src/screens/RegistrationScreen.tsx b/src/screens/RegistrationScreen.tsx
+deleted file mode 100644
+index 88e1ab3..0000000
+--- a/src/screens/RegistrationScreen.tsx
++++ /dev/null
+@@ -1,141 +0,0 @@
+-import { useState, type FormEvent } from "react";
+-import { Moon } from "lucide-react";
+-import { register } from "../api/client.ts";
+-import { messageForApiError } from "../api/errors.ts";
+-import {
+-  NICKNAME_MATCHES_REAL_NAME_MESSAGE,
+-  REAL_NAME_MAX_LENGTH,
+-  nicknameMatchesRealName,
+-  validateRealName,
+-} from "../lib/realName.ts";
+-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+-import { Input } from "@/components/ui/input";
+-import { Label } from "@/components/ui/label";
+-import { Button } from "@/components/ui/button";
+-
+-interface Props {
+-  initData: string;
+-  onRegistered: () => void;
+-}
+-
+-/** Must stay in sync with salawat-bot MAX_GOAL. */
+-const MAX_GOAL = 100_000_000;
+-
+-function validate(realName: string, nickname: string, goal: string): string | null {
+-  const realNameError = validateRealName(realName);
+-  if (realNameError) return realNameError;
+-  if (nicknameMatchesRealName(nickname, realName)) {
+-    return NICKNAME_MATCHES_REAL_NAME_MESSAGE;
+-  }
+-  const trimmed = nickname.trim();
+-  if (trimmed.length === 0 || trimmed.length > 50) {
+-    return "Nickname must be 1–50 characters.";
+-  }
+-  const goalNum = Number(goal);
+-  if (!Number.isInteger(goalNum) || goalNum <= 0) {
+-    return "Daily goal must be a positive whole number.";
+-  }
+-  if (goalNum > MAX_GOAL) {
+-    return `Daily goal must be at most ${MAX_GOAL.toLocaleString()}.`;
+-  }
+-  return null;
+-}
+-
+-export default function RegistrationScreen({ initData, onRegistered }: Props) {
+-  const [realName, setRealName] = useState("");
+-  const [nickname, setNickname] = useState("");
+-  const [goal, setGoal] = useState("");
+-  const [error, setError] = useState<string | null>(null);
+-  const [submitting, setSubmitting] = useState(false);
+-
+-  async function handleSubmit(e: FormEvent) {
+-    e.preventDefault();
+-    if (submitting) return;
+-
+-    const validationError = validate(realName, nickname, goal);
+-    if (validationError) {
+-      setError(validationError);
+-      return;
+-    }
+-
+-    setSubmitting(true);
+-    setError(null);
+-    try {
+-      await register(initData, realName.trim(), nickname.trim(), Number(goal));
+-      onRegistered();
+-    } catch (err) {
+-      setError(messageForApiError(err, "Couldn't register — please try again."));
+-    } finally {
+-      setSubmitting(false);
+-    }
+-  }
+-
+-  return (
+-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+-      <Card className="w-full max-w-sm">
+-        <form onSubmit={handleSubmit}>
+-          <CardHeader>
+-            <CardTitle className="flex items-center gap-2">
+-              <Moon className="h-5 w-5 text-primary" aria-hidden="true" />
+-              Salawat Challenge
+-            </CardTitle>
+-            <CardDescription>Assalamu alaikum! Let's get you set up.</CardDescription>
+-          </CardHeader>
+-
+-          <CardContent className="space-y-4">
+-            <div className="space-y-2">
+-              <Label htmlFor="real-name">Full name (real name)</Label>
+-              <Input
+-                id="real-name"
+-                type="text"
+-                value={realName}
+-                onChange={(e) => setRealName(e.target.value)}
+-                maxLength={REAL_NAME_MAX_LENGTH}
+-                autoComplete="name"
+-                placeholder="e.g. Ali Nurlanov"
+-              />
+-              <p className="text-xs text-muted-foreground">
+-                Only the challenge admin can see this. Other participants see your nickname.
+-              </p>
+-            </div>
+-
+-            <div className="space-y-2">
+-              <Label htmlFor="nickname">Nickname</Label>
+-              <Input
+-                id="nickname"
+-                type="text"
+-                value={nickname}
+-                onChange={(e) => setNickname(e.target.value)}
+-                maxLength={50}
+-                placeholder="e.g. Ali"
+-              />
+-            </div>
+-
+-            <div className="space-y-2">
+-              <Label htmlFor="goal">Daily salawat goal</Label>
+-              <Input
+-                id="goal"
+-                type="number"
+-                inputMode="numeric"
+-                min={1}
+-                max={MAX_GOAL}
+-                step={1}
+-                value={goal}
+-                onChange={(e) => setGoal(e.target.value)}
+-                placeholder="e.g. 100"
+-              />
+-            </div>
+-
+-            {error && <p className="text-sm text-destructive">{error}</p>}
+-          </CardContent>
+-
+-          <CardFooter>
+-            <Button type="submit" disabled={submitting} className="w-full">
+-              {submitting ? "Joining…" : "Join the challenge"}
+-            </Button>
+-          </CardFooter>
+-        </form>
+-      </Card>
+-    </div>
+-  );
+-}
+-- 
+2.43.0
+

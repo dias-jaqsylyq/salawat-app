@@ -1,0 +1,431 @@
+From 5799dfb3c5199d941ffe561ffa7c0f7482302011 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 11 Aug 2026 04:54:48 +0000
+Subject: [PATCH] Add profile API and per-user reminder scheduler.
+
+Migrate reminder_enabled/reminder_time onto users, expose GET/PATCH
+/api/profile, and match reminders every minute against each user's
+effective time in the challenge timezone.
+---
+ README.md                 |  20 ++++++-
+ src/api/routes/profile.ts | 114 ++++++++++++++++++++++++++++++++++++++
+ src/api/server.ts         |   3 +
+ src/config.ts             |  19 ++++++-
+ src/db/client.ts          |  11 ++++
+ src/db/repository.ts      |  39 +++++++++++++
+ src/db/schema.sql         |   2 +
+ src/scheduler/reminder.ts |  64 +++++++++++++++------
+ src/types.ts              |   4 ++
+ 9 files changed, 258 insertions(+), 18 deletions(-)
+ create mode 100644 src/api/routes/profile.ts
+
+diff --git a/README.md b/README.md
+index a18edc9..594a1e6 100644
+--- a/README.md
++++ b/README.md
+@@ -98,6 +98,24 @@ Unauthenticated:
+ **GET /api/leaderboard**
+ → `200 { leaderboard: [{ nickname, total, rank }] }` — competition ranks (ties share a rank: 1, 1, 3)
+ 
++**GET /api/profile**
++→ `200 { nickname, dailyGoal, reminderEnabled, reminderTime }`
++- `reminderTime`: effective `HH:mm` in challenge `TIMEZONE` (`users.reminder_time` if set, else global `REMINDER_TIME`)
++→ `403 { success: false, error: "not_registered" }`
++
++**PATCH /api/profile** — body (all fields optional; at least one required): `{ nickname?, dailyGoal?, reminderEnabled?, reminderTime? }`
++- Same nickname / daily-goal rules as register
++- `reminderEnabled`: boolean
++- `reminderTime`: `HH:mm` (24h), or `null` to clear override and use global `REMINDER_TIME`
++- Rate limit: 5 requests/minute/user
++→ `200` same shape as GET
++→ `400 { success: false, error: "invalid_body" | "invalid_nickname" | "invalid_goal" | "invalid_reminder_enabled" | "invalid_reminder_time" }`
++→ `403 { success: false, error: "not_registered" }`
++→ `409 { success: false, error: "nickname_taken" }`
++→ `429 { success: false, error: "rate_limited" }`
++
++**Reminders:** a minute cron in `TIMEZONE` messages each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm`. Global `REMINDER_TIME` is the default when `reminder_time` is null. Overlapping ticks are skipped while a send is in flight. No catch-up if the process was down during a user’s minute.
++
+ **GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,total,daily_goal`
+ - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
+ → `401 unauthorized` if key wrong
+@@ -131,4 +149,4 @@ Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on th
+ - `/start`, `/help` — both reply with a short message pointing at the chat menu button, which opens the Mini App.
+ 
+ ## Notes / v1 scope
+-Per-user reminder times, group-chat announcements, multi-timezone support, and manual count correction remain out of scope. Daily goals and streaks are included via `/api/progress`. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Registration, logging, progress, and leaderboard live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.
++Group-chat announcements, multi-timezone support, and manual count correction remain out of scope. Daily goals, streaks, and per-user reminder preferences are included via `/api/progress` and `/api/profile`. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Registration, logging, progress, leaderboard, and settings live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.
+diff --git a/src/api/routes/profile.ts b/src/api/routes/profile.ts
+new file mode 100644
+index 0000000..0bb735a
+--- /dev/null
++++ b/src/api/routes/profile.ts
+@@ -0,0 +1,114 @@
++import type { Request, Response } from "express";
++import {
++  PROFILE_RATE_LIMIT_PER_MINUTE,
++  MAX_GOAL,
++  config,
++  formatReminderHhMm,
++  isValidReminderTime,
++  parseReminderTime,
++} from "../../config.js";
++import { allowRequest } from "../rateLimit.js";
++import { getUserByTelegramId, isNicknameTaken, updateUserProfile } from "../../db/repository.js";
++import type { User } from "../../types.js";
++
++function effectiveReminderTime(user: User): string {
++  if (user.reminder_time && isValidReminderTime(user.reminder_time)) {
++    return formatReminderHhMm(parseReminderTime(user.reminder_time));
++  }
++  return formatReminderHhMm(config.reminderTime);
++}
++
++function profileResponse(user: User) {
++  return {
++    nickname: user.nickname,
++    dailyGoal: user.goal,
++    reminderEnabled: user.reminder_enabled === 1,
++    reminderTime: effectiveReminderTime(user),
++  };
++}
++
++export function getProfileRoute(req: Request, res: Response) {
++  const user = getUserByTelegramId(req.telegramId);
++  if (!user) {
++    res.status(403).json({ success: false, error: "not_registered" });
++    return;
++  }
++  res.json(profileResponse(user));
++}
++
++export function patchProfileRoute(req: Request, res: Response) {
++  const body = req.body ?? {};
++  const hasNickname = Object.prototype.hasOwnProperty.call(body, "nickname");
++  const hasDailyGoal = Object.prototype.hasOwnProperty.call(body, "dailyGoal");
++  const hasReminderEnabled = Object.prototype.hasOwnProperty.call(body, "reminderEnabled");
++  const hasReminderTime = Object.prototype.hasOwnProperty.call(body, "reminderTime");
++
++  if (!hasNickname && !hasDailyGoal && !hasReminderEnabled && !hasReminderTime) {
++    res.status(400).json({ success: false, error: "invalid_body" });
++    return;
++  }
++
++  if (!allowRequest(req.telegramId, PROFILE_RATE_LIMIT_PER_MINUTE)) {
++    res.status(429).json({ success: false, error: "rate_limited" });
++    return;
++  }
++
++  const user = getUserByTelegramId(req.telegramId);
++  if (!user) {
++    res.status(403).json({ success: false, error: "not_registered" });
++    return;
++  }
++
++  let nickname: string | undefined;
++  if (hasNickname) {
++    if (typeof body.nickname !== "string" || body.nickname.trim().length === 0 || body.nickname.trim().length > 50) {
++      res.status(400).json({ success: false, error: "invalid_nickname" });
++      return;
++    }
++    const trimmedNickname = body.nickname.trim();
++    nickname = trimmedNickname;
++    if (isNicknameTaken(trimmedNickname, req.telegramId)) {
++      res.status(409).json({ success: false, error: "nickname_taken" });
++      return;
++    }
++  }
++
++  let dailyGoal: number | undefined;
++  if (hasDailyGoal) {
++    if (typeof body.dailyGoal !== "number" || !Number.isInteger(body.dailyGoal) || body.dailyGoal <= 0 || body.dailyGoal > MAX_GOAL) {
++      res.status(400).json({ success: false, error: "invalid_goal" });
++      return;
++    }
++    dailyGoal = body.dailyGoal;
++  }
++
++  let reminderEnabled: boolean | undefined;
++  if (hasReminderEnabled) {
++    if (typeof body.reminderEnabled !== "boolean") {
++      res.status(400).json({ success: false, error: "invalid_reminder_enabled" });
++      return;
++    }
++    reminderEnabled = body.reminderEnabled;
++  }
++
++  let reminderTime: string | null | undefined;
++  if (hasReminderTime) {
++    if (body.reminderTime === null) {
++      reminderTime = null;
++    } else if (typeof body.reminderTime === "string" && isValidReminderTime(body.reminderTime)) {
++      reminderTime = formatReminderHhMm(parseReminderTime(body.reminderTime));
++    } else {
++      res.status(400).json({ success: false, error: "invalid_reminder_time" });
++      return;
++    }
++  }
++
++  const updated = updateUserProfile(req.telegramId, {
++    nickname,
++    goal: dailyGoal,
++    reminderEnabled,
++    reminderTime,
++  });
++
++  res.json(profileResponse(updated));
++}
+diff --git a/src/api/server.ts b/src/api/server.ts
+index 29fe87d..9a0c37d 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -7,6 +7,7 @@ import { logRoute } from "./routes/log.js";
+ import { progressRoute } from "./routes/progress.js";
+ import { leaderboardRoute } from "./routes/leaderboard.js";
+ import { exportRoute } from "./routes/export.js";
++import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
+ 
+ export function createApiServer() {
+   const app = express();
+@@ -25,6 +26,8 @@ export function createApiServer() {
+   app.post("/api/log", telegramAuth, logRoute);
+   app.get("/api/progress", telegramAuth, progressRoute);
+   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
++  app.get("/api/profile", telegramAuth, getProfileRoute);
++  app.patch("/api/profile", telegramAuth, patchProfileRoute);
+ 
+   app.use((_req: Request, res: Response) => {
+     res.status(404).json({ success: false, error: "not_found" });
+diff --git a/src/config.ts b/src/config.ts
+index 48c5696..e43cd55 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -23,7 +23,7 @@ function toEpochDay(parts: DateParts): number {
+   return Date.UTC(parts.year, parts.month - 1, parts.day) / 86_400_000;
+ }
+ 
+-function parseReminderTime(value: string): { hour: number; minute: number } {
++export function parseReminderTime(value: string): { hour: number; minute: number } {
+   const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+   if (!match) {
+     throw new Error(`Invalid REMINDER_TIME: "${value}" (expected HH:mm)`);
+@@ -36,6 +36,21 @@ function parseReminderTime(value: string): { hour: number; minute: number } {
+   return { hour, minute };
+ }
+ 
++/** Format {hour, minute} as zero-padded HH:mm. */
++export function formatReminderHhMm(time: { hour: number; minute: number }): string {
++  return `${String(time.hour).padStart(2, "0")}:${String(time.minute).padStart(2, "0")}`;
++}
++
++/** True if value is a valid 24h HH:mm string. */
++export function isValidReminderTime(value: string): boolean {
++  try {
++    parseReminderTime(value);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
+ const challengeStartDate = parseDateParts("CHALLENGE_START_DATE", required("CHALLENGE_START_DATE"));
+ const challengeEndDate = parseDateParts("CHALLENGE_END_DATE", required("CHALLENGE_END_DATE"));
+ 
+@@ -56,6 +71,8 @@ export const LOG_RATE_LIMIT_PER_MINUTE = 30;
+ export const LOG_DAILY_COUNT_CAP = 50_000;
+ /** Max POST /api/register requests per telegram user per rolling minute. */
+ export const REGISTER_RATE_LIMIT_PER_MINUTE = 5;
++/** Max PATCH /api/profile requests per telegram user per rolling minute. */
++export const PROFILE_RATE_LIMIT_PER_MINUTE = 5;
+ 
+ const PLACEHOLDER_MINI_APP_URL = "https://example.com/REPLACE_WITH_VERCEL_URL";
+ 
+diff --git a/src/db/client.ts b/src/db/client.ts
+index 489fa3a..ffc0f1f 100644
+--- a/src/db/client.ts
++++ b/src/db/client.ts
+@@ -21,3 +21,14 @@ db.pragma("foreign_keys = ON");
+ 
+ const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
+ db.exec(schema);
++
++/** Idempotent column adds for DBs created before a given schema revision. */
++function ensureUserColumn(name: string, ddl: string) {
++  const cols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
++  if (!cols.some((c) => c.name === name)) {
++    db.exec(`ALTER TABLE users ADD COLUMN ${name} ${ddl}`);
++  }
++}
++
++ensureUserColumn("reminder_enabled", "INTEGER NOT NULL DEFAULT 1");
++ensureUserColumn("reminder_time", "TEXT");
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index 6c77382..3999ed5 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -84,6 +84,45 @@ export function getAllUsers(): User[] {
+   return db.prepare("SELECT * FROM users").all() as User[];
+ }
+ 
++/** Users who opted into daily reminders. */
++export function getUsersWithRemindersEnabled(): User[] {
++  return db
++    .prepare("SELECT * FROM users WHERE reminder_enabled = 1")
++    .all() as User[];
++}
++
++export interface UserProfileUpdate {
++  nickname?: string;
++  goal?: number;
++  reminderEnabled?: boolean;
++  /** HH:mm override, or null to clear back to global default. */
++  reminderTime?: string | null;
++}
++
++export function updateUserProfile(telegramId: number, update: UserProfileUpdate): User {
++  const user = getUserByTelegramId(telegramId);
++  if (!user) {
++    throw new Error(`updateUserProfile: user ${telegramId} not found`);
++  }
++
++  const nickname = update.nickname ?? user.nickname;
++  const goal = update.goal ?? user.goal;
++  const reminderEnabled =
++    update.reminderEnabled !== undefined ? (update.reminderEnabled ? 1 : 0) : user.reminder_enabled;
++  const reminderTime =
++    update.reminderTime !== undefined ? update.reminderTime : user.reminder_time;
++
++  db.prepare(
++    `UPDATE users
++     SET nickname = ?, goal = ?, reminder_enabled = ?, reminder_time = ?
++     WHERE telegram_id = ?`
++  ).run(nickname, goal, reminderEnabled, reminderTime, telegramId);
++
++  return getUserByTelegramId(telegramId) ?? (() => {
++    throw new Error(`Failed to reload user ${telegramId} after profile update`);
++  })();
++}
++
+ /** Full leaderboard rows for admin CSV export (includes telegram_id + goal). */
+ export function getExportRows(): ExportRow[] {
+   return db
+diff --git a/src/db/schema.sql b/src/db/schema.sql
+index 1bc6f4a..4c2eec3 100644
+--- a/src/db/schema.sql
++++ b/src/db/schema.sql
+@@ -3,6 +3,8 @@ CREATE TABLE IF NOT EXISTS users (
+   telegram_id INTEGER NOT NULL UNIQUE,
+   nickname TEXT NOT NULL,
+   goal INTEGER NOT NULL,
++  reminder_enabled INTEGER NOT NULL DEFAULT 1,
++  reminder_time TEXT,
+   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+ );
+ 
+diff --git a/src/scheduler/reminder.ts b/src/scheduler/reminder.ts
+index 5c09d13..46fd7e3 100644
+--- a/src/scheduler/reminder.ts
++++ b/src/scheduler/reminder.ts
+@@ -1,37 +1,69 @@
+ import cron from "node-cron";
+ import { InlineKeyboard, type Bot } from "grammy";
+-import { config } from "../config.js";
+-import { getAllUsers } from "../db/repository.js";
++import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
++import { getUsersWithRemindersEnabled } from "../db/repository.js";
+ import { isChallengeActive } from "../utils/challenge.js";
+ import type { MyContext } from "../context.js";
++import type { User } from "../types.js";
+ 
+ const REMINDER_TEXT = "🌙 Don't forget today's salawat! Tap below to log it.";
+ const REMINDER_KEYBOARD = new InlineKeyboard().url("Log Salawat", config.miniAppDeepLink);
+ 
+-async function sendDailyReminders(bot: Bot<MyContext>) {
++let sending = false;
++
++function currentHhMmInTimezone(now: Date = new Date()): string {
++  const parts = new Intl.DateTimeFormat("en-GB", {
++    timeZone: config.timezone,
++    hour: "2-digit",
++    minute: "2-digit",
++    hourCycle: "h23",
++  }).formatToParts(now);
++  const hour = parts.find((p) => p.type === "hour")?.value ?? "00";
++  const minute = parts.find((p) => p.type === "minute")?.value ?? "00";
++  return `${hour}:${minute}`;
++}
++
++function effectiveReminderTime(user: User): string {
++  if (user.reminder_time && isValidReminderTime(user.reminder_time)) {
++    const [h, m] = user.reminder_time.split(":").map(Number);
++    return formatReminderHhMm({ hour: h!, minute: m! });
++  }
++  return formatReminderHhMm(config.reminderTime);
++}
++
++async function sendDueReminders(bot: Bot<MyContext>) {
+   if (!isChallengeActive()) return;
++  if (sending) {
++    console.warn("Skipping reminder tick — previous send still in flight");
++    return;
++  }
+ 
+-  const users = getAllUsers();
+-  for (const user of users) {
+-    try {
+-      await bot.api.sendMessage(user.telegram_id, REMINDER_TEXT, {
+-        reply_markup: REMINDER_KEYBOARD,
+-      });
+-    } catch (err) {
+-      console.error(`Failed to send reminder to user ${user.telegram_id} (${user.nickname}):`, err);
++  sending = true;
++  try {
++    const nowHhMm = currentHhMmInTimezone();
++    const users = getUsersWithRemindersEnabled();
++    for (const user of users) {
++      if (effectiveReminderTime(user) !== nowHhMm) continue;
++      try {
++        await bot.api.sendMessage(user.telegram_id, REMINDER_TEXT, {
++          reply_markup: REMINDER_KEYBOARD,
++        });
++      } catch (err) {
++        console.error(`Failed to send reminder to user ${user.telegram_id} (${user.nickname}):`, err);
++      }
+     }
++  } finally {
++    sending = false;
+   }
+ }
+ 
+ export function startReminderScheduler(bot: Bot<MyContext>) {
+-  const { hour, minute } = config.reminderTime;
+-  const cronExpression = `${minute} ${hour} * * *`;
+-
+-  cron.schedule(cronExpression, () => void sendDailyReminders(bot), {
++  cron.schedule("* * * * *", () => void sendDueReminders(bot), {
+     timezone: config.timezone,
+   });
+ 
++  const defaultTime = formatReminderHhMm(config.reminderTime);
+   console.log(
+-    `Daily reminder scheduled for ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} (${config.timezone})`
++    `Per-user reminder scheduler running every minute (${config.timezone}); default time ${defaultTime}`
+   );
+ }
+diff --git a/src/types.ts b/src/types.ts
+index 8438ca4..5fa77b1 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -3,6 +3,10 @@ export interface User {
+   telegram_id: number;
+   nickname: string;
+   goal: number;
++  /** SQLite 0/1; default 1 (reminders on). */
++  reminder_enabled: number;
++  /** HH:mm override in challenge TIMEZONE, or null to use global REMINDER_TIME. */
++  reminder_time: string | null;
+   created_at: string;
+ }
+ 
+-- 
+2.43.0
+

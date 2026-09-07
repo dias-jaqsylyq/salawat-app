@@ -1,0 +1,107 @@
+From 506509da1edb6f9953fb1ce395a9149231eca286 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 11 Aug 2026 05:08:55 +0000
+Subject: [PATCH] Add jamaatTotal and telegramId to leaderboard API.
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+GET /api/leaderboard now returns the group all-time sum plus each
+row's telegramId for Mini App “(You)” highlighting.
+---
+ README.md                     |  5 ++++-
+ src/api/routes/leaderboard.ts | 14 +++++++++++---
+ src/db/repository.ts          | 12 +++++++++++-
+ src/types.ts                  |  1 +
+ 4 files changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/README.md b/README.md
+index 594a1e6..e6879a4 100644
+--- a/README.md
++++ b/README.md
+@@ -96,7 +96,10 @@ Unauthenticated:
+ - `challengeStatus`: `"not_started" | "active" | "ended"`
+ 
+ **GET /api/leaderboard**
+-→ `200 { leaderboard: [{ nickname, total, rank }] }` — competition ranks (ties share a rank: 1, 1, 3)
++→ `200 { jamaatTotal, leaderboard: [{ nickname, total, rank, telegramId }] }`
++- `jamaatTotal`: sum of all registered users' all-time totals
++- `telegramId`: each user's Telegram id (for Mini App “(You)” highlighting)
++- Competition ranks (ties share a rank: 1, 1, 3)
+ 
+ **GET /api/profile**
+ → `200 { nickname, dailyGoal, reminderEnabled, reminderTime }`
+diff --git a/src/api/routes/leaderboard.ts b/src/api/routes/leaderboard.ts
+index e326fda..27c2ce8 100644
+--- a/src/api/routes/leaderboard.ts
++++ b/src/api/routes/leaderboard.ts
+@@ -1,5 +1,5 @@
+ import type { Request, Response } from "express";
+-import { getLeaderboard } from "../../db/repository.js";
++import { getJamaatTotal, getLeaderboard } from "../../db/repository.js";
+ 
+ export function leaderboardRoute(_req: Request, res: Response) {
+   const rows = getLeaderboard();
+@@ -9,7 +9,15 @@ export function leaderboardRoute(_req: Request, res: Response) {
+     if (i > 0 && row.total < rows[i - 1]!.total) {
+       rank = i + 1;
+     }
+-    return { nickname: row.nickname, total: row.total, rank };
++    return {
++      nickname: row.nickname,
++      total: row.total,
++      rank,
++      telegramId: row.telegram_id,
++    };
++  });
++  res.json({
++    jamaatTotal: getJamaatTotal(),
++    leaderboard,
+   });
+-  res.json({ leaderboard });
+ }
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index 3999ed5..16e1f50 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -71,7 +71,9 @@ export function getUserLogsSince(
+ export function getLeaderboard(): LeaderboardRow[] {
+   return db
+     .prepare(
+-      `SELECT u.nickname AS nickname, COALESCE(SUM(l.count), 0) AS total
++      `SELECT u.nickname AS nickname,
++              u.telegram_id AS telegram_id,
++              COALESCE(SUM(l.count), 0) AS total
+        FROM users u
+        LEFT JOIN logs l ON l.user_id = u.id
+        GROUP BY u.id
+@@ -80,6 +82,14 @@ export function getLeaderboard(): LeaderboardRow[] {
+     .all() as LeaderboardRow[];
+ }
+ 
++/** Sum of all registered users' all-time salawat totals. */
++export function getJamaatTotal(): number {
++  const row = db
++    .prepare(`SELECT COALESCE(SUM(count), 0) AS total FROM logs`)
++    .get() as { total: number };
++  return row.total;
++}
++
+ export function getAllUsers(): User[] {
+   return db.prepare("SELECT * FROM users").all() as User[];
+ }
+diff --git a/src/types.ts b/src/types.ts
+index 5fa77b1..c25ff8e 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -20,6 +20,7 @@ export interface LogEntry {
+ export interface LeaderboardRow {
+   nickname: string;
+   total: number;
++  telegram_id: number;
+ }
+ 
+ export interface ExportRow {
+-- 
+2.43.0
+

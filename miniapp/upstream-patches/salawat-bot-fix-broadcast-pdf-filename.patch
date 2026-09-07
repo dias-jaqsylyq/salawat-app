@@ -1,0 +1,117 @@
+From 788cb550be3d347ffd69a64bb24f090e3602210e Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Sun, 16 Aug 2026 04:47:51 +0000
+Subject: [PATCH] Preserve original PDF filename on admin broadcasts
+
+Quote the multipart filename so Telegram does not truncate at the
+first space, and keep non-ASCII letters instead of replacing them
+with underscores.
+---
+ src/api/adminBroadcast.test.ts  | 13 +++++++++++-
+ src/api/routes/broadcastFile.ts | 36 +++++++++++++++++++++++++++------
+ 2 files changed, 42 insertions(+), 7 deletions(-)
+
+diff --git a/src/api/adminBroadcast.test.ts b/src/api/adminBroadcast.test.ts
+index 27d66ab..732406c 100644
+--- a/src/api/adminBroadcast.test.ts
++++ b/src/api/adminBroadcast.test.ts
+@@ -21,6 +21,8 @@ const { broadcastUsers } = await import("./broadcastService.js");
+ const {
+   createPdfSender,
+   hasPdfSignature,
++  safeFilename,
++  telegramUploadFilename,
+ } = await import("./routes/broadcastFile.js");
+ 
+ function user(id: number): User {
+@@ -147,12 +149,21 @@ describe("PDF broadcast", () => {
+     const send = createPdfSender(
+       bot,
+       Buffer.from("%PDF-1.7\ncontent"),
+-      "book.pdf"
++      "Monday Fast.pdf"
+     );
+     await send(user(1));
+     await send(user(2));
+ 
+     assert.equal(documents[0] instanceof InputFile, true);
++    assert.equal((documents[0] as InputFile).filename, '"Monday Fast.pdf"');
+     assert.equal(documents[1], "telegram-file-id");
+   });
++
++  it("keeps spaces and non-ASCII letters in the upload name", () => {
++    assert.equal(safeFilename("Monday Fast.pdf"), "Monday Fast.pdf");
++    assert.equal(safeFilename("Салауат.pdf"), "Салауат.pdf");
++    assert.equal(safeFilename("Imam's notes.pdf"), "Imam's notes.pdf");
++    assert.equal(safeFilename("C:\\\\Users\\\\Dias\\\\Monday Fast.pdf"), "Monday Fast.pdf");
++    assert.equal(telegramUploadFilename("Monday Fast.pdf"), '"Monday Fast.pdf"');
++  });
+ });
+diff --git a/src/api/routes/broadcastFile.ts b/src/api/routes/broadcastFile.ts
+index 9ce46a9..7dcf537 100644
+--- a/src/api/routes/broadcastFile.ts
++++ b/src/api/routes/broadcastFile.ts
+@@ -1,4 +1,3 @@
+-import { basename } from "node:path";
+ import type { NextFunction, Request, Response } from "express";
+ import { InputFile, type Bot } from "grammy";
+ import multer from "multer";
+@@ -16,7 +15,7 @@ const upload = multer({
+   storage: multer.memoryStorage(),
+   limits: { fileSize: MAX_PDF_BYTES, files: 1 },
+   fileFilter: (_req, file, callback) => {
+-    const pdfName = file.originalname.toLowerCase().endsWith(".pdf");
++    const pdfName = decodeMulterFilename(file.originalname).toLowerCase().endsWith(".pdf");
+     const pdfMime = file.mimetype === "application/pdf";
+     callback(null, pdfName && pdfMime);
+   },
+@@ -44,9 +43,34 @@ export function adminPdfUpload(
+   });
+ }
+ 
+-function safeFilename(original: string): string {
+-  const cleaned = basename(original).replace(/[^\w.\- ()]/g, "_");
+-  return cleaned || "document.pdf";
++/**
++ * Multer/busboy historically exposes UTF-8 names as latin1. If the string is
++ * already real Unicode, leave it alone.
++ */
++export function decodeMulterFilename(original: string): string {
++  if ([...original].some((ch) => ch.charCodeAt(0) > 255)) return original;
++  const decoded = Buffer.from(original, "latin1").toString("utf8");
++  return decoded.includes("\uFFFD") ? original : decoded;
++}
++
++/** Keep letters (including non-ASCII), digits, and a small safe punctuation set. */
++export function safeFilename(original: string): string {
++  const base = decodeMulterFilename(original).replace(/^.*[/\\]/, "");
++  const cleaned = base
++    .replace(/[\u0000-\u001f\u007f]/g, "")
++    .replace(/[^\p{L}\p{N}._ ()'+-]/gu, "_")
++    .replace(/_+/g, "_")
++    .trim();
++  if (!cleaned || cleaned === ".pdf") return "document.pdf";
++  return cleaned.toLowerCase().endsWith(".pdf") ? cleaned : `${cleaned}.pdf`;
++}
++
++/**
++ * grammy writes `filename=${name}` without quotes. Wrap so Telegram does not
++ * truncate at the first space ("Monday Fast.pdf" → "Monday").
++ */
++export function telegramUploadFilename(filename: string): string {
++  return `"${filename.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+ }
+ 
+ export function createPdfSender(
+@@ -57,7 +81,7 @@ export function createPdfSender(
+ ): (user: User) => Promise<void> {
+   let telegramFileId: string | undefined;
+   return async (user: User): Promise<void> => {
+-    const document = telegramFileId ?? new InputFile(buffer, filename);
++    const document = telegramFileId ?? new InputFile(buffer, telegramUploadFilename(filename));
+     const sent = await bot.api.sendDocument(user.telegram_id, document, {
+       caption,
+     });
+-- 
+2.43.0
+

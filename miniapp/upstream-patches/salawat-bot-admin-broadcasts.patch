@@ -1,0 +1,1004 @@
+From f2218daef69ff386a100469f8f0ae561edde7287 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 11 Aug 2026 11:51:51 +0000
+Subject: [PATCH] Add Telegram-admin participant broadcasts
+
+---
+ .env.example                    |   4 +
+ README.md                       |  15 +++
+ package-lock.json               | 175 ++++++++++++++++++++++++++++++++
+ package.json                    |   4 +-
+ src/api/adminAuth.ts            |  15 +++
+ src/api/adminBroadcast.test.ts  | 153 ++++++++++++++++++++++++++++
+ src/api/broadcastFormatting.ts  |  47 +++++++++
+ src/api/broadcastService.ts     |  55 ++++++++++
+ src/api/routes/adminStatus.ts   |  11 ++
+ src/api/routes/broadcast.ts     |  98 ++++++++++++++++++
+ src/api/routes/broadcastFile.ts |  96 ++++++++++++++++++
+ src/api/server.ts               |  26 ++++-
+ src/config.ts                   |  15 +++
+ src/db/repository.ts            |   5 +
+ src/index.ts                    |   2 +-
+ 15 files changed, 718 insertions(+), 3 deletions(-)
+ create mode 100644 src/api/adminAuth.ts
+ create mode 100644 src/api/adminBroadcast.test.ts
+ create mode 100644 src/api/broadcastFormatting.ts
+ create mode 100644 src/api/broadcastService.ts
+ create mode 100644 src/api/routes/adminStatus.ts
+ create mode 100644 src/api/routes/broadcast.ts
+ create mode 100644 src/api/routes/broadcastFile.ts
+
+diff --git a/.env.example b/.env.example
+index b854f7f..a744e49 100644
+--- a/.env.example
++++ b/.env.example
+@@ -40,3 +40,7 @@ INIT_DATA_MAX_AGE_SECONDS=3600
+ # Optional. Enables GET /api/admin/export?key=... for prize-time CSV download.
+ # Leave empty to keep the endpoint disabled (503).
+ ADMIN_EXPORT_SECRET=
++
++# Telegram numeric user ID allowed to access the Mini App Admin tab and broadcasts.
++# Obtain it from Telegram initData / a trusted ID bot. Invalid or empty disables access.
++ADMIN_TELEGRAM_ID=1225110756
+diff --git a/README.md b/README.md
+index b263a16..fcd2afc 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,7 @@ Open `.env` and set:
+ - `MINI_APP_DEEP_LINK` — `t.me/salawat_challenge_bot/challenge` deep link used in the daily reminder's button. Works today independent of the Vercel deployment.
+ - `INIT_DATA_MAX_AGE_SECONDS` — how old a Telegram `initData` payload can be before it's rejected as stale (prefer `3600` in production; code default is 24h if unset).
+ - `ADMIN_EXPORT_SECRET` — optional. When set, enables `GET /api/admin/export?key=…` for prize-time CSV download.
++- `ADMIN_TELEGRAM_ID` — numeric Telegram user id allowed to use Mini App admin broadcasts. Invalid or empty disables Mini App admin access.
+ 
+ **Never commit `.env` or paste your bot token anywhere public.** If a token leaks, revoke it via `@BotFather` → `/revoke`.
+ 
+@@ -126,6 +127,20 @@ Unauthenticated:
+ 
+ **Reminders:** a minute cron in `TIMEZONE` messages each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm`. Global `REMINDER_TIME` is the default when `reminder_time` is null. Sends **independent of** `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` (before start and after end included). Turn reminders off in Settings to stop DMs. Overlapping ticks are skipped while a send is in flight. No catch-up if the process was down during a user’s minute.
+ 
++**GET /api/is-admin**
++→ `200 { isAdmin: boolean }` based on authenticated Telegram id.
++
++The following Mini App admin routes require authenticated Telegram id to match `ADMIN_TELEGRAM_ID`:
++
++- **GET /api/admin/stats** → `{ participantCount }`
++- **POST /api/admin/broadcast** — JSON:
++  - `{ type: "text", message }` supports non-nested `**bold**`, `*italic*`, `_italic_`
++  - `{ type: "link", url, message? }` sends an optional caption plus previewable URL
++  - `{ type: "file", fileUrl, message? }` sends an HTTPS document URL
++- **POST /api/admin/broadcast-file** — multipart `file` (PDF, max 20 MB) and optional `message`; held in memory and forwarded as Telegram documents without disk persistence
++
++Broadcast responses are `{ success, participantCount, sentCount, failedCount }`. Sends are sequential and error-tolerant: one failed DM does not stop later recipients. A concurrent request returns `409 broadcast_in_progress`.
++
+ **GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`
+ - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
+ - Telegram profile name fields are stored from `initData.user` at registration and refreshed on later authenticated requests; existing users stay null until they open the app again
+diff --git a/package-lock.json b/package-lock.json
+index 1560678..dea6a67 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -13,12 +13,14 @@
+         "dotenv": "^17.4.2",
+         "express": "^5.2.1",
+         "grammy": "^1.45.1",
++        "multer": "^2.2.0",
+         "node-cron": "^4.6.0"
+       },
+       "devDependencies": {
+         "@types/better-sqlite3": "^9.6.0",
+         "@types/cors": "^2.8.19",
+         "@types/express": "^5.0.6",
++        "@types/multer": "^2.2.0",
+         "@types/node": "^22.10.5",
+         "tsx": "^4.23.12",
+         "typescript": "^5.9.3"
+@@ -545,6 +547,16 @@
+       "dev": true,
+       "license": "MIT"
+     },
++    "node_modules/@types/multer": {
++      "version": "2.2.0",
++      "resolved": "https://registry.npmjs.org/@types/multer/-/multer-2.2.0.tgz",
++      "integrity": "sha512-3U1troeqGV8Ntp7Q3klwf4zr23VEoqYVocYXaswm9+8z3O9UHDYAqLxjJ/h550iRADTjKdOdhhasXw6gD6kYtg==",
++      "dev": true,
++      "license": "MIT",
++      "dependencies": {
++        "@types/express": "*"
++      }
++    },
+     "node_modules/@types/node": {
+       "version": "22.20.1",
+       "resolved": "https://registry.npmjs.org/@types/node/-/node-22.20.1.tgz",
+@@ -615,6 +627,12 @@
+         "node": ">= 0.6"
+       }
+     },
++    "node_modules/append-field": {
++      "version": "1.0.0",
++      "resolved": "https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz",
++      "integrity": "sha512-klpgFSWLW1ZEs8svjfb7g4qWY0YS5imI82dTg+QahUvJ8YqAY0P10Uk8tTyh9ZGuYEZEMaeJYCF5BFuX552hsw==",
++      "license": "MIT"
++    },
+     "node_modules/better-sqlite3": {
+       "version": "13.0.3",
+       "resolved": "https://registry.npmjs.org/better-sqlite3/-/better-sqlite3-13.0.3.tgz",
+@@ -665,6 +683,23 @@
+         "url": "https://opencollective.com/express"
+       }
+     },
++    "node_modules/buffer-from": {
++      "version": "1.1.2",
++      "resolved": "https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz",
++      "integrity": "sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==",
++      "license": "MIT"
++    },
++    "node_modules/busboy": {
++      "version": "1.6.0",
++      "resolved": "https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz",
++      "integrity": "sha512-8SFQbg/0hQ9xy3UNTB0YEnsNBbWfhf7RtnzpL7TkBiTBRfrQ9Fxcnz7VJsleJpyp6rVLvXiuORqjlHi5q+PYuA==",
++      "dependencies": {
++        "streamsearch": "^1.1.0"
++      },
++      "engines": {
++        "node": ">=10.16.0"
++      }
++    },
+     "node_modules/bytes": {
+       "version": "3.1.2",
+       "resolved": "https://registry.npmjs.org/bytes/-/bytes-3.1.2.tgz",
+@@ -703,6 +738,21 @@
+         "url": "https://github.com/sponsors/ljharb"
+       }
+     },
++    "node_modules/concat-stream": {
++      "version": "2.0.0",
++      "resolved": "https://registry.npmjs.org/concat-stream/-/concat-stream-2.0.0.tgz",
++      "integrity": "sha512-MWufYdFw53ccGjCA+Ol7XJYpAlW6/prSMzuPOTRnJGcGzuhLn4Scrz7qf6o8bROZ514ltazcIFJZevcfbo0x7A==",
++      "engines": [
++        "node >= 6.0"
++      ],
++      "license": "MIT",
++      "dependencies": {
++        "buffer-from": "^1.0.0",
++        "inherits": "^2.0.3",
++        "readable-stream": "^3.0.2",
++        "typedarray": "^0.0.6"
++      }
++    },
+     "node_modules/content-disposition": {
+       "version": "1.1.0",
+       "resolved": "https://registry.npmjs.org/content-disposition/-/content-disposition-1.1.0.tgz",
+@@ -1239,6 +1289,68 @@
+       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
+       "license": "MIT"
+     },
++    "node_modules/multer": {
++      "version": "2.2.0",
++      "resolved": "https://registry.npmjs.org/multer/-/multer-2.2.0.tgz",
++      "integrity": "sha512-6rdyFg2kLrMh9Jee7/BMPuV9lEAd7lLW2YUpF9/YxR7njyoUwwQ0ZPh3TaIY50Sw6vlyD2HW3wGOkTS4P79xrQ==",
++      "license": "MIT",
++      "dependencies": {
++        "append-field": "^1.0.0",
++        "busboy": "^1.6.0",
++        "concat-stream": "^2.0.0",
++        "type-is": "^1.6.18"
++      },
++      "engines": {
++        "node": ">= 10.16.0"
++      },
++      "funding": {
++        "type": "opencollective",
++        "url": "https://opencollective.com/express"
++      }
++    },
++    "node_modules/multer/node_modules/media-typer": {
++      "version": "0.3.0",
++      "resolved": "https://registry.npmjs.org/media-typer/-/media-typer-0.3.0.tgz",
++      "integrity": "sha512-dq+qelQ9akHpcOl/gUVRTxVIOkAJ1wR3QAvb4RsVjS8oVoFjDGTc679wJYmUmknUF5HwMLOgb5O+a3KxfWapPQ==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
++    "node_modules/multer/node_modules/mime-db": {
++      "version": "1.52.0",
++      "resolved": "https://registry.npmjs.org/mime-db/-/mime-db-1.52.0.tgz",
++      "integrity": "sha512-sPU4uV7dYlvtWJxwwxHD0PuihVNiE7TyAbQ5SWxDCB9mUYvOgroQOwYQQOKPJ8CIbE+1ETVlOoK1UC2nU3gYvg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
++    "node_modules/multer/node_modules/mime-types": {
++      "version": "2.1.35",
++      "resolved": "https://registry.npmjs.org/mime-types/-/mime-types-2.1.35.tgz",
++      "integrity": "sha512-ZDY+bPm5zTTF+YpCrAU9nK0UgICYPT0QtT1NZWFv4s++TNkcgVaT0g6+4R2uI4MjQjzysHB1zxuWL50hzaeXiw==",
++      "license": "MIT",
++      "dependencies": {
++        "mime-db": "1.52.0"
++      },
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
++    "node_modules/multer/node_modules/type-is": {
++      "version": "1.6.18",
++      "resolved": "https://registry.npmjs.org/type-is/-/type-is-1.6.18.tgz",
++      "integrity": "sha512-TkRKr9sUTxEH8MdfuCSP7VizJyzRNMjj2J2do2Jr3Kym598JVdEksuzPQCnlFPW4ky9Q+iA+ma9BGm06XQBy8g==",
++      "license": "MIT",
++      "dependencies": {
++        "media-typer": "0.3.0",
++        "mime-types": "~2.1.24"
++      },
++      "engines": {
++        "node": ">= 0.6"
++      }
++    },
+     "node_modules/negotiator": {
+       "version": "1.0.0",
+       "resolved": "https://registry.npmjs.org/negotiator/-/negotiator-1.0.0.tgz",
+@@ -1404,6 +1516,20 @@
+         "node": ">= 0.10"
+       }
+     },
++    "node_modules/readable-stream": {
++      "version": "3.6.2",
++      "resolved": "https://registry.npmjs.org/readable-stream/-/readable-stream-3.6.2.tgz",
++      "integrity": "sha512-9u/sniCrY3D5WdsERHzHE4G2YCXqoG5FTHUiCC4SIbr6XcLZBY05ya9EKjYek9O5xOAwjGq+1JdGBAS7Q9ScoA==",
++      "license": "MIT",
++      "dependencies": {
++        "inherits": "^2.0.3",
++        "string_decoder": "^1.1.1",
++        "util-deprecate": "^1.0.1"
++      },
++      "engines": {
++        "node": ">= 6"
++      }
++    },
+     "node_modules/router": {
+       "version": "2.2.0",
+       "resolved": "https://registry.npmjs.org/router/-/router-2.2.0.tgz",
+@@ -1420,6 +1546,26 @@
+         "node": ">= 18"
+       }
+     },
++    "node_modules/safe-buffer": {
++      "version": "5.2.1",
++      "resolved": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
++      "integrity": "sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==",
++      "funding": [
++        {
++          "type": "github",
++          "url": "https://github.com/sponsors/feross"
++        },
++        {
++          "type": "patreon",
++          "url": "https://www.patreon.com/feross"
++        },
++        {
++          "type": "consulting",
++          "url": "https://feross.org/support"
++        }
++      ],
++      "license": "MIT"
++    },
+     "node_modules/safer-buffer": {
+       "version": "2.1.2",
+       "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+@@ -1558,6 +1704,23 @@
+         "node": ">= 0.8"
+       }
+     },
++    "node_modules/streamsearch": {
++      "version": "1.1.0",
++      "resolved": "https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz",
++      "integrity": "sha512-Mcc5wHehp9aXz1ax6bZUyY5afg9u2rv5cqQI3mRrYkGC8rW2hM02jWuwjtL++LS5qinSyhj2QfLyNsuc+VsExg==",
++      "engines": {
++        "node": ">=10.0.0"
++      }
++    },
++    "node_modules/string_decoder": {
++      "version": "1.3.0",
++      "resolved": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz",
++      "integrity": "sha512-hkRX8U1WjJFd8LsDJ2yQ/wWWxaopEsABU1XfkM8A+j0+85JAGppt16cr1Whg6KIbb4okU6Mql6BOj+uup/wKeA==",
++      "license": "MIT",
++      "dependencies": {
++        "safe-buffer": "~5.2.0"
++      }
++    },
+     "node_modules/toidentifier": {
+       "version": "1.0.1",
+       "resolved": "https://registry.npmjs.org/toidentifier/-/toidentifier-1.0.1.tgz",
+@@ -1623,6 +1786,12 @@
+         "url": "https://opencollective.com/express"
+       }
+     },
++    "node_modules/typedarray": {
++      "version": "0.0.6",
++      "resolved": "https://registry.npmjs.org/typedarray/-/typedarray-0.0.6.tgz",
++      "integrity": "sha512-/aCDEGatGvZ2BIk+HmLf4ifCJFwvKFNb9/JeZPMulfgFracn9QFcAf5GO8B/mweUjSoblS5In0cWhqpfs/5PQA==",
++      "license": "MIT"
++    },
+     "node_modules/typescript": {
+       "version": "5.9.3",
+       "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz",
+@@ -1653,6 +1822,12 @@
+         "node": ">= 0.8"
+       }
+     },
++    "node_modules/util-deprecate": {
++      "version": "1.0.2",
++      "resolved": "https://registry.npmjs.org/util-deprecate/-/util-deprecate-1.0.2.tgz",
++      "integrity": "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==",
++      "license": "MIT"
++    },
+     "node_modules/vary": {
+       "version": "1.1.2",
+       "resolved": "https://registry.npmjs.org/vary/-/vary-1.1.2.tgz",
+diff --git a/package.json b/package.json
+index 0686bb4..0e9f646 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
+     "start": "node dist/index.js",
+     "typecheck": "tsc --noEmit",
+-    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts",
++    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/api/adminBroadcast.test.ts",
+     "backup": "bash scripts/backup-db.sh"
+   },
+   "dependencies": {
+@@ -19,12 +19,14 @@
+     "dotenv": "^17.4.2",
+     "express": "^5.2.1",
+     "grammy": "^1.45.1",
++    "multer": "^2.2.0",
+     "node-cron": "^4.6.0"
+   },
+   "devDependencies": {
+     "@types/better-sqlite3": "^9.6.0",
+     "@types/cors": "^2.8.19",
+     "@types/express": "^5.0.6",
++    "@types/multer": "^2.2.0",
+     "@types/node": "^22.10.5",
+     "tsx": "^4.23.12",
+     "typescript": "^5.9.3"
+diff --git a/src/api/adminAuth.ts b/src/api/adminAuth.ts
+new file mode 100644
+index 0000000..e8ae914
+--- /dev/null
++++ b/src/api/adminAuth.ts
+@@ -0,0 +1,15 @@
++import type { NextFunction, Request, Response } from "express";
++import { config } from "../config.js";
++
++export function isAdminTelegramId(telegramId: number): boolean {
++  return config.adminTelegramId !== null && telegramId === config.adminTelegramId;
++}
++
++/** Must run after telegramAuth has populated req.telegramId. */
++export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
++  if (!isAdminTelegramId(req.telegramId)) {
++    res.status(403).json({ success: false, error: "not_admin" });
++    return;
++  }
++  next();
++}
+diff --git a/src/api/adminBroadcast.test.ts b/src/api/adminBroadcast.test.ts
+new file mode 100644
+index 0000000..b708cc2
+--- /dev/null
++++ b/src/api/adminBroadcast.test.ts
+@@ -0,0 +1,153 @@
++import assert from "node:assert/strict";
++import { describe, it } from "node:test";
++import type { Request, Response } from "express";
++import { InputFile, type Bot } from "grammy";
++import type { MyContext } from "../context.js";
++import type { User } from "../types.js";
++
++process.env.BOT_TOKEN ??= "test-token";
++process.env.CHALLENGE_START_DATE ??= "2026-08-01";
++process.env.CHALLENGE_END_DATE ??= "2026-09-01";
++process.env.DB_PATH ??= ":memory:";
++process.env.ADMIN_TELEGRAM_ID ??= "1225110756";
++
++const { parseAdminTelegramId } = await import("../config.js");
++const { isAdminTelegramId, requireAdmin } = await import("./adminAuth.js");
++const {
++  adminMarkdownToTelegramHtml,
++  validHttpUrl,
++} = await import("./broadcastFormatting.js");
++const { broadcastUsers } = await import("./broadcastService.js");
++const {
++  createPdfSender,
++  hasPdfSignature,
++} = await import("./routes/broadcastFile.js");
++
++function user(id: number): User {
++  return {
++    id,
++    telegram_id: id,
++    nickname: `user-${id}`,
++    goal: 100,
++    reminder_enabled: 1,
++    reminder_time: null,
++    telegram_username: null,
++    telegram_first_name: null,
++    telegram_last_name: null,
++    created_at: "2026-08-01 00:00:00",
++  };
++}
++
++describe("admin Telegram authorization", () => {
++  it("parses only positive safe integer ids", () => {
++    assert.equal(parseAdminTelegramId("1225110756"), 1225110756);
++    assert.equal(parseAdminTelegramId(""), null);
++    assert.equal(parseAdminTelegramId("-1"), null);
++    assert.equal(parseAdminTelegramId("abc"), null);
++  });
++
++  it("matches only the configured Telegram id", () => {
++    assert.equal(isAdminTelegramId(1225110756), true);
++    assert.equal(isAdminTelegramId(7171181415), false);
++  });
++
++  it("returns 403 for a non-admin", () => {
++    let status = 200;
++    let body: unknown;
++    let nextCalled = false;
++    const res = {
++      status(code: number) {
++        status = code;
++        return this;
++      },
++      json(value: unknown) {
++        body = value;
++        return this;
++      },
++    } as unknown as Response;
++
++    requireAdmin(
++      { telegramId: 7171181415 } as Request,
++      res,
++      () => {
++        nextCalled = true;
++      }
++    );
++
++    assert.equal(status, 403);
++    assert.deepEqual(body, { success: false, error: "not_admin" });
++    assert.equal(nextCalled, false);
++  });
++});
++
++describe("admin message formatting", () => {
++  it("escapes raw HTML and converts bold/italic subset", () => {
++    assert.equal(
++      adminMarkdownToTelegramHtml("<b>raw</b> **bold** *italic* _also_"),
++      "&lt;b&gt;raw&lt;/b&gt; <b>bold</b> <i>italic</i> <i>also</i>"
++    );
++  });
++
++  it("accepts HTTP links and requires HTTPS for remote files", () => {
++    assert.equal(validHttpUrl("https://youtu.be/example"), true);
++    assert.equal(validHttpUrl("http://example.com"), true);
++    assert.equal(validHttpUrl("http://example.com/file.pdf", true), false);
++    assert.equal(validHttpUrl("https://example.com/file.pdf", true), true);
++    assert.equal(validHttpUrl("javascript:alert(1)"), false);
++  });
++});
++
++describe("error-tolerant broadcast loop", () => {
++  it("continues after one recipient fails and reports counts", async () => {
++    const attempted: number[] = [];
++    const previousError = console.error;
++    console.error = () => {};
++    try {
++      const result = await broadcastUsers(
++        [user(1), user(2), user(3)],
++        async (recipient) => {
++          attempted.push(recipient.telegram_id);
++          if (recipient.telegram_id === 2) throw new Error("blocked");
++        }
++      );
++      assert.deepEqual(attempted, [1, 2, 3]);
++      assert.deepEqual(result, {
++        participantCount: 3,
++        sentCount: 2,
++        failedCount: 1,
++      });
++    } finally {
++      console.error = previousError;
++    }
++  });
++});
++
++describe("PDF broadcast", () => {
++  it("validates PDF magic bytes", () => {
++    assert.equal(hasPdfSignature(Buffer.from("%PDF-1.7\n")), true);
++    assert.equal(hasPdfSignature(Buffer.from("not a pdf")), false);
++  });
++
++  it("uploads once then reuses Telegram file_id", async () => {
++    const documents: unknown[] = [];
++    const bot = {
++      api: {
++        async sendDocument(_chatId: number, document: unknown) {
++          documents.push(document);
++          return { document: { file_id: "telegram-file-id" } };
++        },
++      },
++    } as unknown as Bot<MyContext>;
++
++    const send = createPdfSender(
++      bot,
++      Buffer.from("%PDF-1.7\ncontent"),
++      "book.pdf"
++    );
++    await send(user(1));
++    await send(user(2));
++
++    assert.equal(documents[0] instanceof InputFile, true);
++    assert.equal(documents[1], "telegram-file-id");
++  });
++});
+diff --git a/src/api/broadcastFormatting.ts b/src/api/broadcastFormatting.ts
+new file mode 100644
+index 0000000..23333e6
+--- /dev/null
++++ b/src/api/broadcastFormatting.ts
+@@ -0,0 +1,47 @@
++const TELEGRAM_MESSAGE_MAX = 4096;
++const TELEGRAM_CAPTION_MAX = 1024;
++
++export function escapeHtml(value: string): string {
++  return value
++    .replace(/&/g, "&amp;")
++    .replace(/</g, "&lt;")
++    .replace(/>/g, "&gt;");
++}
++
++/**
++ * Deliberately small Markdown subset for admin posts. Raw HTML is escaped;
++ * non-nested **bold**, *italic*, and _italic_ are converted to Telegram HTML.
++ */
++export function adminMarkdownToTelegramHtml(markdown: string): string {
++  return escapeHtml(markdown)
++    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
++    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<i>$2</i>")
++    .replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, "$1<i>$2</i>");
++}
++
++export function validHttpUrl(value: string, httpsOnly = false): boolean {
++  try {
++    const url = new URL(value);
++    if (url.username || url.password) return false;
++    return httpsOnly
++      ? url.protocol === "https:"
++      : url.protocol === "http:" || url.protocol === "https:";
++  } catch {
++    return false;
++  }
++}
++
++export function validMessage(value: unknown): value is string {
++  return (
++    typeof value === "string" &&
++    value.trim().length > 0 &&
++    value.length <= TELEGRAM_MESSAGE_MAX
++  );
++}
++
++export function validOptionalCaption(value: unknown): value is string | undefined {
++  return (
++    value === undefined ||
++    (typeof value === "string" && value.length <= TELEGRAM_CAPTION_MAX)
++  );
++}
+diff --git a/src/api/broadcastService.ts b/src/api/broadcastService.ts
+new file mode 100644
+index 0000000..b07f6f0
+--- /dev/null
++++ b/src/api/broadcastService.ts
+@@ -0,0 +1,55 @@
++import { getAllUsers } from "../db/repository.js";
++import type { User } from "../types.js";
++
++export interface BroadcastResult {
++  participantCount: number;
++  sentCount: number;
++  failedCount: number;
++}
++
++export class BroadcastInProgressError extends Error {
++  constructor() {
++    super("broadcast_in_progress");
++  }
++}
++
++let broadcastInProgress = false;
++
++/**
++ * Send sequentially to every registered participant. A per-user failure is
++ * logged and counted without aborting the remainder of the broadcast.
++ */
++export async function broadcastUsers(
++  users: User[],
++  send: (user: User) => Promise<void>
++): Promise<BroadcastResult> {
++  let sentCount = 0;
++  let failedCount = 0;
++  for (const user of users) {
++    try {
++      await send(user);
++      sentCount += 1;
++    } catch (err) {
++      failedCount += 1;
++      console.error(
++        `Broadcast failed for user ${user.telegram_id} (${user.nickname}):`,
++        err
++      );
++    }
++  }
++  return { participantCount: users.length, sentCount, failedCount };
++}
++
++export async function broadcastToAll(
++  send: (user: User) => Promise<void>
++): Promise<BroadcastResult> {
++  if (broadcastInProgress) throw new BroadcastInProgressError();
++  broadcastInProgress = true;
++
++  const users = getAllUsers();
++  try {
++    return await broadcastUsers(users, send);
++  } finally {
++    broadcastInProgress = false;
++  }
++}
+diff --git a/src/api/routes/adminStatus.ts b/src/api/routes/adminStatus.ts
+new file mode 100644
+index 0000000..35bc748
+--- /dev/null
++++ b/src/api/routes/adminStatus.ts
+@@ -0,0 +1,11 @@
++import type { Request, Response } from "express";
++import { getParticipantCount } from "../../db/repository.js";
++import { isAdminTelegramId } from "../adminAuth.js";
++
++export function isAdminRoute(req: Request, res: Response): void {
++  res.json({ isAdmin: isAdminTelegramId(req.telegramId) });
++}
++
++export function adminStatsRoute(_req: Request, res: Response): void {
++  res.json({ participantCount: getParticipantCount() });
++}
+diff --git a/src/api/routes/broadcast.ts b/src/api/routes/broadcast.ts
+new file mode 100644
+index 0000000..5d0b877
+--- /dev/null
++++ b/src/api/routes/broadcast.ts
+@@ -0,0 +1,98 @@
++import type { Request, Response } from "express";
++import type { Bot } from "grammy";
++import type { MyContext } from "../../context.js";
++import {
++  adminMarkdownToTelegramHtml,
++  validHttpUrl,
++  validMessage,
++  validOptionalCaption,
++} from "../broadcastFormatting.js";
++import {
++  broadcastToAll,
++  BroadcastInProgressError,
++} from "../broadcastService.js";
++
++interface BroadcastBody {
++  type?: unknown;
++  message?: unknown;
++  url?: unknown;
++  fileUrl?: unknown;
++}
++
++function invalid(res: Response, error: string): void {
++  res.status(400).json({ success: false, error });
++}
++
++export function createBroadcastRoute(bot: Bot<MyContext>) {
++  return async (req: Request, res: Response): Promise<void> => {
++    const body = req.body as BroadcastBody | undefined;
++    if (
++      !body ||
++      typeof body.type !== "string" ||
++      !["text", "link", "file"].includes(body.type)
++    ) {
++      invalid(res, "invalid_broadcast_type");
++      return;
++    }
++
++    try {
++      if (body.type === "text") {
++        if (!validMessage(body.message)) {
++          invalid(res, "invalid_message");
++          return;
++        }
++        const html = adminMarkdownToTelegramHtml(body.message.trim());
++        const result = await broadcastToAll(async (user) => {
++          await bot.api.sendMessage(user.telegram_id, html, {
++            parse_mode: "HTML",
++          });
++        });
++        res.json({ success: true, ...result });
++        return;
++      }
++
++      if (body.type === "link") {
++        if (
++          typeof body.url !== "string" ||
++          !validHttpUrl(body.url) ||
++          !validOptionalCaption(body.message)
++        ) {
++          invalid(res, "invalid_link");
++          return;
++        }
++        const caption =
++          typeof body.message === "string" ? body.message.trim() : undefined;
++        const text = caption ? `${caption}\n\n${body.url}` : body.url;
++        const result = await broadcastToAll(async (user) => {
++          await bot.api.sendMessage(user.telegram_id, text);
++        });
++        res.json({ success: true, ...result });
++        return;
++      }
++
++      if (
++        typeof body.fileUrl !== "string" ||
++        !validHttpUrl(body.fileUrl, true) ||
++        !validOptionalCaption(body.message)
++      ) {
++        invalid(res, "invalid_file_url");
++        return;
++      }
++      const caption =
++        typeof body.message === "string" ? body.message.trim() || undefined : undefined;
++      const fileUrl = body.fileUrl;
++      const result = await broadcastToAll(async (user) => {
++        await bot.api.sendDocument(user.telegram_id, fileUrl, {
++          caption,
++        });
++      });
++      res.json({ success: true, ...result });
++    } catch (err) {
++      if (err instanceof BroadcastInProgressError) {
++        res.status(409).json({ success: false, error: "broadcast_in_progress" });
++        return;
++      }
++      throw err;
++    }
++  };
++}
+diff --git a/src/api/routes/broadcastFile.ts b/src/api/routes/broadcastFile.ts
+new file mode 100644
+index 0000000..9ce46a9
+--- /dev/null
++++ b/src/api/routes/broadcastFile.ts
+@@ -0,0 +1,96 @@
++import { basename } from "node:path";
++import type { NextFunction, Request, Response } from "express";
++import { InputFile, type Bot } from "grammy";
++import multer from "multer";
++import type { MyContext } from "../../context.js";
++import type { User } from "../../types.js";
++import { validOptionalCaption } from "../broadcastFormatting.js";
++import {
++  broadcastToAll,
++  BroadcastInProgressError,
++} from "../broadcastService.js";
++
++export const MAX_PDF_BYTES = 20 * 1024 * 1024;
++
++const upload = multer({
++  storage: multer.memoryStorage(),
++  limits: { fileSize: MAX_PDF_BYTES, files: 1 },
++  fileFilter: (_req, file, callback) => {
++    const pdfName = file.originalname.toLowerCase().endsWith(".pdf");
++    const pdfMime = file.mimetype === "application/pdf";
++    callback(null, pdfName && pdfMime);
++  },
++}).single("file");
++
++export function hasPdfSignature(buffer: Buffer): boolean {
++  return buffer.length >= 5 && buffer.subarray(0, 5).toString("ascii") === "%PDF-";
++}
++
++export function adminPdfUpload(
++  req: Request,
++  res: Response,
++  next: NextFunction
++): void {
++  upload(req, res, (err: unknown) => {
++    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
++      res.status(413).json({ success: false, error: "file_too_large" });
++      return;
++    }
++    if (err) {
++      res.status(400).json({ success: false, error: "invalid_file" });
++      return;
++    }
++    next();
++  });
++}
++
++function safeFilename(original: string): string {
++  const cleaned = basename(original).replace(/[^\w.\- ()]/g, "_");
++  return cleaned || "document.pdf";
++}
++
++export function createPdfSender(
++  bot: Bot<MyContext>,
++  buffer: Buffer,
++  filename: string,
++  caption?: string
++): (user: User) => Promise<void> {
++  let telegramFileId: string | undefined;
++  return async (user: User): Promise<void> => {
++    const document = telegramFileId ?? new InputFile(buffer, filename);
++    const sent = await bot.api.sendDocument(user.telegram_id, document, {
++      caption,
++    });
++    telegramFileId ??= sent.document?.file_id;
++  };
++}
++
++export function createBroadcastFileRoute(bot: Bot<MyContext>) {
++  return async (req: Request, res: Response): Promise<void> => {
++    const file = req.file;
++    if (!file || !hasPdfSignature(file.buffer)) {
++      res.status(400).json({ success: false, error: "invalid_pdf" });
++      return;
++    }
++    if (!validOptionalCaption(req.body?.message)) {
++      res.status(400).json({ success: false, error: "invalid_caption" });
++      return;
++    }
++
++    const caption = req.body?.message?.trim() || undefined;
++    const filename = safeFilename(file.originalname);
++
++    try {
++      const result = await broadcastToAll(
++        createPdfSender(bot, file.buffer, filename, caption)
++      );
++      res.json({ success: true, ...result });
++    } catch (err) {
++      if (err instanceof BroadcastInProgressError) {
++        res.status(409).json({ success: false, error: "broadcast_in_progress" });
++        return;
++      }
++      throw err;
++    }
++  };
++}
+diff --git a/src/api/server.ts b/src/api/server.ts
+index d8c817f..2e8c087 100644
+--- a/src/api/server.ts
++++ b/src/api/server.ts
+@@ -1,6 +1,9 @@
+ import express, { type NextFunction, type Request, type Response } from "express";
+ import cors from "cors";
++import type { Bot } from "grammy";
+ import { config } from "../config.js";
++import type { MyContext } from "../context.js";
++import { requireAdmin } from "./adminAuth.js";
+ import { telegramAuth } from "./authMiddleware.js";
+ import { registerRoute } from "./routes/register.js";
+ import { logRoute } from "./routes/log.js";
+@@ -10,8 +13,14 @@ import { exportRoute } from "./routes/export.js";
+ import { resetRoute } from "./routes/reset.js";
+ import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
+ import { putDayOverrideRoute } from "./routes/dayOverride.js";
++import { adminStatsRoute, isAdminRoute } from "./routes/adminStatus.js";
++import { createBroadcastRoute } from "./routes/broadcast.js";
++import {
++  adminPdfUpload,
++  createBroadcastFileRoute,
++} from "./routes/broadcastFile.js";
+ 
+-export function createApiServer() {
++export function createApiServer(bot: Bot<MyContext>) {
+   const app = express();
+ 
+   const origin = config.corsOrigin === "*" ? "*" : config.corsOrigin.split(",").map((o) => o.trim());
+@@ -32,6 +41,21 @@ export function createApiServer() {
+   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
+   app.get("/api/profile", telegramAuth, getProfileRoute);
+   app.patch("/api/profile", telegramAuth, patchProfileRoute);
++  app.get("/api/is-admin", telegramAuth, isAdminRoute);
++  app.get("/api/admin/stats", telegramAuth, requireAdmin, adminStatsRoute);
++  app.post(
++    "/api/admin/broadcast",
++    telegramAuth,
++    requireAdmin,
++    createBroadcastRoute(bot)
++  );
++  app.post(
++    "/api/admin/broadcast-file",
++    telegramAuth,
++    requireAdmin,
++    adminPdfUpload,
++    createBroadcastFileRoute(bot)
++  );
+ 
+   app.use((_req: Request, res: Response) => {
+     res.status(404).json({ success: false, error: "not_found" });
+diff --git a/src/config.ts b/src/config.ts
+index e43cd55..23af524 100644
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -51,6 +51,14 @@ export function isValidReminderTime(value: string): boolean {
+   }
+ }
+ 
++/** Parse an optional positive Telegram user ID. Invalid values fail closed. */
++export function parseAdminTelegramId(value: string | undefined): number | null {
++  if (!value) return null;
++  if (!/^\d+$/.test(value)) return null;
++  const parsed = Number(value);
++  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
++}
++
+ const challengeStartDate = parseDateParts("CHALLENGE_START_DATE", required("CHALLENGE_START_DATE"));
+ const challengeEndDate = parseDateParts("CHALLENGE_END_DATE", required("CHALLENGE_END_DATE"));
+ 
+@@ -91,6 +99,11 @@ const miniAppUrlIsPlaceholder =
+   miniAppUrl.includes("REPLACE_WITH_VERCEL_URL") ||
+   miniAppUrl.includes("example.com");
+ 
++const adminTelegramId = parseAdminTelegramId(process.env.ADMIN_TELEGRAM_ID);
++if (process.env.ADMIN_TELEGRAM_ID && adminTelegramId === null) {
++  console.warn("ADMIN_TELEGRAM_ID is invalid; Mini App admin access is disabled.");
++}
++
+ export const config = {
+   botToken: required("BOT_TOKEN"),
+   challengeStartDate,
+@@ -111,4 +124,6 @@ export const config = {
+   initDataMaxAgeSeconds: Number(process.env.INIT_DATA_MAX_AGE_SECONDS) || 86_400,
+   /** Optional secret for GET /api/admin/export. Empty = endpoint returns 503. */
+   adminExportSecret: process.env.ADMIN_EXPORT_SECRET ?? "",
++  /** Telegram user allowed to access Mini App broadcast administration. */
++  adminTelegramId,
+ };
+diff --git a/src/db/repository.ts b/src/db/repository.ts
+index 8e2fe49..bce002b 100644
+--- a/src/db/repository.ts
++++ b/src/db/repository.ts
+@@ -165,6 +165,11 @@ export function getAllUsers(): User[] {
+   return db.prepare("SELECT * FROM users").all() as User[];
+ }
+ 
++export function getParticipantCount(): number {
++  const row = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
++  return row.count;
++}
++
+ /** Users who opted into daily reminders. */
+ export function getUsersWithRemindersEnabled(): User[] {
+   return db
+diff --git a/src/index.ts b/src/index.ts
+index 0b62038..258177e 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -22,7 +22,7 @@ if (config.miniAppUrlIsPlaceholder) {
+   }
+ }
+ 
+-createApiServer().listen(config.port, () => {
++createApiServer(bot).listen(config.port, () => {
+   console.log(`API server listening on port ${config.port}`);
+ });
+ 
+-- 
+2.43.0
+
