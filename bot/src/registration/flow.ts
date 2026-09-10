@@ -1,11 +1,5 @@
 import { InlineKeyboard, Keyboard } from "grammy";
-import {
-  formatReminderHhMm,
-  isValidReminderTime,
-  MAX_GOAL,
-  parseReminderTime,
-  config,
-} from "../config.js";
+import { formatReminderHhMm, isValidReminderTime, parseReminderTime, config } from "../config.js";
 import { nicknameMatchesRealName, parseRealName } from "../api/realName.js";
 import {
   createUser,
@@ -37,21 +31,15 @@ export function promptTextForStep(step: RegistrationStep): string {
       return "Assalamu alaikum! Let's get you set up.\n\nWhat's your full name? (private — only admins see this for prizes)";
     case "nickname":
       return "Choose a nickname for the leaderboard (1–50 characters).\nIt must be different from your full name.";
-    case "goal":
-      return "What's your daily salawat goal? (positive whole number)";
     case "reminder_opt_in":
-      return "Want a daily salawat reminder?";
+      return "Want a daily reminder to log your habits?";
     case "reminder_time":
       return "What time should we remind you? Reply with HH:mm (24h), e.g. 20:00";
-    case "fasting_opt_in":
-      return "Want Sunday/Wednesday fasting reminders?";
-    case "fasting_time":
-      return "What time for fasting reminders? Reply with HH:mm (24h), e.g. 20:00";
   }
 }
 
 function usesYesNoKeyboard(step: RegistrationStep): boolean {
-  return step === "reminder_opt_in" || step === "fasting_opt_in";
+  return step === "reminder_opt_in";
 }
 
 export async function promptCurrentStep(
@@ -82,23 +70,20 @@ function profileFromContext(ctx: MyContext): TelegramProfile {
 
 async function finalizeRegistration(ctx: MyContext, pending: PendingRegistration): Promise<void> {
   const telegramId = pending.telegram_id;
-  if (!pending.real_name || !pending.nickname || pending.goal === null) {
+  if (!pending.real_name || !pending.nickname) {
     throw new Error(`Incomplete pending registration for ${telegramId}`);
   }
-  if (pending.reminder_enabled === null || pending.fasting_reminder_enabled === null) {
-    throw new Error(`Incomplete reminder answers for ${telegramId}`);
+  if (pending.reminder_enabled === null) {
+    throw new Error(`Incomplete reminder answer for ${telegramId}`);
   }
 
   const reminderEnabled = pending.reminder_enabled === 1;
-  const fastingEnabled = pending.fasting_reminder_enabled === 1;
 
-  createUser(telegramId, pending.nickname, pending.goal, profileFromContext(ctx), pending.real_name, {
+  createUser(telegramId, pending.nickname, profileFromContext(ctx), pending.real_name, {
     reminderEnabled,
-    reminderTime: reminderEnabled ? pending.reminder_time : null,
-    fastingReminderEnabled: fastingEnabled,
-    fastingReminderTime: fastingEnabled
-      ? (pending.fasting_reminder_time ?? "20:00")
-      : "20:00",
+    // reminderTime is a non-nullable column (default '20:00'); this placeholder
+    // is inert whenever reminderEnabled is false.
+    reminderTime: reminderEnabled ? (pending.reminder_time ?? "20:00") : "20:00",
   });
 
   deletePendingRegistration(telegramId);
@@ -171,24 +156,6 @@ export async function handleRegistrationAnswer(
       }
       const next = updatePendingRegistration(telegramId, {
         nickname: trimmed,
-        step: "goal",
-      });
-      await promptCurrentStep(ctx, next);
-      return;
-    }
-
-    case "goal": {
-      const goal = Number(trimmed);
-      if (!Number.isInteger(goal) || goal <= 0 || goal > MAX_GOAL) {
-        await promptCurrentStep(
-          ctx,
-          pending,
-          `Please enter a positive whole number (max ${MAX_GOAL.toLocaleString()}).`
-        );
-        return;
-      }
-      const next = updatePendingRegistration(telegramId, {
-        goal,
         step: "reminder_opt_in",
       });
       await promptCurrentStep(ctx, next);
@@ -212,9 +179,8 @@ export async function handleRegistrationAnswer(
       const next = updatePendingRegistration(telegramId, {
         reminder_enabled: 0,
         reminder_time: null,
-        step: "fasting_opt_in",
       });
-      await promptCurrentStep(ctx, next);
+      await finalizeRegistration(ctx, next);
       return;
     }
 
@@ -230,46 +196,6 @@ export async function handleRegistrationAnswer(
       const normalized = formatReminderHhMm(parseReminderTime(trimmed));
       const next = updatePendingRegistration(telegramId, {
         reminder_time: normalized,
-        step: "fasting_opt_in",
-      });
-      await promptCurrentStep(ctx, next);
-      return;
-    }
-
-    case "fasting_opt_in": {
-      const answer = parseYesNo(trimmed);
-      if (answer === null) {
-        await promptCurrentStep(ctx, pending, "Please reply Yes or No.");
-        return;
-      }
-      if (answer) {
-        const next = updatePendingRegistration(telegramId, {
-          fasting_reminder_enabled: 1,
-          step: "fasting_time",
-        });
-        await promptCurrentStep(ctx, next);
-        return;
-      }
-      const next = updatePendingRegistration(telegramId, {
-        fasting_reminder_enabled: 0,
-        fasting_reminder_time: "20:00",
-      });
-      await finalizeRegistration(ctx, next);
-      return;
-    }
-
-    case "fasting_time": {
-      if (!isValidReminderTime(trimmed)) {
-        await promptCurrentStep(
-          ctx,
-          pending,
-          "That time isn't valid. Use HH:mm (24h), e.g. 20:00"
-        );
-        return;
-      }
-      const normalized = formatReminderHhMm(parseReminderTime(trimmed));
-      const next = updatePendingRegistration(telegramId, {
-        fasting_reminder_time: normalized,
       });
       await finalizeRegistration(ctx, next);
       return;

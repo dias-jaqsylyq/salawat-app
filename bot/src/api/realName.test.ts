@@ -76,7 +76,7 @@ function callLeaderboard(telegramId: number) {
 
 function callAdminLeaderboard() {
   const result = capture();
-  adminLeaderboardRoute({ query: { period: "all" } } as unknown as Request, result.res);
+  adminLeaderboardRoute({} as unknown as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -87,11 +87,11 @@ function assertNoRealNameKeys(value: unknown): void {
 }
 
 it("requires a valid real name that differs from nickname", () => {
-  const blocked = callRegister(850000001, { nickname: "Ali", goal: 100, realName: "Ali Nurlanov" });
+  const blocked = callRegister(850000001, { nickname: "Ali", realName: "Ali Nurlanov" });
   assert.equal(blocked.status, 403);
   assert.deepEqual(blocked.body, { success: false, error: "register_via_bot" });
 
-  createUser(850000005, "Ali", 100, telegramProfile(850000005), "Ali Nurlanov");
+  createUser(850000005, "Ali", telegramProfile(850000005), "Ali Nurlanov");
   const stored = getUserByTelegramId(850000005);
   assert.equal(stored?.real_name, "Ali Nurlanov");
 
@@ -104,7 +104,7 @@ it("requires a valid real name that differs from nickname", () => {
 
 it("flags legacy users and lets PATCH set a real name without leaking it", () => {
   const telegramId = 850000010;
-  createUser(telegramId, "LegacyNick", 100, telegramProfile(telegramId), null);
+  createUser(telegramId, "LegacyNick", telegramProfile(telegramId), null);
   assert.equal(getUserByTelegramId(telegramId)?.real_name, null);
 
   const before = callProgress(telegramId);
@@ -139,7 +139,7 @@ it("flags legacy users and lets PATCH set a real name without leaking it", () =>
 });
 
 it("keeps real names off public leaderboard and on admin results/CSV", () => {
-  createUser(850000020, "PublicNick", 50, telegramProfile(850000020), "Private Person");
+  createUser(850000020, "PublicNick", telegramProfile(850000020), "Private Person");
 
   const publicBoard = callLeaderboard(850000020);
   assert.equal(publicBoard.status, 200);
@@ -155,7 +155,7 @@ it("keeps real names off public leaderboard and on admin results/CSV", () => {
   const row = adminBoard.body.leaderboard.find((entry: { nickname: string }) => entry.nickname === "PublicNick");
   assert.equal(row.realName, "Private Person");
 
-  const csv = buildExportCsv("all");
+  const csv = buildExportCsv();
   assert.match(csv, /^rank,nickname,real_name,/);
   assert.match(csv, /,PublicNick,Private Person,/);
 
@@ -165,5 +165,5 @@ it("keeps real names off public leaderboard and on admin results/CSV", () => {
     (entry: { nickname: string }) => entry.nickname === "PublicNick"
   );
   assert.equal(unnamed.realName, null);
-  assert.match(buildExportCsv("all"), /,PublicNick,,/);
+  assert.match(buildExportCsv(), /,PublicNick,,/);
 });
