@@ -49,7 +49,8 @@ describe("pending_registrations", () => {
   it("resumes the same step and preserves answered fields", () => {
     const telegramId = 910000001;
     const created = ensurePendingRegistration(telegramId);
-    assert.equal(created.step, "real_name");
+    // Signup now opens on the admin-or-participant question (PRD §2).
+    assert.equal(created.step, "role");
 
     updatePendingRegistration(telegramId, {
       real_name: "Ali Nurlanov",

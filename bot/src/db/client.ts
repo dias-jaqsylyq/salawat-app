@@ -120,6 +120,59 @@ export function resetForMultiRoom(): boolean {
   return true;
 }
 
+/**
+ * Columns added to already-multi-room databases after the initial multi-room
+ * schema shipped. resetForMultiRoom() only fires on a *pre*-multi-room file, so
+ * a DB created by the first multi-room deploy needs these added in place —
+ * additively, never by dropping anything, since by now a room may hold real
+ * data. Each entry is the exact column definition from schema.sql.
+ *
+ * Idempotent: a column already present is skipped, so this is a no-op on a
+ * fresh DB (schema.sql creates them) and on an already-migrated one.
+ */
+const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
+  // Registration collects a fasting-reminder opt-in alongside the daily one
+  // (PRD §2); the cron that acts on it lands later.
+  {
+    table: "users",
+    column: "fasting_reminder_enabled",
+    definition: "INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    table: "users",
+    column: "fasting_reminder_time",
+    definition: "TEXT NOT NULL DEFAULT '20:00'",
+  },
+  // The admin-vs-participant registration branch (PRD §2) parks its answers in
+  // pending_registrations until finalize.
+  { table: "pending_registrations", column: "role", definition: "TEXT" },
+  { table: "pending_registrations", column: "room_name", definition: "TEXT" },
+  { table: "pending_registrations", column: "categories_enabled", definition: "INTEGER" },
+  { table: "pending_registrations", column: "room_id", definition: "INTEGER" },
+  { table: "pending_registrations", column: "fasting_reminder_enabled", definition: "INTEGER" },
+  { table: "pending_registrations", column: "fasting_reminder_time", definition: "TEXT" },
+];
+
+/**
+ * Add any missing column from ADDED_COLUMNS. Returns the ones actually added.
+ *
+ * ALTER TABLE ADD COLUMN cannot express the CHECK constraint schema.sql puts on
+ * pending_registrations.role — SQLite has no ADD CONSTRAINT. A migrated DB
+ * therefore enforces the admin/participant pairing in the application layer
+ * only, which is where the registration flow validates it anyway; a fresh DB
+ * gets the CHECK from schema.sql.
+ */
+export function addMissingColumns(): string[] {
+  const added: string[] = [];
+  for (const { table, column, definition } of ADDED_COLUMNS) {
+    if (!tableExists(table)) continue;
+    if (columnNames(table).includes(column)) continue;
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    added.push(`${table}.${column}`);
+  }
+  return added;
+}
+
 try {
   resetForMultiRoom();
 } catch (err) {
@@ -137,3 +190,10 @@ try {
 
 // No-op right after a reset; creates the tables on a brand-new DB file.
 db.exec(schema);
+
+// Then top up any column that a DB created by an earlier multi-room deploy is
+// missing. Runs after db.exec(schema) so the tables it patches always exist.
+const addedColumns = addMissingColumns();
+if (addedColumns.length > 0) {
+  console.warn(`db migration: added missing columns: ${addedColumns.join(", ")}`);
+}

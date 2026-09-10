@@ -4,7 +4,7 @@ Backend for a month-long salawat counting challenge among a friend group during 
 
 ## Architecture
 One Node process runs two things side by side:
-- A grammY bot using long polling (`/start` registration conversation, `/help`, daily + fasting reminder schedulers, sets the chat menu button to open the Mini App).
+- A grammY bot using long polling (`/start` registration conversation, `/help`, the daily reminder scheduler, sets the chat menu button to open the Mini App).
 - An Express HTTP API (`/api/*`) that the Mini App frontend calls directly, authenticated via Telegram `initData` — no separate login system.
 
 Both share the same SQLite database (`db/repository.ts`) and challenge-date logic (`utils/challenge.ts`).
@@ -18,11 +18,14 @@ One bot serves many independent **rooms** (competitions). Rooms are isolated by 
   - Format (`utils/roomPassword.ts`): 6–64 characters from `A-Za-z0-9_-`, either admin-typed or generated. The charset is Telegram's start-payload limit — anything outside it would produce a share deep link that silently drops the password.
   - `owner_user_id` is historical record-keeping ("who created this") and grants no power — co-admins are fully equal and may demote the owner.
 - **`room_admins`** (`room_id`, `user_id`) — the room's owner and every co-admin, flat and equal. This **replaces the old global `admins` table**. Status is per room, so it is dropped the moment a user leaves for another room, and last-admin protection is a `COUNT(*)` over one `room_id`.
-- **`users`** — gain `role` (`admin` | `participant`, chosen once at registration) and `current_room_id` (at most one room at a time; `NULL` between leaving one room and joining the next, which also pauses their reminders). Nickname uniqueness is **per room**, not global.
+- **`users`** — gain `role` (`admin` | `participant`, chosen once at registration) and `current_room_id` (at most one room at a time; `NULL` between leaving one room and joining the next, which also pauses their reminders). Nickname uniqueness is **per room**, not global. `fasting_reminder_enabled` / `fasting_reminder_time` hold the separate, opt-in (default off) Sunday/Wednesday fasting nudge collected at signup — the cron that acts on them is not built yet.
+- **`pending_registrations`** — holds a signup in progress, including which branch it is on: `role`, plus `room_name`/`categories_enabled` (admin branch) or `room_id` (participant branch, resolved from the password up front).
 - **`habits`** — gain `room_id` and `category` (`IQ` / `SQ` / `PQ` / `EQ`, nullable). A habit in a room with `categories_enabled = 1` always carries a category and one in a room without categories never does — enforced in the application layer, not by the column. Turning categories off **keeps** the stored values; turning them back on asks the admin to re-confirm rather than silently reusing them.
 - **`habit_logs`** — gain `room_id`, denormalized from the habit at write time, so leaderboard/progress queries are a filter rather than a join and a member's old logs stay attached to the room they were earned in after they move.
 
 **Destructive migration.** On boot, a DB file from before the multi-room pivot (detected by a leftover `admins` table or a `habits` table with no `room_id`) is **wiped**: every app table is dropped and recreated from `schema.sql`, with no data migrated. A timestamped snapshot of the old file is written next to it as `salawat.pre-multiroom-<utc>.db` first. The check is idempotent and never touches an already-migrated database.
+
+**Additive migration.** A database created by an earlier multi-room deploy is then topped up in place: any column in `client.ts`'s `ADDED_COLUMNS` that the file is missing is added with `ALTER TABLE ADD COLUMN`. Nothing is dropped and no row is rewritten, so this is safe on a volume that already holds live rooms. Also idempotent, and a no-op on a fresh DB (which gets the columns from `schema.sql`). SQLite cannot add a `CHECK` constraint to an existing table, so on a migrated file the `pending_registrations.role` check lives only in the application layer.
 
 ## Requirements
 - Node.js 20+
@@ -209,8 +212,25 @@ npm run backup   # writes data/backups/salawat-<UTC timestamp>.db via sqlite3 .b
 Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on the server. Expose `PORT` over HTTPS (e.g. via nginx + Let's Encrypt) so the Mini App can reach `/api/*`. Point `DB_PATH` at a durable disk path and run `npm run backup` on a cron.
 
 ## Bot commands
-- `/start` — if already registered: menu-button nudge. If not: starts or **resumes** the signup conversation (full name → nickname → daily goal → salawat reminder opt-in/time → fasting reminder opt-in/time). Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
+- `/start` — if already registered: a menu-button nudge naming the room they're in (so no separate "which room am I in" command is needed). If not: starts or **resumes** the signup conversation. Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
+- `/start <password>` — a room's invite deep link (`t.me/<bot>?start=<password>`). For a **new** user with a valid password it skips the role and password questions and opens signup straight into that room. For an **already-registered** user the payload is ignored entirely — it never offers a room switch. An unknown password falls back to the normal first question.
 - `/help` — registered users get the menu nudge; unregistered users with a pending signup are re-prompted at their current step; others are told to send `/start`.
+
+### Registration flow (`registration/flow.ts`)
+
+The first question is **Admin (create a room)** or **Participant (join with a password)** — chosen once, not re-selectable later. From there the conversation forks and rejoins on a shared reminder tail:
+
+| Branch | Steps |
+|---|---|
+| Admin | `role` → `real_name` → `room_name` → `categories` (yes/no) → `nickname` → *shared tail* |
+| Participant | `role` → `room_password` → `real_name` → `nickname` → *shared tail* |
+| Shared tail | `reminder_opt_in` → [`reminder_time`] → `fasting_opt_in` → [`fasting_time`] |
+
+- **Admin finish**: the account, the room, its `room_admins` owner row and the owner's `current_room_id` are written in **one transaction** (`createAdminWithRoom`) — a partial failure can never leave an admin with no room. The room password is generated (`generateRoomPassword`), retried on the `rooms.password` UNIQUE collision, then shown to the admin with an explicit "share this with your participants" message and the matching `t.me/<bot>?start=<password>` invite link. The bot's username comes from the running bot, not configuration.
+- **Participant join**: the password is format-checked (`isValidRoomPassword`) before any DB lookup, then resolved with `getRoomByPassword` — **case-sensitive**, and a wrong password and a malformed one get the identical message, so nothing signals which guesses were close. Guesses are rate-limited per Telegram user (`ROOM_JOIN_RATE_LIMIT_PER_MINUTE`, via the same `allowRequest` helper the API uses).
+- **Nickname uniqueness is per room**: a participant is checked against their resolved room only, so the same nickname can exist in two rooms. An admin's room does not exist yet at that step and is created empty, so nothing can collide there.
+- The **fasting reminder** is a separate opt-in from the daily one (default off). Signup stores it; the scheduler that sends it is not implemented yet.
+- All prompts and confirmations are sent as **HTML** with free text (nicknames, room names) escaped — Telegram's legacy Markdown parser 400s on an unmatched `_`/`*`, which would silently drop a confirmation for a nickname like `ali_2005`.
 
 `/deleteuser` and `/makeadmin` are **removed**. Both were global, single-tenant user management; they are superseded by room-scoped kick and co-admin promote/demote. No global user-management command remains.
 

@@ -52,6 +52,13 @@ export interface User {
   /** HH:mm in TIMEZONE; default '20:00'. */
   reminder_time: string;
   /**
+   * SQLite 0/1; default 0. Opt-in, separate from the daily reminder: a
+   * Sunday/Wednesday nudge about the coming fast (PRD §2).
+   */
+  fasting_reminder_enabled: number;
+  /** HH:mm in TIMEZONE; default '20:00'. */
+  fasting_reminder_time: string;
+  /**
    * IANA name detected client-side in the Mini App. NULL until the user opens
    * it at least once — reminders fall back to config.timezone until then.
    */
@@ -81,18 +88,49 @@ export interface TelegramProfile {
 export interface CreateUserReminders {
   reminderEnabled: boolean;
   reminderTime: string;
+  /** Defaults to off when omitted — the fasting nudge is strictly opt-in. */
+  fastingReminderEnabled?: boolean;
+  fastingReminderTime?: string;
 }
 
-/** Steps for the persistent /start registration conversation. */
-export type RegistrationStep = "real_name" | "nickname" | "reminder_opt_in" | "reminder_time";
+/**
+ * Steps for the persistent /start registration conversation (PRD §2).
+ *
+ * `role` is the new first question; from there the conversation forks —
+ *   admin:       real_name -> room_name -> categories -> nickname -> ...
+ *   participant: room_password -> real_name -> nickname -> ...
+ * — and rejoins on a shared reminder tail:
+ *   reminder_opt_in -> [reminder_time] -> fasting_opt_in -> [fasting_time].
+ */
+export type RegistrationStep =
+  | "role"
+  | "room_password"
+  | "real_name"
+  | "room_name"
+  | "categories"
+  | "nickname"
+  | "reminder_opt_in"
+  | "reminder_time"
+  | "fasting_opt_in"
+  | "fasting_time";
 
 export interface PendingRegistration {
   telegram_id: number;
   step: RegistrationStep;
+  /** NULL only before the admin-or-participant question is answered. */
+  role: UserRole | null;
   real_name: string | null;
   nickname: string | null;
+  /** Admin branch only: the room created at finalize. */
+  room_name: string | null;
+  /** Admin branch only: SQLite 0/1 answer to the categories question. */
+  categories_enabled: number | null;
+  /** Participant branch only: the room their password resolved to. */
+  room_id: number | null;
   reminder_enabled: number | null;
   reminder_time: string | null;
+  fasting_reminder_enabled: number | null;
+  fasting_reminder_time: string | null;
   updated_at: string;
 }
 
