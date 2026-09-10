@@ -102,7 +102,7 @@ it("requires a valid real name that differs from nickname", () => {
   assertNoRealNameKeys(progress.body);
 });
 
-it("flags legacy users and lets PATCH set a real name without leaking it", () => {
+it("flags legacy users and lets them set a real name via their own profile", () => {
   const telegramId = 850000010;
   createUser(telegramId, "LegacyNick", telegramProfile(telegramId), null);
   assert.equal(getUserByTelegramId(telegramId)?.real_name, null);
@@ -114,7 +114,7 @@ it("flags legacy users and lets PATCH set a real name without leaking it", () =>
 
   const profile = callProfileGet(telegramId);
   assert.equal(profile.status, 200);
-  assertNoRealNameKeys(profile.body);
+  assert.equal(profile.body.realName, null);
 
   const matchCurrent = callProfilePatch(telegramId, { realName: "legacynick" });
   assert.equal(matchCurrent.status, 400);
@@ -123,7 +123,7 @@ it("flags legacy users and lets PATCH set a real name without leaking it", () =>
   const saved = callProfilePatch(telegramId, { realName: " Legacy Person " });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.nickname, "LegacyNick");
-  assertNoRealNameKeys(saved.body);
+  assert.equal(saved.body.realName, "Legacy Person");
   assert.equal(getUserByTelegramId(telegramId)?.real_name, "Legacy Person");
 
   const after = callProgress(telegramId);
@@ -136,6 +136,19 @@ it("flags legacy users and lets PATCH set a real name without leaking it", () =>
     success: false,
     error: "nickname_matches_real_name",
   });
+});
+
+it("only ever returns the caller's own real name from GET /api/profile", () => {
+  const ownerTelegramId = 850000030;
+  const otherTelegramId = 850000031;
+  createUser(ownerTelegramId, "Owner", telegramProfile(ownerTelegramId), "Owner Real Name");
+  createUser(otherTelegramId, "Other", telegramProfile(otherTelegramId), null);
+
+  const ownerProfile = callProfileGet(ownerTelegramId);
+  assert.equal(ownerProfile.body.realName, "Owner Real Name");
+
+  const otherProfile = callProfileGet(otherTelegramId);
+  assert.equal(otherProfile.body.realName, null);
 });
 
 it("keeps real names off public leaderboard and on admin results/CSV", () => {
