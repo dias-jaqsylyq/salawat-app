@@ -74,4 +74,41 @@ describe("dropStaleUserColumns", () => {
       assert.deepEqual(dropStaleUserColumns(), []);
     }
   );
+
+  it("rolls back cleanly if one of the five DROP COLUMNs fails partway through", () => {
+    // Re-add all five stale columns (the previous test already dropped them
+    // from this shared :memory: db).
+    db.exec(`
+      ALTER TABLE users ADD COLUMN goal INTEGER NOT NULL DEFAULT 500;
+      ALTER TABLE users ADD COLUMN fasting_reminder_enabled INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN fasting_reminder_time TEXT NOT NULL DEFAULT '20:00';
+      ALTER TABLE users ADD COLUMN retained_jamaat_total INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE users ADD COLUMN progress_started_at TEXT;
+    `);
+    // Force the 3rd column in STALE_USER_COLUMNS order (fasting_reminder_time)
+    // to fail its DROP: SQLite refuses to drop a column that's still indexed.
+    // This is a real SQLite-enforced failure, not a mock.
+    db.exec("CREATE INDEX idx_client_test_frt ON users(fasting_reminder_time)");
+
+    assert.throws(
+      () => dropStaleUserColumns(),
+      /no such column: fasting_reminder_time/,
+      "expected the real SQLite DROP COLUMN failure to propagate, not be swallowed"
+    );
+
+    // db.transaction() rolls back the whole batch on throw: the first two
+    // columns that were dropped before the failure must be back too — never
+    // a half-migrated table.
+    for (const name of [
+      "goal",
+      "fasting_reminder_enabled",
+      "fasting_reminder_time",
+      "retained_jamaat_total",
+      "progress_started_at",
+    ]) {
+      assert.ok(columnNames().includes(name), `expected ${name} to survive the rollback`);
+    }
+
+    db.exec("DROP INDEX idx_client_test_frt");
+  });
 });

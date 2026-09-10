@@ -67,7 +67,21 @@ export function dropStaleUserColumns(): string[] {
   return stale;
 }
 
-dropStaleUserColumns();
+try {
+  dropStaleUserColumns();
+} catch (err) {
+  // db.transaction() rolls back automatically on throw, so a partial failure
+  // (e.g. one of these columns unexpectedly still has an index/constraint on
+  // some older file) leaves the users table exactly as it was — never half
+  // migrated. Log loudly and keep booting rather than crash-looping: the bot
+  // still serves everything else even if registration keeps hitting the
+  // pre-existing NOT NULL error until this is investigated.
+  console.error(
+    `db migration: dropStaleUserColumns failed, users table left unchanged (transaction rolled back): ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+    err
+  );
+}
 
 /** Bootstrap/recovery admin from env — never the sole live auth source after seed. */
 if (config.adminTelegramId !== null) {
