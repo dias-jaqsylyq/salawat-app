@@ -30,10 +30,17 @@ function effectiveReminderTime(user: User): string {
   return formatReminderHhMm(config.reminderTime);
 }
 
-/** Names of this user's active habits with no log row for `todayKey` yet. */
-function unloggedHabitNames(userId: number, todayKey: string): string[] {
-  const activeHabits = listHabits({ activeOnly: true });
-  const todayLogs = getUserHabitLogsForDate(userId, todayKey);
+/**
+ * Names of this user's active habits with no log row for `todayKey` yet —
+ * only habits of the room they are currently in. getUsersWithRemindersEnabled
+ * never returns a roomless user, so there is always a room to scope to.
+ */
+function unloggedHabitNames(user: User, todayKey: string): string[] {
+  const activeHabits = listHabits({
+    activeOnly: true,
+    roomId: user.current_room_id ?? undefined,
+  });
+  const todayLogs = getUserHabitLogsForDate(user.id, todayKey);
   return activeHabits.filter((habit) => !todayLogs.has(habit.id)).map((habit) => habit.name);
 }
 
@@ -79,7 +86,7 @@ export async function sendDueReminders(
       }
       if (effectiveReminderTime(user) !== nowHhMm) continue;
       try {
-        const text = buildReminderMessage(unloggedHabitNames(user.id, todayKey));
+        const text = buildReminderMessage(unloggedHabitNames(user, todayKey));
         await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });

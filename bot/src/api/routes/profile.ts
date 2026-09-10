@@ -83,7 +83,7 @@ export function patchProfileRoute(req: Request, res: Response) {
     }
     const trimmedNickname = body.nickname.trim();
     nickname = trimmedNickname;
-    if (isNicknameTaken(trimmedNickname, req.telegramId)) {
+    if (isNicknameTaken(trimmedNickname, { excludeTelegramId: req.telegramId })) {
       res.status(409).json({ success: false, error: "nickname_taken" });
       return;
     }

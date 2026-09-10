@@ -9,7 +9,9 @@ process.env.DB_PATH ??= ":memory:";
 
 const {
   createHabit,
+  createRoom,
   createUser,
+  setUserCurrentRoom,
   getUserByTelegramId,
   listHabits,
   updateHabit,
@@ -34,11 +36,23 @@ function mockBot(sendMessage: (chatId: number, text: string) => Promise<void>) {
 }
 
 let nextTelegramId = 870000001;
+
+/** Everyone in these tests shares one room; habits are created inside it. */
+const room = (() => {
+  const owner = createUser(nextTelegramId++, "reminder-room-owner");
+  return createRoom("Reminder room", "reminder-room-pass", owner.id);
+})();
+
 function makeUser(reminderEnabled: boolean, reminderTime = "20:00"): number {
   const telegramId = nextTelegramId++;
-  createUser(telegramId, `reminder-tester-${telegramId}`);
+  const user = createUser(telegramId, `reminder-tester-${telegramId}`);
+  setUserCurrentRoom(user.id, room.id);
   updateUserProfile(telegramId, { reminderEnabled, reminderTime });
   return telegramId;
+}
+
+function makeHabit(label: string) {
+  return createHabit(room.id, uniqueHabitName(label), "binary", 5);
 }
 
 let nextHabitSuffix = 1;
@@ -164,8 +178,8 @@ describe("sendDueReminders — message content", () => {
   it("names today's unlogged active habits and omits already-logged ones", async () => {
     const telegramId = makeUser(true, "20:00");
     const user = getUserByTelegramId(telegramId)!;
-    const unlogged = createHabit(uniqueHabitName("Unlogged habit"), "binary", 5);
-    const logged = createHabit(uniqueHabitName("Logged habit"), "binary", 5);
+    const unlogged = makeHabit("Unlogged habit");
+    const logged = makeHabit("Logged habit");
     upsertHabitLog(user.id, logged.id, 1, todayKey);
 
     let captured = "";
@@ -180,7 +194,7 @@ describe("sendDueReminders — message content", () => {
 
   it("never lists a deactivated habit as unlogged", async () => {
     const telegramId = makeUser(true, "20:00");
-    const habit = createHabit(uniqueHabitName("Retired habit"), "binary", 5);
+    const habit = makeHabit("Retired habit");
     updateHabit(habit.id, { isActive: false });
 
     let captured = "";
@@ -195,7 +209,7 @@ describe("sendDueReminders — message content", () => {
   it("sends the all-caught-up message once every active habit is logged today", async () => {
     const telegramId = makeUser(true, "20:00");
     const user = getUserByTelegramId(telegramId)!;
-    for (const habit of listHabits({ activeOnly: true })) {
+    for (const habit of listHabits({ activeOnly: true, roomId: room.id })) {
       upsertHabitLog(user.id, habit.id, 1, todayKey);
     }
 

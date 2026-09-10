@@ -6,8 +6,15 @@ process.env.BOT_TOKEN ??= "habits-route-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
-const { createHabit, createUser, getUserByTelegramId, getUserTotalPoints, updateHabit } =
-  await import("../../db/repository.js");
+const {
+  createHabit,
+  createRoom,
+  createUser,
+  getUserByTelegramId,
+  getUserTotalPoints,
+  setUserCurrentRoom,
+  updateHabit,
+} = await import("../../db/repository.js");
 const { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } = await import("./habits.js");
 
 function capture(): { res: Response; status: () => number; body: () => any } {
@@ -58,16 +65,28 @@ function callDeleteLog(
 }
 
 let nextTelegramId = 700000001;
+
+/** One shared room: every habit and every logger in this file belongs to it. */
+const room = (() => {
+  const owner = createUser(nextTelegramId++, "habits-room-owner");
+  return createRoom("Habits room", "habits-room-pass", owner.id);
+})();
+
 function makeUser(): number {
   const telegramId = nextTelegramId++;
-  createUser(telegramId, `habits-tester-${telegramId}`);
+  const user = createUser(telegramId, `habits-tester-${telegramId}`);
+  setUserCurrentRoom(user.id, room.id);
   return telegramId;
+}
+
+function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
+  return createHabit(room.id, name, type, pointsWeight);
 }
 
 describe("GET /api/habits", () => {
   it("lists only active habits", () => {
-    const active = createHabit("Read Qur'an", "quantity", 2);
-    const inactive = createHabit("Retired habit", "binary", 5);
+    const active = makeHabit("Read Qur'an", "quantity", 2);
+    const inactive = makeHabit("Retired habit", "binary", 5);
     updateHabit(inactive.id, { isActive: false });
 
     const { body } = callList();
@@ -88,7 +107,7 @@ describe("GET /api/habits", () => {
 describe("POST /api/habits/:id/log", () => {
   it("upserts a quantity habit's value for today, freezing points", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Salawat count", "quantity", 3);
+    const habit = makeHabit("Salawat count", "quantity", 3);
 
     const first = callLog(telegramId, habit.id, { value: 10 });
     assert.equal(first.status, 200);
@@ -108,7 +127,7 @@ describe("POST /api/habits/:id/log", () => {
 
   it("treats an omitted value as 1 for a binary habit", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Prayed Fajr in jamaat", "binary", 15);
+    const habit = makeHabit("Prayed Fajr in jamaat", "binary", 15);
 
     const { body } = callLog(telegramId, habit.id, {});
     assert.equal(body.value, 1);
@@ -117,7 +136,7 @@ describe("POST /api/habits/:id/log", () => {
 
   it("rejects a non-1 value for a binary habit", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Fasted today", "binary", 10);
+    const habit = makeHabit("Fasted today", "binary", 10);
 
     const { status, body } = callLog(telegramId, habit.id, { value: 5 });
     assert.equal(status, 400);
@@ -126,7 +145,7 @@ describe("POST /api/habits/:id/log", () => {
 
   it("rejects a negative or non-integer value for a quantity habit", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Pages read", "quantity", 1);
+    const habit = makeHabit("Pages read", "quantity", 1);
 
     assert.equal(callLog(telegramId, habit.id, { value: -1 }).status, 400);
     assert.equal(callLog(telegramId, habit.id, { value: 1.5 }).status, 400);
@@ -134,7 +153,7 @@ describe("POST /api/habits/:id/log", () => {
 
   it("rejects logging against a deactivated habit", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Soon retired", "binary", 5);
+    const habit = makeHabit("Soon retired", "binary", 5);
     updateHabit(habit.id, { isActive: false });
 
     const { status, body } = callLog(telegramId, habit.id, {});
@@ -150,7 +169,7 @@ describe("POST /api/habits/:id/log", () => {
   });
 
   it("403s for a telegram id with no registered user", () => {
-    const habit = createHabit("Registered users only", "binary", 5);
+    const habit = makeHabit("Registered users only", "binary", 5);
     const { status, body } = callLog(999_999_999, habit.id, {});
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");
@@ -160,7 +179,7 @@ describe("POST /api/habits/:id/log", () => {
 describe("DELETE /api/habits/:id/log", () => {
   it("removes today's binary log and its points", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Prayed Fajr in jamaat", "binary", 15);
+    const habit = makeHabit("Prayed Fajr in jamaat", "binary", 15);
     callLog(telegramId, habit.id, {});
     const user = getUserByTelegramId(telegramId)!;
     assert.equal(getUserTotalPoints(user.id), 15);
@@ -173,7 +192,7 @@ describe("DELETE /api/habits/:id/log", () => {
 
   it("removes today's quantity log and its points", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Salawat count", "quantity", 3);
+    const habit = makeHabit("Salawat count", "quantity", 3);
     callLog(telegramId, habit.id, { value: 10 });
     const user = getUserByTelegramId(telegramId)!;
     assert.equal(getUserTotalPoints(user.id), 30);
@@ -186,7 +205,7 @@ describe("DELETE /api/habits/:id/log", () => {
 
   it("is idempotent when there is no log for today", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Never logged", "binary", 5);
+    const habit = makeHabit("Never logged", "binary", 5);
 
     const { status, body } = callDeleteLog(telegramId, habit.id);
     assert.equal(status, 200);
@@ -195,7 +214,7 @@ describe("DELETE /api/habits/:id/log", () => {
 
   it("succeeds even against a deactivated habit", () => {
     const telegramId = makeUser();
-    const habit = createHabit("Soon retired", "binary", 5);
+    const habit = makeHabit("Soon retired", "binary", 5);
     callLog(telegramId, habit.id, {});
     updateHabit(habit.id, { isActive: false });
 
@@ -212,7 +231,7 @@ describe("DELETE /api/habits/:id/log", () => {
   });
 
   it("403s for a telegram id with no registered user", () => {
-    const habit = createHabit("Registered users only", "binary", 5);
+    const habit = makeHabit("Registered users only", "binary", 5);
     const { status, body } = callDeleteLog(999_999_999, habit.id);
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");

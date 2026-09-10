@@ -6,10 +6,29 @@ process.env.BOT_TOKEN ??= "admin-habits-route-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
-const { createHabit } = await import("../../db/repository.js");
+const { createHabit, createRoom, createUser, listHabits, setUserCurrentRoom } = await import(
+  "../../db/repository.js"
+);
 const { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } = await import(
   "./adminHabits.js"
 );
+
+/** An admin with a room of their own — POST resolves the new habit's room from them. */
+const ADMIN_TELEGRAM_ID = 940000001;
+const room = (() => {
+  const owner = createUser(ADMIN_TELEGRAM_ID, "admin-habits-owner");
+  const created = createRoom("Admin habits room", "admin-habits-pass", owner.id);
+  setUserCurrentRoom(owner.id, created.id);
+  return created;
+})();
+
+/** An admin-shaped caller who is not in any room yet. */
+const ROOMLESS_TELEGRAM_ID = 940000002;
+createUser(ROOMLESS_TELEGRAM_ID, "admin-habits-roomless");
+
+function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
+  return createHabit(room.id, name, type, pointsWeight);
+}
 
 function capture(): { res: Response; status: () => number; body: () => any } {
   let status = 200;
@@ -33,9 +52,12 @@ function callList(): { status: number; body: any } {
   return { status: result.status(), body: result.body() };
 }
 
-function callCreate(body: unknown): { status: number; body: any } {
+function callCreate(
+  body: unknown,
+  telegramId: number = ADMIN_TELEGRAM_ID
+): { status: number; body: any } {
   const result = capture();
-  createHabitRoute({ body } as unknown as Request, result.res);
+  createHabitRoute({ body, telegramId } as unknown as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -47,8 +69,8 @@ function callPatch(id: number | string, body: unknown): { status: number; body: 
 
 describe("GET /api/admin/habits", () => {
   it("lists all habits, including inactive ones", () => {
-    const active = createHabit("Admin-visible active", "quantity", 1);
-    const inactive = createHabit("Admin-visible inactive", "binary", 1);
+    const active = makeHabit("Admin-visible active", "quantity", 1);
+    const inactive = makeHabit("Admin-visible inactive", "binary", 1);
     callPatch(inactive.id, { isActive: false });
 
     const { body } = callList();
@@ -66,6 +88,24 @@ describe("POST /api/admin/habits", () => {
     assert.equal(body.type, "quantity");
     assert.equal(body.pointsWeight, 4);
     assert.equal(body.isActive, true);
+  });
+
+  it("puts the habit in the calling admin's room", () => {
+    const { status, body } = callCreate({ name: "Room-scoped", type: "binary", pointsWeight: 1 });
+    assert.equal(status, 201);
+    assert.deepEqual(
+      listHabits({ roomId: room.id }).map((h) => h.id).includes(body.id),
+      true
+    );
+  });
+
+  it("400s when the caller is not in a room", () => {
+    const { status, body } = callCreate(
+      { name: "Homeless habit", type: "binary", pointsWeight: 1 },
+      ROOMLESS_TELEGRAM_ID
+    );
+    assert.equal(status, 400);
+    assert.equal(body.error, "no_room");
   });
 
   it("rejects an invalid type", () => {
@@ -89,7 +129,7 @@ describe("POST /api/admin/habits", () => {
 
 describe("PATCH /api/admin/habits/:id", () => {
   it("is non-destructive: deactivating and reactivating a habit round-trips", () => {
-    const habit = createHabit("Toggle me", "binary", 5);
+    const habit = makeHabit("Toggle me", "binary", 5);
 
     const off = callPatch(habit.id, { isActive: false });
     assert.equal(off.body.isActive, false);
@@ -99,7 +139,7 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("edits name and pointsWeight without touching the other", () => {
-    const habit = createHabit("Original name", "quantity", 2);
+    const habit = makeHabit("Original name", "quantity", 2);
 
     const renamed = callPatch(habit.id, { name: "Renamed" });
     assert.equal(renamed.body.name, "Renamed");
@@ -117,7 +157,7 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("400s when the body has none of the recognized fields", () => {
-    const habit = createHabit("Empty patch", "binary", 1);
+    const habit = makeHabit("Empty patch", "binary", 1);
     const { status, body } = callPatch(habit.id, {});
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_body");

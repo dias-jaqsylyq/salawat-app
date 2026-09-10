@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "../config.js";
@@ -20,73 +20,120 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
 const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
-db.exec(schema);
-
-/** Idempotent column adds for DBs created before a given schema revision. */
-function ensureUserColumn(name: string, ddl: string) {
-  const cols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === name)) {
-    db.exec(`ALTER TABLE users ADD COLUMN ${name} ${ddl}`);
-  }
-}
-
-ensureUserColumn("reminder_enabled", "INTEGER NOT NULL DEFAULT 1");
-ensureUserColumn("reminder_time", "TEXT NOT NULL DEFAULT '20:00'");
-ensureUserColumn("telegram_username", "TEXT");
-ensureUserColumn("telegram_first_name", "TEXT");
-ensureUserColumn("telegram_last_name", "TEXT");
-ensureUserColumn("real_name", "TEXT");
-ensureUserColumn("timezone", "TEXT");
-
-const STALE_USER_COLUMNS = [
-  "goal",
-  "fasting_reminder_enabled",
-  "fasting_reminder_time",
-  "retained_jamaat_total",
-  "progress_started_at",
-];
 
 /**
- * One-time structural fixup for DBs created before the habits/habit_logs pivot
- * (PIVOT_PLAN §1). ensureUserColumn above only ADDs columns, never drops the
- * old ones — so a pre-pivot `users.goal INTEGER NOT NULL` (no DEFAULT) survives
- * on an existing DB file and breaks every createUser() INSERT that doesn't
- * supply it (every registration). Idempotent: no-ops once these columns are gone.
+ * Every table the app owns, in an order that is safe to drop even with
+ * foreign keys enforced (children before parents).
+ * `admins`/`pending_admin_actions` are pre-multi-room tables that no longer
+ * exist in schema.sql — listed so an old DB file loses them too.
  */
-export function dropStaleUserColumns(): string[] {
-  const cols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
-  const stale = STALE_USER_COLUMNS.filter((name) => cols.some((c) => c.name === name));
-  if (stale.length === 0) return stale;
+const APP_TABLES = [
+  "habit_logs",
+  "habits",
+  "room_admins",
+  "pending_registrations",
+  "pending_admin_actions",
+  "admins",
+  "users",
+  "rooms",
+];
 
-  const migrate = db.transaction(() => {
-    for (const name of stale) {
-      db.exec(`ALTER TABLE users DROP COLUMN ${name}`);
-    }
-  });
-  migrate();
-  console.log(`db migration: dropped stale pre-pivot users column(s): ${stale.join(", ")}`);
-  return stale;
+function tableExists(name: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS hit FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(name) as { hit: number } | undefined;
+  return row !== undefined;
+}
+
+function columnNames(table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(
+    (c) => c.name
+  );
+}
+
+/**
+ * True for a DB file created before the multi-room pivot. Two independent
+ * markers, either of which is conclusive: the retired global `admins` table,
+ * and a `habits` table with no `room_id`. Both are gone after a reset, so this
+ * goes false permanently once the reset has run.
+ */
+function needsMultiRoomReset(): boolean {
+  if (tableExists("admins")) return true;
+  if (tableExists("habits") && !columnNames("habits").includes("room_id")) return true;
+  return false;
+}
+
+/**
+ * Snapshot the DB file next to itself before the destructive reset. Returns the
+ * path, or null when there is nothing on disk to copy (`:memory:` in tests, or
+ * a first boot). Deliberately NOT the rolling scheduler backup path — that one
+ * gets overwritten every few hours, and this snapshot is the only copy of the
+ * pre-pivot data.
+ */
+function snapshotBeforeReset(): string | null {
+  if (config.dbPath === ":memory:" || !existsSync(config.dbPath)) return null;
+  // Fold the WAL into the main file first, so the plain file copy is complete.
+  db.pragma("wal_checkpoint(TRUNCATE)");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dest = join(dirname(config.dbPath), `salawat.pre-multiroom-${stamp}.db`);
+  copyFileSync(config.dbPath, dest);
+  return dest;
+}
+
+/**
+ * One-time destructive migration to the multi-room schema (MULTI ROOM PRD §1, §5).
+ *
+ * There is no data migration: rooms/users/habits/logs from the single-tenant era
+ * are wiped, not folded into a "default room" — confirmed as disposable test data.
+ * Every table is dropped and recreated from schema.sql, so nothing survives with
+ * a stale shape (the failure mode behind the earlier stale-column incident).
+ *
+ * Idempotent: no-ops on a DB that is already multi-room, and on a fresh one.
+ * Returns true when it actually wiped something.
+ */
+export function resetForMultiRoom(): boolean {
+  if (!needsMultiRoomReset()) return false;
+
+  const snapshot = snapshotBeforeReset();
+  console.warn(
+    `db migration: pre-multi-room DB detected — DROPPING all app tables and recreating them ` +
+      `from schema.sql (no data is migrated). ` +
+      (snapshot ? `Snapshot of the old data: ${snapshot}` : `No file snapshot taken (${config.dbPath}).`)
+  );
+
+  // PRAGMA foreign_keys is a no-op inside a transaction, so it has to be
+  // toggled out here — DROP order is child-first anyway, this is belt and braces.
+  db.pragma("foreign_keys = OFF");
+  try {
+    const wipe = db.transaction(() => {
+      for (const table of APP_TABLES) {
+        db.exec(`DROP TABLE IF EXISTS ${table}`);
+      }
+      db.exec(schema);
+    });
+    wipe();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
+
+  console.warn("db migration: multi-room schema created, all previous data wiped.");
+  return true;
 }
 
 try {
-  dropStaleUserColumns();
+  resetForMultiRoom();
 } catch (err) {
-  // db.transaction() rolls back automatically on throw, so a partial failure
-  // (e.g. one of these columns unexpectedly still has an index/constraint on
-  // some older file) leaves the users table exactly as it was — never half
-  // migrated. Log loudly and keep booting rather than crash-looping: the bot
-  // still serves everything else even if registration keeps hitting the
-  // pre-existing NOT NULL error until this is investigated.
+  // Unlike the old pre-pivot column fixup, this one is fatal on purpose: the
+  // rest of the code assumes room-scoped tables, so booting on a half-migrated
+  // or still-single-tenant DB would fail every query anyway — louder here than
+  // at request time. db.transaction() has already rolled the drops back.
   console.error(
-    `db migration: dropStaleUserColumns failed, users table left unchanged (transaction rolled back): ` +
+    `db migration: resetForMultiRoom failed, database left unchanged (transaction rolled back): ` +
       `${err instanceof Error ? err.message : String(err)}`,
     err
   );
+  throw err;
 }
 
-/** Bootstrap/recovery admin from env — never the sole live auth source after seed. */
-if (config.adminTelegramId !== null) {
-  db.prepare("INSERT OR IGNORE INTO admins (telegram_id) VALUES (?)").run(
-    config.adminTelegramId
-  );
-}
+// No-op right after a reset; creates the tables on a brand-new DB file.
+db.exec(schema);

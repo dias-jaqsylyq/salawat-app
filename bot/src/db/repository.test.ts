@@ -10,6 +10,8 @@ process.env.DB_PATH ??= ":memory:";
 const {
   computePoints,
   createHabit,
+  createRoom,
+  setUserCurrentRoom,
   createUser,
   deactivateHabit,
   deleteHabitLog,
@@ -24,9 +26,21 @@ const {
 const { db } = await import("./client.js");
 
 let nextTelegramId = 600000001;
+
+/** One shared room for these unit tests — room scoping itself lives in rooms.test.ts. */
+const room = (() => {
+  const owner = createUser(nextTelegramId++, "repository-room-owner");
+  return createRoom("Repository room", "repository-room-pass", owner.id);
+})();
+
 function makeUser(): number {
   const user = createUser(nextTelegramId++, `tester-${nextTelegramId}`);
+  setUserCurrentRoom(user.id, room.id);
   return user.id;
+}
+
+function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
+  return createHabit(room.id, name, type, pointsWeight);
 }
 
 describe("computePoints", () => {
@@ -45,7 +59,7 @@ describe("computePoints", () => {
 describe("upsertHabitLog", () => {
   it("freezes points_earned for a quantity habit at write time", () => {
     const userId = makeUser();
-    const habit = createHabit("Salawat count", "quantity", 2);
+    const habit = makeHabit("Salawat count", "quantity", 2);
 
     const log = upsertHabitLog(userId, habit.id, 15, "2026-08-14");
 
@@ -56,7 +70,7 @@ describe("upsertHabitLog", () => {
 
   it("freezes flat points_earned for a binary habit", () => {
     const userId = makeUser();
-    const habit = createHabit("Fasted today", "binary", 25);
+    const habit = makeHabit("Fasted today", "binary", 25);
 
     const log = upsertHabitLog(userId, habit.id, 1, "2026-08-14");
 
@@ -65,7 +79,7 @@ describe("upsertHabitLog", () => {
 
   it("upserts on the same day: overwrites rather than accumulates", () => {
     const userId = makeUser();
-    const habit = createHabit("Quran pages", "quantity", 5);
+    const habit = makeHabit("Quran pages", "quantity", 5);
 
     upsertHabitLog(userId, habit.id, 3, "2026-08-14");
     const second = upsertHabitLog(userId, habit.id, 10, "2026-08-14");
@@ -84,7 +98,7 @@ describe("upsertHabitLog", () => {
 describe("habit weight changes are not retroactive", () => {
   it("keeps an already-logged day's points frozen after the habit's weight changes", () => {
     const userId = makeUser();
-    const habit = createHabit("Dhikr count", "quantity", 10);
+    const habit = makeHabit("Dhikr count", "quantity", 10);
 
     const day1 = upsertHabitLog(userId, habit.id, 5, "2026-08-14");
     assert.equal(day1.points_earned, 50);
@@ -105,8 +119,8 @@ describe("habit weight changes are not retroactive", () => {
 
 describe("habit CRUD", () => {
   it("creates, lists (active-only vs all), and deactivates habits", () => {
-    const active = createHabit("Prayed Fajr in jamaat", "binary", 15);
-    const toDeactivate = createHabit("Old habit", "binary", 5);
+    const active = makeHabit("Prayed Fajr in jamaat", "binary", 15);
+    const toDeactivate = makeHabit("Old habit", "binary", 5);
 
     assert.equal(getHabitById(active.id)?.is_active, 1);
 
@@ -126,7 +140,7 @@ describe("habit CRUD", () => {
 describe("getHabitStreak", () => {
   it("counts consecutive logged days and stops at a gap", () => {
     const userId = makeUser();
-    const habit = createHabit("Qiyam al-layl", "binary", 30);
+    const habit = makeHabit("Qiyam al-layl", "binary", 30);
 
     upsertHabitLog(userId, habit.id, 1, "2026-08-12");
     upsertHabitLog(userId, habit.id, 1, "2026-08-13");
@@ -141,7 +155,7 @@ describe("getHabitStreak", () => {
 describe("deleteHabitLog", () => {
   it("removes the row so the day drops out of the streak and today's totals", () => {
     const userId = makeUser();
-    const habit = createHabit("Qiyam al-layl", "binary", 30);
+    const habit = makeHabit("Qiyam al-layl", "binary", 30);
 
     upsertHabitLog(userId, habit.id, 1, "2026-08-12");
     upsertHabitLog(userId, habit.id, 1, "2026-08-13");
@@ -158,7 +172,7 @@ describe("deleteHabitLog", () => {
 
   it("is a no-op when there is no log for that day", () => {
     const userId = makeUser();
-    const habit = createHabit("Qiyam al-layl", "binary", 30);
+    const habit = makeHabit("Qiyam al-layl", "binary", 30);
 
     assert.doesNotThrow(() => deleteHabitLog(userId, habit.id, "2026-08-14"));
     assert.equal(getUserTotalPoints(userId), 0);
@@ -169,7 +183,7 @@ describe("getUserTotalPoints", () => {
   it("sums each user's own points independently", () => {
     const alice = makeUser();
     const bob = makeUser();
-    const habit = createHabit("Sadaqah given", "binary", 40);
+    const habit = makeHabit("Sadaqah given", "binary", 40);
 
     upsertHabitLog(alice, habit.id, 1, "2026-08-14");
     upsertHabitLog(bob, habit.id, 1, "2026-08-14");

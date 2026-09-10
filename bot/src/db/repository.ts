@@ -1,18 +1,19 @@
 import { db } from "./client.js";
 import { formatDateParts, parseDateKey, subtractOneCalendarDay } from "../utils/dates.js";
 import type {
-  AdminActionType,
   CreateUserReminders,
   ExportRow,
   Habit,
+  HabitCategory,
   HabitLog,
   HabitType,
   LeaderboardRow,
-  PendingAdminAction,
   PendingRegistration,
   RegistrationStep,
+  Room,
   TelegramProfile,
   User,
+  UserRole,
 } from "../types.js";
 
 export function getUserByTelegramId(telegramId: number): User | undefined {
@@ -39,88 +40,226 @@ export function getUserByTelegramUsername(username: string): User | undefined {
     .get(normalized) as User | undefined;
 }
 
-/** Case-insensitive nickname collision check (excludes an optional telegram_id). */
-export function isNicknameTaken(nickname: string, excludeTelegramId?: number): boolean {
-  const row = (
-    excludeTelegramId === undefined
-      ? db.prepare("SELECT 1 AS hit FROM users WHERE LOWER(nickname) = LOWER(?) LIMIT 1").get(nickname)
-      : db
-          .prepare(
-            "SELECT 1 AS hit FROM users WHERE LOWER(nickname) = LOWER(?) AND telegram_id != ? LIMIT 1"
-          )
-          .get(nickname, excludeTelegramId)
-  ) as { hit: number } | undefined;
+export interface NicknameScope {
+  excludeTelegramId?: number;
+  /**
+   * Restrict the collision check to one room. Nickname uniqueness is per-room,
+   * not global — the same nickname may exist in two rooms (PRD §3a). Omitted
+   * means "across all rooms", which is what the pre-multi-room callers still do
+   * until the registration flow is rewritten (build step 2).
+   */
+  roomId?: number;
+}
+
+/** Case-insensitive nickname collision check. */
+export function isNicknameTaken(nickname: string, scope: NicknameScope = {}): boolean {
+  const { excludeTelegramId, roomId } = scope;
+
+  const conditions = ["LOWER(nickname) = LOWER(?)"];
+  const params: (string | number)[] = [nickname];
+  if (excludeTelegramId !== undefined) {
+    conditions.push("telegram_id != ?");
+    params.push(excludeTelegramId);
+  }
+  if (roomId !== undefined) {
+    conditions.push("current_room_id = ?");
+    params.push(roomId);
+  }
+
+  const row = db
+    .prepare(`SELECT 1 AS hit FROM users WHERE ${conditions.join(" AND ")} LIMIT 1`)
+    .get(...params) as { hit: number } | undefined;
   return row !== undefined;
 }
 
-export function isAdmin(telegramId: number): boolean {
+/* ------------------------------------------------------------------ rooms */
+
+/**
+ * Create a room and its first admin in one transaction: the owner is inserted
+ * into room_admins alongside it, so a room never exists with zero admins
+ * (the invariant behind last-admin protection, PRD §3a).
+ *
+ * The caller must already exist as a user — users.current_room_id is set
+ * separately (setUserCurrentRoom), keeping the users <-> rooms cycle to a
+ * plain insert order rather than deferred foreign keys.
+ */
+export function createRoom(
+  name: string,
+  password: string,
+  ownerUserId: number,
+  categoriesEnabled = false
+): Room {
+  const create = db.transaction(() => {
+    const result = db
+      .prepare(
+        `INSERT INTO rooms (name, password, categories_enabled, owner_user_id)
+         VALUES (?, ?, ?, ?)`
+      )
+      .run(name, password, categoriesEnabled ? 1 : 0, ownerUserId);
+    const roomId = Number(result.lastInsertRowid);
+    db.prepare("INSERT INTO room_admins (room_id, user_id) VALUES (?, ?)").run(
+      roomId,
+      ownerUserId
+    );
+    return roomId;
+  });
+
+  const roomId = create();
+  return getRoomById(roomId) ?? (() => {
+    throw new Error(`Failed to load room just created (id ${roomId})`);
+  })();
+}
+
+export function getRoomById(id: number): Room | undefined {
+  return db.prepare("SELECT * FROM rooms WHERE id = ?").get(id) as Room | undefined;
+}
+
+/**
+ * Resolve a join password to its room. Case-sensitive on purpose — `ABC` and
+ * `abc` are different passwords (PRD §3a) — so this is a plain `=` comparison
+ * under SQLite's default BINARY collation, never LOWER()/COLLATE NOCASE.
+ */
+export function getRoomByPassword(password: string): Room | undefined {
+  return db.prepare("SELECT * FROM rooms WHERE password = ?").get(password) as Room | undefined;
+}
+
+/**
+ * Point the room at a new password. Only blocks *future* joins — everyone who
+ * already joined keeps their membership, no re-verification (PRD §3a).
+ */
+export function updateRoomPassword(roomId: number, password: string): Room {
+  db.prepare("UPDATE rooms SET password = ? WHERE id = ?").run(password, roomId);
+  return getRoomById(roomId) ?? (() => {
+    throw new Error(`updateRoomPassword: room ${roomId} not found`);
+  })();
+}
+
+/**
+ * Flip the room's category mode. Habit categories already stored are left
+ * untouched when switching off, so nothing is lost (PRD §0).
+ */
+export function setRoomCategoriesEnabled(roomId: number, enabled: boolean): Room {
+  db.prepare("UPDATE rooms SET categories_enabled = ? WHERE id = ?").run(
+    enabled ? 1 : 0,
+    roomId
+  );
+  return getRoomById(roomId) ?? (() => {
+    throw new Error(`setRoomCategoriesEnabled: room ${roomId} not found`);
+  })();
+}
+
+/* ---------------------------------------------------- room-scoped admins */
+
+/** True when this user is an admin (owner or co-admin) of that specific room. */
+export function isRoomAdmin(userId: number, roomId: number): boolean {
   const row = db
-    .prepare("SELECT 1 AS hit FROM admins WHERE telegram_id = ? LIMIT 1")
+    .prepare("SELECT 1 AS hit FROM room_admins WHERE room_id = ? AND user_id = ? LIMIT 1")
+    .get(roomId, userId) as { hit: number } | undefined;
+  return row !== undefined;
+}
+
+/**
+ * True when this Telegram user is an admin of the room they are currently in.
+ * Admin status never carries across rooms (PRD §3a), so a user with no current
+ * room is never an admin of anything.
+ */
+export function isRoomAdminByTelegramId(telegramId: number): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS hit
+       FROM users u
+       JOIN room_admins ra ON ra.user_id = u.id AND ra.room_id = u.current_room_id
+       WHERE u.telegram_id = ?
+       LIMIT 1`
+    )
     .get(telegramId) as { hit: number } | undefined;
   return row !== undefined;
 }
 
-export function addAdmin(telegramId: number): void {
-  db.prepare("INSERT OR IGNORE INTO admins (telegram_id) VALUES (?)").run(telegramId);
-}
-
-export function removeAdmin(telegramId: number): void {
-  db.prepare("DELETE FROM admins WHERE telegram_id = ?").run(telegramId);
-}
-
-export function getPendingAdminAction(adminTelegramId: number): PendingAdminAction | undefined {
-  return db
-    .prepare("SELECT * FROM pending_admin_actions WHERE admin_telegram_id = ?")
-    .get(adminTelegramId) as PendingAdminAction | undefined;
-}
-
-export function setPendingAdminAction(
-  adminTelegramId: number,
-  action: AdminActionType,
-  targetTelegramId: number,
-  targetLabel: string
-): PendingAdminAction {
-  db.prepare(
-    `INSERT INTO pending_admin_actions (admin_telegram_id, action, target_telegram_id, target_label, created_at)
-     VALUES (?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(admin_telegram_id) DO UPDATE SET
-       action = excluded.action,
-       target_telegram_id = excluded.target_telegram_id,
-       target_label = excluded.target_label,
-       created_at = excluded.created_at`
-  ).run(adminTelegramId, action, targetTelegramId, targetLabel);
-
-  return getPendingAdminAction(adminTelegramId) ?? (() => {
-    throw new Error(`Failed to load pending admin action for ${adminTelegramId}`);
-  })();
-}
-
-export function clearPendingAdminAction(adminTelegramId: number): void {
-  db.prepare("DELETE FROM pending_admin_actions WHERE admin_telegram_id = ?").run(
-    adminTelegramId
+/** Promote a participant to co-admin of a room. Idempotent. */
+export function addRoomAdmin(roomId: number, userId: number): void {
+  db.prepare("INSERT OR IGNORE INTO room_admins (room_id, user_id) VALUES (?, ?)").run(
+    roomId,
+    userId
   );
+}
+
+/**
+ * Demote a room admin back to plain participant. Idempotent.
+ * Callers must enforce last-admin protection (PRD §3a) via countRoomAdmins —
+ * this function itself will happily empty the room, which is what makes it
+ * reusable for the kick path, where the room is being left behind anyway.
+ */
+export function removeRoomAdmin(roomId: number, userId: number): void {
+  db.prepare("DELETE FROM room_admins WHERE room_id = ? AND user_id = ?").run(roomId, userId);
+}
+
+/** User ids of every admin of a room, oldest first. */
+export function listRoomAdminUserIds(roomId: number): number[] {
+  const rows = db
+    .prepare("SELECT user_id FROM room_admins WHERE room_id = ? ORDER BY created_at ASC, user_id ASC")
+    .all(roomId) as { user_id: number }[];
+  return rows.map((row) => row.user_id);
+}
+
+/** How many admins a room has — the input to last-admin protection (PRD §3a). */
+export function countRoomAdmins(roomId: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS count FROM room_admins WHERE room_id = ?")
+    .get(roomId) as { count: number };
+  return row.count;
+}
+
+/**
+ * Move a user into a room, or out of every room (roomId = null).
+ * Leaving always strips co-admin status of the room being left: it does not
+ * transfer, and a returning user comes back as a plain participant (PRD §3a).
+ * Their habit_logs are left intact — history stays queryable, and nothing needs
+ * deleting on a voluntary leave (PRD §1).
+ */
+export function setUserCurrentRoom(userId: number, roomId: number | null): void {
+  const move = db.transaction(() => {
+    const current = db.prepare("SELECT current_room_id FROM users WHERE id = ?").get(userId) as
+      | { current_room_id: number | null }
+      | undefined;
+    if (!current) {
+      throw new Error(`setUserCurrentRoom: user ${userId} not found`);
+    }
+    if (current.current_room_id !== null && current.current_room_id !== roomId) {
+      removeRoomAdmin(current.current_room_id, userId);
+    }
+    db.prepare("UPDATE users SET current_room_id = ? WHERE id = ?").run(roomId, userId);
+  });
+  move();
 }
 
 export interface DeleteUserCompletelyResult {
   userDeleted: boolean;
   habitLogsDeleted: number;
   pendingDeleted: boolean;
-  adminDeleted: boolean;
+  /** room_admins rows removed — one per room where they were owner or co-admin. */
+  roomAdminRowsDeleted: number;
 }
 
 /**
- * Full wipe for one Telegram id: habit logs, users row, pending signup, admin row.
- * After this, /start treats them as brand new.
+ * Full wipe for one Telegram id: habit logs, room-admin status, users row,
+ * pending signup. After this, /start treats them as brand new. Rooms they
+ * created survive with owner_user_id NULLed (schema.sql) — a room is never
+ * deleted as a side effect of removing a person.
  */
 export function deleteUserCompletely(telegramId: number): DeleteUserCompletelyResult {
   const wipe = db.transaction(() => {
     const user = getUserByTelegramId(telegramId);
     let habitLogsDeleted = 0;
+    let roomAdminRowsDeleted = 0;
     let userDeleted = false;
 
     if (user) {
       habitLogsDeleted = db
         .prepare("DELETE FROM habit_logs WHERE user_id = ?")
+        .run(user.id).changes;
+      roomAdminRowsDeleted = db
+        .prepare("DELETE FROM room_admins WHERE user_id = ?")
         .run(user.id).changes;
       userDeleted = db.prepare("DELETE FROM users WHERE id = ?").run(user.id).changes > 0;
     }
@@ -128,17 +267,25 @@ export function deleteUserCompletely(telegramId: number): DeleteUserCompletelyRe
     const pendingDeleted =
       db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId)
         .changes > 0;
-    const adminDeleted =
-      db.prepare("DELETE FROM admins WHERE telegram_id = ?").run(telegramId).changes > 0;
 
     return {
       userDeleted,
       habitLogsDeleted,
       pendingDeleted,
-      adminDeleted,
+      roomAdminRowsDeleted,
     };
   });
   return wipe();
+}
+
+/** Room placement chosen at registration. Omitted = plain participant, no room yet. */
+export interface CreateUserMembership {
+  role?: UserRole;
+  /**
+   * NULL for an admin who has not created their room yet (the room needs the
+   * user row to exist first) and for a participant mid-join.
+   */
+  currentRoomId?: number | null;
 }
 
 export function createUser(
@@ -150,23 +297,29 @@ export function createUser(
     telegramLastName: null,
   },
   realName: string | null = null,
-  reminders?: CreateUserReminders
+  reminders?: CreateUserReminders,
+  membership: CreateUserMembership = {}
 ): User {
   const reminderEnabled = reminders ? (reminders.reminderEnabled ? 1 : 0) : 1;
   const reminderTime = reminders?.reminderTime ?? "20:00";
+  const role: UserRole = membership.role ?? "participant";
+  const currentRoomId = membership.currentRoomId ?? null;
 
   const result = db
     .prepare(
       `INSERT INTO users (
          telegram_id, nickname,
+         role, current_room_id,
          telegram_username, telegram_first_name, telegram_last_name,
          real_name,
          reminder_enabled, reminder_time
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       telegramId,
       nickname,
+      role,
+      currentRoomId,
       profile.telegramUsername,
       profile.telegramFirstName,
       profile.telegramLastName,
@@ -261,20 +414,44 @@ export function updateTelegramProfileIfRegistered(
   );
 }
 
-export function getAllUsers(): User[] {
-  return db.prepare("SELECT * FROM users").all() as User[];
+/**
+ * Every user, or just one room's members.
+ *
+ * The room filter is optional throughout this file: passing a roomId gives the
+ * room-scoped answer the multi-room product wants, omitting it keeps the
+ * pre-multi-room global behaviour the API routes still rely on until they are
+ * re-scoped (build step 3).
+ */
+export function getAllUsers(roomId?: number): User[] {
+  if (roomId === undefined) {
+    return db.prepare("SELECT * FROM users").all() as User[];
+  }
+  return db.prepare("SELECT * FROM users WHERE current_room_id = ?").all(roomId) as User[];
 }
 
-export function getParticipantCount(): number {
-  const row = db.prepare("SELECT COUNT(*) AS count FROM users").get() as { count: number };
+export function getParticipantCount(roomId?: number): number {
+  const row = (
+    roomId === undefined
+      ? db.prepare("SELECT COUNT(*) AS count FROM users").get()
+      : db.prepare("SELECT COUNT(*) AS count FROM users WHERE current_room_id = ?").get(roomId)
+  ) as { count: number };
   return row.count;
 }
 
-/** Users who opted into daily reminders. */
-export function getUsersWithRemindersEnabled(): User[] {
+/**
+ * Users who opted into daily reminders. Anyone with no current room is skipped:
+ * reminders pause while a user is between rooms, with nothing to log against
+ * (PRD §3a).
+ */
+export function getUsersWithRemindersEnabled(roomId?: number): User[] {
+  if (roomId === undefined) {
+    return db
+      .prepare("SELECT * FROM users WHERE reminder_enabled = 1 AND current_room_id IS NOT NULL")
+      .all() as User[];
+  }
   return db
-    .prepare("SELECT * FROM users WHERE reminder_enabled = 1")
-    .all() as User[];
+    .prepare("SELECT * FROM users WHERE reminder_enabled = 1 AND current_room_id = ?")
+    .all(roomId) as User[];
 }
 
 export interface UserProfileUpdate {
@@ -310,7 +487,13 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
   })();
 }
 
-/** Delete all habit logs and users so participants must re-register. Habit definitions are untouched. */
+/**
+ * Delete all habit logs and users so participants must re-register. Habit
+ * definitions are untouched.
+ *
+ * Still global, across every room: POST /api/admin/reset is re-scoped to the
+ * caller's own room together with the rest of the API (build step 3).
+ */
 export function resetAllChallengeData(): {
   habitLogs: number;
   users: number;
@@ -340,12 +523,24 @@ export function getHabitById(id: number): Habit | undefined {
   return db.prepare("SELECT * FROM habits WHERE id = ?").get(id) as Habit | undefined;
 }
 
-export function createHabit(name: string, type: HabitType, pointsWeight: number): Habit {
+/**
+ * Create a habit inside one room. `category` must be set when the room has
+ * categories enabled and left null when it does not — that pairing is an
+ * application-layer invariant (PRD §1); the column itself only checks the value
+ * is one of IQ/SQ/PQ/EQ.
+ */
+export function createHabit(
+  roomId: number,
+  name: string,
+  type: HabitType,
+  pointsWeight: number,
+  category: HabitCategory | null = null
+): Habit {
   const result = db
     .prepare(
-      `INSERT INTO habits (name, type, points_weight) VALUES (?, ?, ?)`
+      `INSERT INTO habits (room_id, name, type, points_weight, category) VALUES (?, ?, ?, ?, ?)`
     )
-    .run(name, type, pointsWeight);
+    .run(roomId, name, type, pointsWeight, category);
   return getHabitById(Number(result.lastInsertRowid)) ?? (() => {
     throw new Error(`Failed to load habit just created (rowid ${result.lastInsertRowid})`);
   })();
@@ -353,7 +548,13 @@ export function createHabit(name: string, type: HabitType, pointsWeight: number)
 
 export function updateHabit(
   id: number,
-  patch: Partial<{ name: string; pointsWeight: number; isActive: boolean }>
+  patch: Partial<{
+    name: string;
+    pointsWeight: number;
+    isActive: boolean;
+    /** null clears the category (a room that turned categories off). */
+    category: HabitCategory | null;
+  }>
 ): Habit {
   const current = getHabitById(id);
   if (!current) {
@@ -363,25 +564,29 @@ export function updateHabit(
   const name = patch.name ?? current.name;
   const pointsWeight = patch.pointsWeight ?? current.points_weight;
   const isActive = patch.isActive !== undefined ? (patch.isActive ? 1 : 0) : current.is_active;
+  const category = patch.category !== undefined ? patch.category : current.category;
 
   db.prepare(
     `UPDATE habits
-     SET name = ?, points_weight = ?, is_active = ?, updated_at = datetime('now')
+     SET name = ?, points_weight = ?, is_active = ?, category = ?, updated_at = datetime('now')
      WHERE id = ?`
-  ).run(name, pointsWeight, isActive, id);
+  ).run(name, pointsWeight, isActive, category, id);
 
   return getHabitById(id) ?? (() => {
     throw new Error(`Failed to reload habit ${id} after update`);
   })();
 }
 
-export function listHabits(options: { activeOnly?: boolean } = {}): Habit[] {
-  if (options.activeOnly) {
-    return db
-      .prepare("SELECT * FROM habits WHERE is_active = 1 ORDER BY id ASC")
-      .all() as Habit[];
+export function listHabits(options: { activeOnly?: boolean; roomId?: number } = {}): Habit[] {
+  const conditions: string[] = [];
+  const params: number[] = [];
+  if (options.activeOnly) conditions.push("is_active = 1");
+  if (options.roomId !== undefined) {
+    conditions.push("room_id = ?");
+    params.push(options.roomId);
   }
-  return db.prepare("SELECT * FROM habits ORDER BY id ASC").all() as Habit[];
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  return db.prepare(`SELECT * FROM habits ${where} ORDER BY id ASC`).all(...params) as Habit[];
 }
 
 export function deactivateHabit(id: number): Habit {
@@ -408,13 +613,13 @@ export function upsertHabitLog(
   const pointsEarned = computePoints(habit, value);
 
   db.prepare(
-    `INSERT INTO habit_logs (user_id, habit_id, log_date, value, points_earned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
      ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
        value = excluded.value,
        points_earned = excluded.points_earned,
        updated_at = excluded.updated_at`
-  ).run(userId, habitId, logDate, value, pointsEarned);
+  ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned);
 
   return db
     .prepare(
@@ -435,10 +640,20 @@ export function deleteHabitLog(userId: number, habitId: number, logDate: string)
   ).run(userId, habitId, logDate);
 }
 
-export function getUserTotalPoints(userId: number): number {
-  const row = db
-    .prepare("SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs WHERE user_id = ?")
-    .get(userId) as { total: number };
+export function getUserTotalPoints(userId: number, roomId?: number): number {
+  const row = (
+    roomId === undefined
+      ? db
+          .prepare(
+            "SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs WHERE user_id = ?"
+          )
+          .get(userId)
+      : db
+          .prepare(
+            "SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs WHERE user_id = ? AND room_id = ?"
+          )
+          .get(userId, roomId)
+  ) as { total: number };
   return row.total;
 }
 
@@ -462,44 +677,61 @@ export function getHabitStreak(userId: number, habitId: number, asOfDate: string
 }
 
 /**
+ * Rank one room's members (or, with no roomId, everyone) by all-time points.
+ *
+ * Scoping a room filters on both sides: only its current members are listed,
+ * and only points they earned *in that room* count — a member who moved here
+ * from another room keeps their old logs (PRD §1) but does not carry the points
+ * into this leaderboard.
+ */
+function leaderboardQuery(extraColumns: string, roomId: number | undefined): unknown[] {
+  const columns = `u.id AS user_id,
+              u.telegram_id AS telegram_id,
+              u.nickname AS nickname,
+              u.real_name AS real_name,${extraColumns}
+              COALESCE(SUM(hl.points_earned), 0) AS total`;
+
+  if (roomId === undefined) {
+    return db
+      .prepare(
+        `SELECT ${columns}
+         FROM users u
+         LEFT JOIN habit_logs hl ON hl.user_id = u.id
+         GROUP BY u.id
+         ORDER BY total DESC, u.nickname ASC`
+      )
+      .all();
+  }
+  return db
+    .prepare(
+      `SELECT ${columns}
+       FROM users u
+       LEFT JOIN habit_logs hl ON hl.user_id = u.id AND hl.room_id = ?
+       WHERE u.current_room_id = ?
+       GROUP BY u.id
+       ORDER BY total DESC, u.nickname ASC`
+    )
+    .all(roomId, roomId);
+}
+
+/**
  * All-time, perpetual leaderboard: one row per user (including users with no
  * logs at all, at total 0), ranked by total points descending. No date
  * window — the tracker has no periodic resets (PIVOT_PLAN §0).
  */
-export function getLeaderboard(): LeaderboardRow[] {
-  return db
-    .prepare(
-      `SELECT u.id AS user_id,
-              u.telegram_id AS telegram_id,
-              u.nickname AS nickname,
-              u.real_name AS real_name,
-              COALESCE(SUM(hl.points_earned), 0) AS total
-       FROM users u
-       LEFT JOIN habit_logs hl ON hl.user_id = u.id
-       GROUP BY u.id
-       ORDER BY total DESC, u.nickname ASC`
-    )
-    .all() as LeaderboardRow[];
+export function getLeaderboard(roomId?: number): LeaderboardRow[] {
+  return leaderboardQuery("", roomId) as LeaderboardRow[];
 }
 
 /** Same ranking as getLeaderboard, plus raw Telegram identity fields, for the admin CSV export. */
-export function getExportRows(): ExportRow[] {
-  return db
-    .prepare(
-      `SELECT u.id AS user_id,
-              u.telegram_id AS telegram_id,
-              u.nickname AS nickname,
-              u.real_name AS real_name,
+export function getExportRows(roomId?: number): ExportRow[] {
+  return leaderboardQuery(
+    `
               u.telegram_username AS telegram_username,
               u.telegram_first_name AS telegram_first_name,
-              u.telegram_last_name AS telegram_last_name,
-              COALESCE(SUM(hl.points_earned), 0) AS total
-       FROM users u
-       LEFT JOIN habit_logs hl ON hl.user_id = u.id
-       GROUP BY u.id
-       ORDER BY total DESC, u.nickname ASC`
-    )
-    .all() as ExportRow[];
+              u.telegram_last_name AS telegram_last_name,`,
+    roomId
+  ) as ExportRow[];
 }
 
 /** This user's habit_logs rows for one TIMEZONE-local day, keyed by habit_id. */

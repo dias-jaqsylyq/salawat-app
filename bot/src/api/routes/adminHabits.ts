@@ -1,5 +1,11 @@
 import type { Request, Response } from "express";
-import { createHabit, getHabitById, listHabits, updateHabit } from "../../db/repository.js";
+import {
+  createHabit,
+  getHabitById,
+  getUserByTelegramId,
+  listHabits,
+  updateHabit,
+} from "../../db/repository.js";
 import type { HabitType } from "../../types.js";
 
 const NAME_MAX_LENGTH = 100;
@@ -33,9 +39,22 @@ export function listAdminHabitsRoute(_req: Request, res: Response): void {
   res.json(listHabits({}).map((habit) => habitResponse(habit)));
 }
 
-/** POST /api/admin/habits — create a habit. Body: {name, type, pointsWeight}. */
+/**
+ * POST /api/admin/habits — create a habit. Body: {name, type, pointsWeight}.
+ *
+ * The habit lands in the caller's own room. Room-scoping the rest of the admin
+ * routes (and taking a category when the room has categories enabled) is build
+ * step 3 — this only resolves the room the new habit belongs to, which the
+ * schema now requires.
+ */
 export function createHabitRoute(req: Request, res: Response): void {
   const body = req.body ?? {};
+
+  const roomId = getUserByTelegramId(req.telegramId)?.current_room_id ?? null;
+  if (roomId === null) {
+    res.status(400).json({ success: false, error: "no_room" });
+    return;
+  }
 
   if (typeof body.name !== "string" || body.name.trim().length === 0 || body.name.trim().length > NAME_MAX_LENGTH) {
     res.status(400).json({ success: false, error: "invalid_name" });
@@ -53,7 +72,7 @@ export function createHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const habit = createHabit(body.name.trim(), type as HabitType, body.pointsWeight);
+  const habit = createHabit(roomId, body.name.trim(), type as HabitType, body.pointsWeight);
   res.status(201).json(habitResponse(habit));
 }
 

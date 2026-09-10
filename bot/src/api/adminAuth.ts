@@ -1,9 +1,13 @@
 import type { NextFunction, Request, Response } from "express";
-import { isAdmin } from "../db/repository.js";
+import { isRoomAdminByTelegramId } from "../db/repository.js";
 
-/** True when telegramId is in the admins table (seeded from ADMIN_TELEGRAM_ID). */
+/**
+ * True when this Telegram user is an admin (owner or co-admin) of the room they
+ * are currently in. There is no global admin any more: status is room-scoped and
+ * is dropped the moment someone leaves for another room (MULTI ROOM PRD §3a).
+ */
 export function isAdminTelegramId(telegramId: number): boolean {
-  return isAdmin(telegramId);
+  return isRoomAdminByTelegramId(telegramId);
 }
 
 /** Must run after telegramAuth has populated req.telegramId. */
