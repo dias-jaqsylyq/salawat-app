@@ -10,7 +10,7 @@
     "build": "tsc && mkdir -p dist/db && cp src/db/schema.sql dist/db/schema.sql",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/db/repository.test.ts src/api/adminBroadcast.test.ts src/api/adminUsers.test.ts src/api/routes/habits.test.ts src/api/routes/adminHabits.test.ts src/api/realName.test.ts src/api/fastingReminder.test.ts src/api/registration.pending.test.ts",
+    "test": "tsx --test src/utils/streak.test.ts src/utils/challenge.day.test.ts src/db/repository.test.ts src/api/adminBroadcast.test.ts src/api/adminUsers.test.ts src/api/routes/habits.test.ts src/api/routes/adminHabits.test.ts src/api/realName.test.ts src/scheduler/reminder.test.ts src/api/registration.pending.test.ts src/registration/flow.test.ts",
     "backup": "bash scripts/backup-db.sh"
   },
   "dependencies": {
