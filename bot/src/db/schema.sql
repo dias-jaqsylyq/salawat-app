@@ -2,37 +2,39 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   telegram_id INTEGER NOT NULL UNIQUE,
   nickname TEXT NOT NULL,
-  goal INTEGER NOT NULL,
   reminder_enabled INTEGER NOT NULL DEFAULT 1,
-  reminder_time TEXT,
-  fasting_reminder_enabled INTEGER NOT NULL DEFAULT 0,
-  fasting_reminder_time TEXT NOT NULL DEFAULT '20:00',
+  reminder_time TEXT NOT NULL DEFAULT '20:00',
   telegram_username TEXT,
   telegram_first_name TEXT,
   telegram_last_name TEXT,
   real_name TEXT,
-  retained_jamaat_total INTEGER NOT NULL DEFAULT 0,
-  progress_started_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS logs (
+CREATE TABLE IF NOT EXISTS habits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+  points_weight INTEGER NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS habit_logs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id),
-  count INTEGER NOT NULL,
-  logged_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id);
-
-/** Per-day goal met/missed overrides (makeup) — does not change logged salawat. */
-CREATE TABLE IF NOT EXISTS day_goal_overrides (
-  user_id INTEGER NOT NULL REFERENCES users(id),
-  day TEXT NOT NULL,
-  met INTEGER NOT NULL,
+  habit_id INTEGER NOT NULL REFERENCES habits(id),
+  log_date TEXT NOT NULL,              -- TIMEZONE-local day, 'YYYY-MM-DD'
+  value INTEGER NOT NULL,              -- quantity: entered number; binary: 1
+  points_earned INTEGER NOT NULL,      -- frozen at log time, see computePoints
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (user_id, day)
+  UNIQUE (user_id, habit_id, log_date)
 );
+CREATE INDEX IF NOT EXISTS idx_habit_logs_user_id ON habit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_id ON habit_logs(habit_id);
+CREATE INDEX IF NOT EXISTS idx_habit_logs_log_date ON habit_logs(log_date);
 
 /** In-progress /start signup — survives Railway redeploys; deleted on finalize. */
 CREATE TABLE IF NOT EXISTS pending_registrations (
@@ -40,11 +42,8 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
   step TEXT NOT NULL,
   real_name TEXT,
   nickname TEXT,
-  goal INTEGER,
   reminder_enabled INTEGER,
   reminder_time TEXT,
-  fasting_reminder_enabled INTEGER,
-  fasting_reminder_time TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

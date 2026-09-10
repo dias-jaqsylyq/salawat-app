@@ -31,15 +31,11 @@ function ensureUserColumn(name: string, ddl: string) {
 }
 
 ensureUserColumn("reminder_enabled", "INTEGER NOT NULL DEFAULT 1");
-ensureUserColumn("reminder_time", "TEXT");
-ensureUserColumn("fasting_reminder_enabled", "INTEGER NOT NULL DEFAULT 0");
-ensureUserColumn("fasting_reminder_time", "TEXT NOT NULL DEFAULT '20:00'");
+ensureUserColumn("reminder_time", "TEXT NOT NULL DEFAULT '20:00'");
 ensureUserColumn("telegram_username", "TEXT");
 ensureUserColumn("telegram_first_name", "TEXT");
 ensureUserColumn("telegram_last_name", "TEXT");
 ensureUserColumn("real_name", "TEXT");
-ensureUserColumn("retained_jamaat_total", "INTEGER NOT NULL DEFAULT 0");
-ensureUserColumn("progress_started_at", "TEXT");
 
 /** Bootstrap/recovery admin from env — never the sole live auth source after seed. */
 if (config.adminTelegramId !== null) {

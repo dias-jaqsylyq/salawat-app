@@ -2,25 +2,16 @@ export interface User {
   id: number;
   telegram_id: number;
   nickname: string;
-  goal: number;
   /** SQLite 0/1; default 1 (reminders on). */
   reminder_enabled: number;
-  /** HH:mm override in challenge TIMEZONE, or null to use global REMINDER_TIME. */
-  reminder_time: string | null;
-  /** SQLite 0/1; default 0 (fasting reminders off). */
-  fasting_reminder_enabled: number;
-  /** HH:mm in challenge TIMEZONE; default 20:00. */
-  fasting_reminder_time: string;
+  /** HH:mm in TIMEZONE; default '20:00'. */
+  reminder_time: string;
   /** From Telegram initData.user — admin export only, never public API. */
   telegram_username: string | null;
   telegram_first_name: string | null;
   telegram_last_name: string | null;
   /** User-typed legal name. Admin-only; never returned from public APIs. */
   real_name: string | null;
-  /** Prior net logs retained only in the unfiltered Jamaat total after a soft reset. */
-  retained_jamaat_total: number;
-  /** Current personal-progress epoch; null means original registration time. */
-  progress_started_at: string | null;
   created_at: string;
 }
 
@@ -34,9 +25,7 @@ export interface TelegramProfile {
 /** Reminder preferences collected during bot /start signup. */
 export interface CreateUserReminders {
   reminderEnabled: boolean;
-  reminderTime: string | null;
-  fastingReminderEnabled: boolean;
-  fastingReminderTime: string;
+  reminderTime: string;
 }
 
 /** Steps for the persistent /start registration conversation. */
@@ -54,11 +43,8 @@ export interface PendingRegistration {
   step: RegistrationStep;
   real_name: string | null;
   nickname: string | null;
-  goal: number | null;
   reminder_enabled: number | null;
   reminder_time: string | null;
-  fasting_reminder_enabled: number | null;
-  fasting_reminder_time: string | null;
   updated_at: string;
 }
 
@@ -72,29 +58,31 @@ export interface PendingAdminAction {
   created_at: string;
 }
 
-export interface LogEntry {
+export type HabitType = "quantity" | "binary";
+
+export interface Habit {
+  id: number;
+  name: string;
+  type: HabitType;
+  points_weight: number;
+  /** SQLite 0/1; default 1 (active). */
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HabitLog {
   id: number;
   user_id: number;
-  count: number;
-  logged_at: string;
-}
-
-export interface LeaderboardRow {
-  nickname: string;
-  real_name: string | null;
-  total: number;
-  telegram_id: number;
-}
-
-export interface ExportRow {
-  nickname: string;
-  real_name: string | null;
-  telegram_id: number;
-  telegram_username: string | null;
-  telegram_first_name: string | null;
-  telegram_last_name: string | null;
-  goal: number;
-  total: number;
+  habit_id: number;
+  /** TIMEZONE-local day, 'YYYY-MM-DD'. */
+  log_date: string;
+  /** quantity: entered number; binary: 1. */
+  value: number;
+  /** Frozen at log time via computePoints — never recomputed on read. */
+  points_earned: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DateParts {
