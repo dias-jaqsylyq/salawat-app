@@ -6,8 +6,9 @@ process.env.BOT_TOKEN ??= "habits-route-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
-const { createHabit, createUser, updateHabit } = await import("../../db/repository.js");
-const { listHabitsRoute, logHabitRoute } = await import("./habits.js");
+const { createHabit, createUser, getUserByTelegramId, getUserTotalPoints, updateHabit } =
+  await import("../../db/repository.js");
+const { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } = await import("./habits.js");
 
 function capture(): { res: Response; status: () => number; body: () => any } {
   let status = 200;
@@ -39,6 +40,18 @@ function callLog(
   const result = capture();
   logHabitRoute(
     { telegramId, params: { id: String(habitId) }, body } as unknown as Request,
+    result.res
+  );
+  return { status: result.status(), body: result.body() };
+}
+
+function callDeleteLog(
+  telegramId: number,
+  habitId: number | string
+): { status: number; body: any } {
+  const result = capture();
+  deleteHabitLogRoute(
+    { telegramId, params: { id: String(habitId) } } as unknown as Request,
     result.res
   );
   return { status: result.status(), body: result.body() };
@@ -139,6 +152,68 @@ describe("POST /api/habits/:id/log", () => {
   it("403s for a telegram id with no registered user", () => {
     const habit = createHabit("Registered users only", "binary", 5);
     const { status, body } = callLog(999_999_999, habit.id, {});
+    assert.equal(status, 403);
+    assert.equal(body.error, "not_registered");
+  });
+});
+
+describe("DELETE /api/habits/:id/log", () => {
+  it("removes today's binary log and its points", () => {
+    const telegramId = makeUser();
+    const habit = createHabit("Prayed Fajr in jamaat", "binary", 15);
+    callLog(telegramId, habit.id, {});
+    const user = getUserByTelegramId(telegramId)!;
+    assert.equal(getUserTotalPoints(user.id), 15);
+
+    const { status, body } = callDeleteLog(telegramId, habit.id);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { success: true, habitId: habit.id, logged: false });
+    assert.equal(getUserTotalPoints(user.id), 0);
+  });
+
+  it("removes today's quantity log and its points", () => {
+    const telegramId = makeUser();
+    const habit = createHabit("Salawat count", "quantity", 3);
+    callLog(telegramId, habit.id, { value: 10 });
+    const user = getUserByTelegramId(telegramId)!;
+    assert.equal(getUserTotalPoints(user.id), 30);
+
+    const { status, body } = callDeleteLog(telegramId, habit.id);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { success: true, habitId: habit.id, logged: false });
+    assert.equal(getUserTotalPoints(user.id), 0);
+  });
+
+  it("is idempotent when there is no log for today", () => {
+    const telegramId = makeUser();
+    const habit = createHabit("Never logged", "binary", 5);
+
+    const { status, body } = callDeleteLog(telegramId, habit.id);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { success: true, habitId: habit.id, logged: false });
+  });
+
+  it("succeeds even against a deactivated habit", () => {
+    const telegramId = makeUser();
+    const habit = createHabit("Soon retired", "binary", 5);
+    callLog(telegramId, habit.id, {});
+    updateHabit(habit.id, { isActive: false });
+
+    const { status, body } = callDeleteLog(telegramId, habit.id);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { success: true, habitId: habit.id, logged: false });
+  });
+
+  it("404s for an unknown habit id", () => {
+    const telegramId = makeUser();
+    const { status, body } = callDeleteLog(telegramId, 999_999);
+    assert.equal(status, 404);
+    assert.equal(body.error, "habit_not_found");
+  });
+
+  it("403s for a telegram id with no registered user", () => {
+    const habit = createHabit("Registered users only", "binary", 5);
+    const { status, body } = callDeleteLog(999_999_999, habit.id);
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");
   });

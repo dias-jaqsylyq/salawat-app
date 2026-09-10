@@ -420,6 +420,18 @@ export function upsertHabitLog(
     .get(userId, habitId, logDate) as HabitLog;
 }
 
+/**
+ * Delete this user's TIMEZONE-local-today log for a habit, if any. Idempotent —
+ * a no-op when no such row exists. Deleting (rather than zeroing value/points_earned
+ * in place) is what makes the day disappear from getHabitStreak and
+ * getUserHabitLogsForDate, both of which key off row presence, not value.
+ */
+export function deleteHabitLog(userId: number, habitId: number, logDate: string): void {
+  db.prepare(
+    "DELETE FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?"
+  ).run(userId, habitId, logDate);
+}
+
 export function getUserTotalPoints(userId: number): number {
   const row = db
     .prepare("SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs WHERE user_id = ?")
