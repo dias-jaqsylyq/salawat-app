@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { getJamaatTotal, getLeaderboard } from "../../db/repository.js";
+import { getLeaderboard } from "../../db/repository.js";
 
 export function leaderboardRoute(req: Request, res: Response): void {
   const rows = getLeaderboard();
@@ -16,8 +16,5 @@ export function leaderboardRoute(req: Request, res: Response): void {
       isYou: row.telegram_id === req.telegramId,
     };
   });
-  res.json({
-    jamaatTotal: getJamaatTotal(),
-    leaderboard,
-  });
+  res.json({ leaderboard });
 }

@@ -46,8 +46,6 @@ export interface RegisteredProgress {
   nickname: string;
   /** All-time points across every habit. */
   totalPoints: number;
-  /** Sum of all registered users' all-time points. */
-  jamaatTotal: number;
   today: TodayHabitEntry[];
   streaks: HabitStreak[];
   /** True when the user is registered but has not provided a real name yet. */
@@ -63,7 +61,6 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardResponse {
-  jamaatTotal: number;
   leaderboard: LeaderboardEntry[];
 }
 
@@ -73,6 +70,8 @@ export interface ProfileResponse {
   reminderEnabled: boolean;
   /** Effective HH:mm in server TIMEZONE. */
   reminderTime: string;
+  /** IANA name (e.g. "Asia/Hong_Kong"), or null until the Mini App has set one. */
+  timezone: string | null;
 }
 
 export interface ProfileUpdate {
@@ -81,6 +80,8 @@ export interface ProfileUpdate {
   reminderEnabled?: boolean;
   /** HH:mm, or null to clear override to the global default. */
   reminderTime?: string | null;
+  /** IANA name, or null to clear back to the server default. */
+  timezone?: string | null;
 }
 
 export interface AdminStatusResponse {
@@ -100,7 +101,6 @@ export interface AdminLeaderboardEntry {
 }
 
 export interface AdminLeaderboardResponse {
-  jamaatTotal: number;
   leaderboard: AdminLeaderboardEntry[];
 }
 

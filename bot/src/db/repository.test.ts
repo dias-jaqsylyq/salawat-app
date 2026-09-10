@@ -15,7 +15,6 @@ const {
   deleteHabitLog,
   getHabitById,
   getHabitStreak,
-  getJamaatTotal,
   getUserHabitLogsForDate,
   getUserTotalPoints,
   listHabits,
@@ -166,8 +165,8 @@ describe("deleteHabitLog", () => {
   });
 });
 
-describe("getJamaatTotal / getUserTotalPoints", () => {
-  it("sums points across all users' habit logs", () => {
+describe("getUserTotalPoints", () => {
+  it("sums each user's own points independently", () => {
     const alice = makeUser();
     const bob = makeUser();
     const habit = createHabit("Sadaqah given", "binary", 40);
@@ -177,6 +176,5 @@ describe("getJamaatTotal / getUserTotalPoints", () => {
 
     assert.equal(getUserTotalPoints(alice), 40);
     assert.equal(getUserTotalPoints(bob), 40);
-    assert.ok(getJamaatTotal() >= 80);
   });
 });

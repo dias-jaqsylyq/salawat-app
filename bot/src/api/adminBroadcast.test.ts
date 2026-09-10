@@ -32,6 +32,7 @@ function user(id: number): User {
     nickname: `user-${id}`,
     reminder_enabled: 1,
     reminder_time: "20:00",
+    timezone: null,
     telegram_username: null,
     telegram_first_name: null,
     telegram_last_name: null,

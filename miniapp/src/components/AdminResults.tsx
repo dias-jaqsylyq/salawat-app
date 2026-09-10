@@ -82,15 +82,6 @@ export default function AdminResults({ initData }: Props) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="rounded-lg bg-secondary/35 px-4 py-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            All-time jamaat total
-          </p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
-            {loading ? "…" : (data?.jamaatTotal ?? 0).toLocaleString()}
-          </p>
-        </div>
-
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}

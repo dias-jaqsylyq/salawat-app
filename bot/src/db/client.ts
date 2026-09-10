@@ -36,6 +36,7 @@ ensureUserColumn("telegram_username", "TEXT");
 ensureUserColumn("telegram_first_name", "TEXT");
 ensureUserColumn("telegram_last_name", "TEXT");
 ensureUserColumn("real_name", "TEXT");
+ensureUserColumn("timezone", "TEXT");
 
 const STALE_USER_COLUMNS = [
   "goal",

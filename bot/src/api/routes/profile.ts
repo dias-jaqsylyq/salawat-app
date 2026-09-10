@@ -29,7 +29,17 @@ function profileResponse(user: User) {
     realName: user.real_name ?? null,
     reminderEnabled: user.reminder_enabled === 1,
     reminderTime: effectiveReminderTime(user),
+    timezone: user.timezone ?? null,
   };
+}
+
+function isValidTimezone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat(undefined, { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getProfileRoute(req: Request, res: Response) {
@@ -47,8 +57,9 @@ export function patchProfileRoute(req: Request, res: Response) {
   const hasReminderEnabled = Object.prototype.hasOwnProperty.call(body, "reminderEnabled");
   const hasReminderTime = Object.prototype.hasOwnProperty.call(body, "reminderTime");
   const hasRealName = Object.prototype.hasOwnProperty.call(body, "realName");
+  const hasTimezone = Object.prototype.hasOwnProperty.call(body, "timezone");
 
-  if (!hasNickname && !hasReminderEnabled && !hasReminderTime && !hasRealName) {
+  if (!hasNickname && !hasReminderEnabled && !hasReminderTime && !hasRealName && !hasTimezone) {
     res.status(400).json({ success: false, error: "invalid_body" });
     return;
   }
@@ -109,6 +120,18 @@ export function patchProfileRoute(req: Request, res: Response) {
     realName = parsedRealName;
   }
 
+  let timezone: string | null | undefined;
+  if (hasTimezone) {
+    if (body.timezone === null) {
+      timezone = null;
+    } else if (typeof body.timezone === "string" && isValidTimezone(body.timezone)) {
+      timezone = body.timezone;
+    } else {
+      res.status(400).json({ success: false, error: "invalid_timezone" });
+      return;
+    }
+  }
+
   const effectiveNickname = nickname ?? user.nickname;
   const effectiveRealName = realName ?? user.real_name;
   if (effectiveRealName && nicknameMatchesRealName(effectiveNickname, effectiveRealName)) {
@@ -121,6 +144,7 @@ export function patchProfileRoute(req: Request, res: Response) {
     reminderEnabled,
     reminderTime: reminderTime ?? undefined,
     realName,
+    timezone,
   });
 
   res.json(profileResponse(updated));
