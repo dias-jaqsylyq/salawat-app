@@ -61,19 +61,15 @@ describe("pending_registrations", () => {
 
     updatePendingRegistration(telegramId, {
       nickname: "Ali",
-      goal: 100,
       reminder_enabled: 0,
       reminder_time: null,
-      fasting_reminder_enabled: 0,
-      fasting_reminder_time: "20:00",
-      step: "fasting_opt_in",
+      step: "reminder_opt_in",
     });
 
     const pending = getPendingRegistration(telegramId)!;
     createUser(
       telegramId,
       pending.nickname!,
-      pending.goal!,
       {
         telegramUsername: "ali",
         telegramFirstName: "Ali",
@@ -82,9 +78,7 @@ describe("pending_registrations", () => {
       pending.real_name,
       {
         reminderEnabled: false,
-        reminderTime: null,
-        fastingReminderEnabled: false,
-        fastingReminderTime: "20:00",
+        reminderTime: "20:00",
       }
     );
     deletePendingRegistration(telegramId);
@@ -93,17 +87,14 @@ describe("pending_registrations", () => {
     assert.equal(user.real_name, "Ali Nurlanov");
     assert.equal(user.nickname, "Ali");
     assert.equal(user.reminder_enabled, 0);
-    assert.equal(user.reminder_time, null);
-    assert.equal(user.fasting_reminder_enabled, 0);
     assert.equal(getPendingRegistration(telegramId), undefined);
   });
 
-  it("stores reminder and fasting times when opted in", () => {
+  it("stores reminder time when opted in", () => {
     const telegramId = 910000002;
     createUser(
       telegramId,
       "OptIn",
-      50,
       {
         telegramUsername: null,
         telegramFirstName: "A",
@@ -113,15 +104,11 @@ describe("pending_registrations", () => {
       {
         reminderEnabled: true,
         reminderTime: "21:30",
-        fastingReminderEnabled: true,
-        fastingReminderTime: "19:00",
       }
     );
     const user = getUserByTelegramId(telegramId)!;
     assert.equal(user.reminder_enabled, 1);
     assert.equal(user.reminder_time, "21:30");
-    assert.equal(user.fasting_reminder_enabled, 1);
-    assert.equal(user.fasting_reminder_time, "19:00");
   });
 });
 
@@ -136,7 +123,7 @@ describe("POST /api/register", () => {
           telegramFirstName: null,
           telegramLastName: null,
         },
-        body: { nickname: "X", goal: 1, realName: "Someone" },
+        body: { nickname: "X", realName: "Someone" },
       } as Request,
       result.res
     );

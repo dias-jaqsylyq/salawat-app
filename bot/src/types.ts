@@ -29,14 +29,7 @@ export interface CreateUserReminders {
 }
 
 /** Steps for the persistent /start registration conversation. */
-export type RegistrationStep =
-  | "real_name"
-  | "nickname"
-  | "goal"
-  | "reminder_opt_in"
-  | "reminder_time"
-  | "fasting_opt_in"
-  | "fasting_time";
+export type RegistrationStep = "real_name" | "nickname" | "reminder_opt_in" | "reminder_time";
 
 export interface PendingRegistration {
   telegram_id: number;
