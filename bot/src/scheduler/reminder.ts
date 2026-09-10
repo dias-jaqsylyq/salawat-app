@@ -10,9 +10,9 @@ const REMINDER_KEYBOARD = new InlineKeyboard().url("Open app", config.miniAppDee
 
 let sending = false;
 
-function currentHhMmInTimezone(now: Date = new Date()): string {
+function currentHhMmInTimezone(now: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: config.timezone,
+    timeZone: timezone,
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
@@ -60,10 +60,23 @@ export async function sendDueReminders(
 
   sending = true;
   try {
-    const nowHhMm = currentHhMmInTimezone(now);
+    // The day boundary for "what's still unlogged today" is always the app's
+    // single canonical config.timezone (same as habit_logs/streaks/leaderboard
+    // day-of) — a user's personal timezone only decides WHEN to ping them, not
+    // which app-day their logs belong to.
     const todayKey = formatDateParts(getTodayInTimezone(config.timezone, now));
     const users = getUsersWithRemindersEnabled();
     for (const user of users) {
+      let nowHhMm: string;
+      try {
+        nowHhMm = currentHhMmInTimezone(now, user.timezone ?? config.timezone);
+      } catch (err) {
+        console.error(
+          `Invalid stored timezone "${user.timezone}" for user ${user.telegram_id} — skipping this tick:`,
+          err
+        );
+        continue;
+      }
       if (effectiveReminderTime(user) !== nowHhMm) continue;
       try {
         const text = buildReminderMessage(unloggedHabitNames(user.id, todayKey));

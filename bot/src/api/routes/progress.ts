@@ -2,7 +2,6 @@ import type { Request, Response } from "express";
 import { config } from "../../config.js";
 import {
   getHabitStreak,
-  getJamaatTotal,
   getUserByTelegramId,
   getUserHabitLogsForDate,
   getUserTotalPoints,
@@ -41,7 +40,6 @@ export function progressRoute(req: Request, res: Response): void {
     registered: true,
     nickname: user.nickname,
     totalPoints: getUserTotalPoints(user.id),
-    jamaatTotal: getJamaatTotal(),
     today,
     streaks,
     needsRealName: userNeedsRealName(user.real_name),

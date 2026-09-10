@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { getJamaatTotal, getLeaderboard } from "../../db/repository.js";
+import { getLeaderboard } from "../../db/repository.js";
 
 /**
  * All-time, perpetual leaderboard for the admin view. No period filter —
@@ -23,8 +23,5 @@ export function adminLeaderboardRoute(_req: Request, res: Response): void {
     };
   });
 
-  res.json({
-    jamaatTotal: getJamaatTotal(),
-    leaderboard,
-  });
+  res.json({ leaderboard });
 }

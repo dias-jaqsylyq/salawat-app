@@ -32,7 +32,6 @@ function isTied(entries: LeaderboardEntry[], entry: LeaderboardEntry): boolean {
 
 export default function LeaderboardScreen({ initData }: Props) {
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
-  const [jamaatTotal, setJamaatTotal] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -40,11 +39,9 @@ export default function LeaderboardScreen({ initData }: Props) {
     setLoading(true);
     setError(null);
     setEntries(null);
-    setJamaatTotal(null);
     getLeaderboard(initData)
-      .then(({ leaderboard, jamaatTotal: total }) => {
+      .then(({ leaderboard }) => {
         setEntries(leaderboard);
-        setJamaatTotal(total);
       })
       .catch((err) => {
         setError(messageForApiError(err, "Couldn't load the leaderboard."));
@@ -54,7 +51,7 @@ export default function LeaderboardScreen({ initData }: Props) {
       });
   }, [initData]);
 
-  // Remount when the Leaderboard tab is opened → fresh jamaatTotal + rows.
+  // Remount when the Leaderboard tab is opened → fresh rows.
   useEffect(() => {
     load();
   }, [load]);
@@ -65,17 +62,6 @@ export default function LeaderboardScreen({ initData }: Props) {
         <Trophy className="h-5 w-5 text-accent" aria-hidden="true" />
         Leaderboard
       </h2>
-
-      <div className="space-y-2 rounded-lg bg-secondary/40 px-4 py-3">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Jamaat total
-        </p>
-        <p className="text-xl font-semibold tabular-nums text-foreground">
-          {loading || jamaatTotal === null
-            ? "…"
-            : `${jamaatTotal.toLocaleString()} points`}
-        </p>
-      </div>
 
       {error && (
         <div className="space-y-2">

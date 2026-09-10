@@ -6,6 +6,11 @@ export interface User {
   reminder_enabled: number;
   /** HH:mm in TIMEZONE; default '20:00'. */
   reminder_time: string;
+  /**
+   * IANA name detected client-side in the Mini App. NULL until the user opens
+   * it at least once — reminders fall back to config.timezone until then.
+   */
+  timezone: string | null;
   /** From Telegram initData.user — admin export only, never public API. */
   telegram_username: string | null;
   telegram_first_name: string | null;

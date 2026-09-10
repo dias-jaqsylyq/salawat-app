@@ -16,6 +16,7 @@ const {
   updateUserProfile,
   upsertHabitLog,
 } = await import("../db/repository.js");
+const { db } = await import("../db/client.js");
 const { formatDateParts, getTodayInTimezone } = await import("../utils/challenge.js");
 const { buildReminderMessage, sendDueReminders } = await import("./reminder.js");
 
@@ -23,6 +24,8 @@ const { buildReminderMessage, sendDueReminders } = await import("./reminder.js")
 const AT_20 = new Date("2026-08-16T12:00:00.000Z");
 /** 21:00 in Asia/Hong_Kong. */
 const AT_21 = new Date("2026-08-16T13:00:00.000Z");
+/** 20:00 in America/New_York (EDT, UTC-4 in August). */
+const AT_20_NY = new Date("2026-08-17T00:00:00.000Z");
 
 function mockBot(sendMessage: (chatId: number, text: string) => Promise<void>) {
   return {
@@ -102,6 +105,45 @@ describe("sendDueReminders — scheduling", () => {
     assert.equal(started, 1);
     release();
     await inFlight;
+  });
+});
+
+describe("sendDueReminders — per-user timezone", () => {
+  it("fires by each user's own timezone, falling back to config.timezone when unset", async () => {
+    const hkUser = makeUser(true, "20:00"); // no timezone set → falls back to config.timezone
+    const nyUser = makeUser(true, "20:00");
+    updateUserProfile(nyUser, { timezone: "America/New_York" });
+
+    const sent: number[] = [];
+    const bot = mockBot(async (id) => {
+      sent.push(id);
+    });
+
+    // 20:00 in Hong Kong: only the fallback (unset-timezone) user is due.
+    await sendDueReminders(bot, AT_20);
+    assert.deepEqual(sent.filter((id) => [hkUser, nyUser].includes(id)), [hkUser]);
+
+    // The same real-world moment is not 20:00 for the NY user, so they aren't
+    // messaged again here — only at 20:00 their own time (AT_20_NY, below).
+    sent.length = 0;
+    await sendDueReminders(bot, AT_20_NY);
+    assert.deepEqual(sent.filter((id) => [hkUser, nyUser].includes(id)), [nyUser]);
+  });
+
+  it("skips a user with a corrupted stored timezone instead of crashing the whole tick", async () => {
+    const bad = makeUser(true, "20:00");
+    const fine = makeUser(true, "20:00");
+    // Bypass app-level validation (PATCH /api/profile rejects this) to simulate
+    // already-corrupted data landing in the DB some other way.
+    db.prepare("UPDATE users SET timezone = ? WHERE telegram_id = ?").run("Not/AZone", bad);
+
+    const sent: number[] = [];
+    const bot = mockBot(async (id) => {
+      sent.push(id);
+    });
+
+    await assert.doesNotReject(() => sendDueReminders(bot, AT_20));
+    assert.deepEqual(sent.filter((id) => [bad, fine].includes(id)), [fine]);
   });
 });
 

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTelegram } from "./telegram/useTelegram.ts";
-import { getHabits, getIsAdmin, getProgress } from "./api/client.ts";
+import { getHabits, getIsAdmin, getProgress, patchProfile } from "./api/client.ts";
 import { messageForApiError } from "./api/errors.ts";
 import type { Habit, RegisteredProgress } from "./api/types.ts";
 import IncompleteRegistrationScreen from "./screens/IncompleteRegistrationScreen.tsx";
@@ -121,6 +121,28 @@ export default function App() {
   useEffect(() => {
     if (!isAdmin && activeTab === "admin") setActiveTab("progress");
   }, [activeTab, isAdmin]);
+
+  // Silently sync the browser-detected timezone once per session, so reminders
+  // fire at the user's own local time instead of the server's default. Fires
+  // every time the app is opened (not just the first time ever) — that's what
+  // keeps it correct after travel, with no separate "already detected" state
+  // to track. Gated on "ready" so this never races an unregistered account
+  // (PATCH /api/profile would just 403 for them) or a real-name-prompt user.
+  const timezoneSyncedRef = useRef(false);
+  useEffect(() => {
+    if (state.status !== "ready" || timezoneSyncedRef.current) return;
+    timezoneSyncedRef.current = true;
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      void patchProfile(initData, { timezone }).catch(() => {
+        // Best-effort — reminders just keep using the server default until
+        // this succeeds on a later open.
+      });
+    } catch {
+      // Intl.DateTimeFormat().resolvedOptions().timeZone is effectively
+      // always available, but never let detection failure affect the app.
+    }
+  }, [state.status, initData]);
 
   // Refetch progress + habits whenever Progress or Log is shown (keep prior UI; no
   // loading flash) — picks up habits an admin created/toggled without a full reload.

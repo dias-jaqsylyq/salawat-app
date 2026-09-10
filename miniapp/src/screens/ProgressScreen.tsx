@@ -1,5 +1,6 @@
 import { MoonStar, Settings } from "lucide-react";
 import type { Habit, RegisteredProgress } from "../api/types.ts";
+import StreakBadge from "../components/StreakBadge.tsx";
 import VirtueReminder from "../components/VirtueReminder.tsx";
 import { formatHijriDate } from "../lib/hijriDate.ts";
 import { Button } from "@/components/ui/button";
@@ -15,13 +16,8 @@ function habitLabel(habits: Habit[] | null, habitId: number): string {
   return habits?.find((h) => h.id === habitId)?.name ?? `Habit #${habitId}`;
 }
 
-function streakCopy(streak: number): string {
-  if (streak <= 0) return "No streak yet";
-  return `🔥 ${streak} day${streak === 1 ? "" : "s"}`;
-}
-
 export default function ProgressScreen({ progress, habits, onOpenSettings }: Props) {
-  const { nickname, totalPoints, jamaatTotal, streaks } = progress;
+  const { nickname, totalPoints, streaks } = progress;
   const hijriLabel = formatHijriDate();
 
   return (
@@ -49,23 +45,13 @@ export default function ProgressScreen({ progress, habits, onOpenSettings }: Pro
         </CardHeader>
 
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-2 gap-3 rounded-lg bg-secondary/40 px-4 py-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                All-time total
-              </p>
-              <p className="text-xl font-semibold tabular-nums text-foreground">
-                {totalPoints.toLocaleString()}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Jamaat total
-              </p>
-              <p className="text-xl font-semibold tabular-nums text-foreground">
-                {jamaatTotal.toLocaleString()}
-              </p>
-            </div>
+          <div className="rounded-lg bg-secondary/40 px-4 py-3">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              All-time total
+            </p>
+            <p className="text-xl font-semibold tabular-nums text-foreground">
+              {totalPoints.toLocaleString()}
+            </p>
           </div>
 
           <div className="space-y-2">
@@ -73,19 +59,15 @@ export default function ProgressScreen({ progress, habits, onOpenSettings }: Pro
             {streaks.length === 0 ? (
               <p className="text-sm text-muted-foreground">No habits yet.</p>
             ) : (
-              <ul className="space-y-1.5">
+              <div className="grid grid-cols-2 gap-3">
                 {streaks.map((s) => (
-                  <li
+                  <StreakBadge
                     key={s.habitId}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <span className="text-foreground">{habitLabel(habits, s.habitId)}</span>
-                    <span className={s.streak > 0 ? "text-foreground" : "text-muted-foreground"}>
-                      {streakCopy(s.streak)}
-                    </span>
-                  </li>
+                    habitName={habitLabel(habits, s.habitId)}
+                    streak={s.streak}
+                  />
                 ))}
-              </ul>
+              </div>
             )}
           </div>
         </CardContent>

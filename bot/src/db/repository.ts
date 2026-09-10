@@ -282,6 +282,8 @@ export interface UserProfileUpdate {
   reminderEnabled?: boolean;
   reminderTime?: string;
   realName?: string;
+  /** undefined = leave unchanged; null = reset to unset (fall back to config.timezone). */
+  timezone?: string | null;
 }
 
 export function updateUserProfile(telegramId: number, update: UserProfileUpdate): User {
@@ -295,12 +297,13 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
     update.reminderEnabled !== undefined ? (update.reminderEnabled ? 1 : 0) : user.reminder_enabled;
   const reminderTime = update.reminderTime ?? user.reminder_time;
   const realName = update.realName !== undefined ? update.realName : user.real_name;
+  const timezone = update.timezone !== undefined ? update.timezone : user.timezone;
 
   db.prepare(
     `UPDATE users
-     SET nickname = ?, reminder_enabled = ?, reminder_time = ?, real_name = ?
+     SET nickname = ?, reminder_enabled = ?, reminder_time = ?, real_name = ?, timezone = ?
      WHERE telegram_id = ?`
-  ).run(nickname, reminderEnabled, reminderTime, realName, telegramId);
+  ).run(nickname, reminderEnabled, reminderTime, realName, timezone, telegramId);
 
   return getUserByTelegramId(telegramId) ?? (() => {
     throw new Error(`Failed to reload user ${telegramId} after profile update`);
@@ -436,14 +439,6 @@ export function getUserTotalPoints(userId: number): number {
   const row = db
     .prepare("SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs WHERE user_id = ?")
     .get(userId) as { total: number };
-  return row.total;
-}
-
-/** Sum of points_earned across every user, all time — perpetual tracker, no window. */
-export function getJamaatTotal(): number {
-  const row = db
-    .prepare("SELECT COALESCE(SUM(points_earned), 0) AS total FROM habit_logs")
-    .get() as { total: number };
   return row.total;
 }
 

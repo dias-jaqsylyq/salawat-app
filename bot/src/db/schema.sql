@@ -4,6 +4,10 @@ CREATE TABLE IF NOT EXISTS users (
   nickname TEXT NOT NULL,
   reminder_enabled INTEGER NOT NULL DEFAULT 1,
   reminder_time TEXT NOT NULL DEFAULT '20:00',
+  -- IANA name (e.g. "Asia/Hong_Kong"), detected client-side in the Mini App
+  -- (Intl.DateTimeFormat().resolvedOptions().timeZone). NULL until the user
+  -- opens the Mini App at least once — reminders fall back to config.timezone.
+  timezone TEXT,
   telegram_username TEXT,
   telegram_first_name TEXT,
   telegram_last_name TEXT,
