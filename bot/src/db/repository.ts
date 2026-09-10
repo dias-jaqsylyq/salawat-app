@@ -1,5 +1,6 @@
 import { db } from "./client.js";
 import { formatDateParts, parseDateKey, subtractOneCalendarDay } from "../utils/dates.js";
+import { generateRoomPassword } from "../utils/roomPassword.js";
 import type {
   CreateUserReminders,
   ExportRow,
@@ -302,6 +303,8 @@ export function createUser(
 ): User {
   const reminderEnabled = reminders ? (reminders.reminderEnabled ? 1 : 0) : 1;
   const reminderTime = reminders?.reminderTime ?? "20:00";
+  const fastingReminderEnabled = reminders?.fastingReminderEnabled ? 1 : 0;
+  const fastingReminderTime = reminders?.fastingReminderTime ?? "20:00";
   const role: UserRole = membership.role ?? "participant";
   const currentRoomId = membership.currentRoomId ?? null;
 
@@ -312,8 +315,9 @@ export function createUser(
          role, current_room_id,
          telegram_username, telegram_first_name, telegram_last_name,
          real_name,
-         reminder_enabled, reminder_time
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         reminder_enabled, reminder_time,
+         fasting_reminder_enabled, fasting_reminder_time
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       telegramId,
@@ -325,11 +329,75 @@ export function createUser(
       profile.telegramLastName,
       realName,
       reminderEnabled,
-      reminderTime
+      reminderTime,
+      fastingReminderEnabled,
+      fastingReminderTime
     );
   return getUserByTelegramId(telegramId) ?? (() => {
     throw new Error(`Failed to load user just created (rowid ${result.lastInsertRowid})`);
   })();
+}
+
+export interface AdminWithRoom {
+  user: User;
+  room: Room;
+}
+
+/** How many fresh passwords to try before giving up on a UNIQUE collision. */
+const ROOM_PASSWORD_ATTEMPTS = 5;
+
+/**
+ * Register an admin and the one room they are creating, atomically (PRD §2,
+ * admin path): the users row, the room, its room_admins owner row, and the
+ * owner's current_room_id either all land or none do.
+ *
+ * Without the transaction a failure between the three writes leaves an admin
+ * with no room — an account that can never finish registering, since /start
+ * would then see them as already registered.
+ *
+ * The password is generated here rather than passed in because a UNIQUE
+ * collision on rooms.password can only be resolved by retrying the whole
+ * insert with a different one (the column, not the generator, is what
+ * guarantees a password resolves to exactly one room).
+ */
+export function createAdminWithRoom(
+  telegramId: number,
+  nickname: string,
+  profile: TelegramProfile,
+  realName: string | null,
+  reminders: CreateUserReminders,
+  room: { name: string; categoriesEnabled: boolean }
+): AdminWithRoom {
+  const register = db.transaction((password: string) => {
+    const user = createUser(telegramId, nickname, profile, realName, reminders, {
+      role: "admin",
+      // The room does not exist yet — it needs this user's id as its owner.
+      currentRoomId: null,
+    });
+    const created = createRoom(room.name, password, user.id, room.categoriesEnabled);
+    setUserCurrentRoom(user.id, created.id);
+    return created.id;
+  });
+
+  for (let attempt = 1; ; attempt++) {
+    const password = generateRoomPassword();
+    try {
+      const roomId = register(password);
+      const user = getUserByTelegramId(telegramId);
+      const created = getRoomById(roomId);
+      if (!user || !created) {
+        throw new Error(`createAdminWithRoom: failed to reload user/room just created`);
+      }
+      return { user, room: created };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isPasswordCollision = message.includes("UNIQUE constraint failed: rooms.password");
+      if (!isPasswordCollision || attempt >= ROOM_PASSWORD_ATTEMPTS) throw err;
+      console.warn(
+        `createAdminWithRoom: generated room password collided (attempt ${attempt}), retrying`
+      );
+    }
+  }
 }
 
 export function getPendingRegistration(telegramId: number): PendingRegistration | undefined {
@@ -338,15 +406,46 @@ export function getPendingRegistration(telegramId: number): PendingRegistration 
     .get(telegramId) as PendingRegistration | undefined;
 }
 
-/** Start or keep an existing pending row at step real_name. */
+/**
+ * Start a signup at the admin-or-participant question, or resume the existing
+ * one at whatever step it reached (PRD §2).
+ */
 export function ensurePendingRegistration(telegramId: number): PendingRegistration {
   const existing = getPendingRegistration(telegramId);
   if (existing) return existing;
 
   db.prepare(
     `INSERT INTO pending_registrations (telegram_id, step, updated_at)
-     VALUES (?, 'real_name', datetime('now'))`
+     VALUES (?, 'role', datetime('now'))`
   ).run(telegramId);
+
+  return getPendingRegistration(telegramId) ?? (() => {
+    throw new Error(`Failed to create pending registration for ${telegramId}`);
+  })();
+}
+
+/**
+ * Start a participant signup with the room already resolved, for someone who
+ * arrived through a room's `t.me/<bot>?start=<password>` deep link (PRD §3a):
+ * the role and password questions are answered by the link itself, so the
+ * conversation opens at real_name.
+ *
+ * Any half-finished pending row is replaced — following an invite link is an
+ * unambiguous "I want to join *this* room", which overrides whatever the
+ * previous, unfinished attempt was heading toward.
+ */
+export function startPendingRegistrationForRoom(
+  telegramId: number,
+  roomId: number
+): PendingRegistration {
+  const seed = db.transaction(() => {
+    db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId);
+    db.prepare(
+      `INSERT INTO pending_registrations (telegram_id, step, role, room_id, updated_at)
+       VALUES (?, 'real_name', 'participant', ?, datetime('now'))`
+    ).run(telegramId, roomId);
+  });
+  seed();
 
   return getPendingRegistration(telegramId) ?? (() => {
     throw new Error(`Failed to create pending registration for ${telegramId}`);
@@ -357,10 +456,16 @@ export function updatePendingRegistration(
   telegramId: number,
   patch: Partial<{
     step: RegistrationStep;
+    role: UserRole | null;
     real_name: string | null;
     nickname: string | null;
+    room_name: string | null;
+    categories_enabled: number | null;
+    room_id: number | null;
     reminder_enabled: number | null;
     reminder_time: string | null;
+    fasting_reminder_enabled: number | null;
+    fasting_reminder_time: string | null;
   }>
 ): PendingRegistration {
   const current = getPendingRegistration(telegramId);
@@ -371,18 +476,36 @@ export function updatePendingRegistration(
   db.prepare(
     `UPDATE pending_registrations
      SET step = ?,
+         role = ?,
          real_name = ?,
          nickname = ?,
+         room_name = ?,
+         categories_enabled = ?,
+         room_id = ?,
          reminder_enabled = ?,
          reminder_time = ?,
+         fasting_reminder_enabled = ?,
+         fasting_reminder_time = ?,
          updated_at = datetime('now')
      WHERE telegram_id = ?`
   ).run(
     patch.step ?? current.step,
+    patch.role !== undefined ? patch.role : current.role,
     patch.real_name !== undefined ? patch.real_name : current.real_name,
     patch.nickname !== undefined ? patch.nickname : current.nickname,
+    patch.room_name !== undefined ? patch.room_name : current.room_name,
+    patch.categories_enabled !== undefined
+      ? patch.categories_enabled
+      : current.categories_enabled,
+    patch.room_id !== undefined ? patch.room_id : current.room_id,
     patch.reminder_enabled !== undefined ? patch.reminder_enabled : current.reminder_enabled,
     patch.reminder_time !== undefined ? patch.reminder_time : current.reminder_time,
+    patch.fasting_reminder_enabled !== undefined
+      ? patch.fasting_reminder_enabled
+      : current.fasting_reminder_enabled,
+    patch.fasting_reminder_time !== undefined
+      ? patch.fasting_reminder_time
+      : current.fasting_reminder_time,
     telegramId
   );
 

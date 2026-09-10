@@ -11,7 +11,7 @@ process.env.BOT_TOKEN ??= "client-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH = join(dataDir, "salawat.db");
 
-const { db, resetForMultiRoom } = await import("./client.js");
+const { addMissingColumns, db, resetForMultiRoom } = await import("./client.js");
 const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
   await import("./repository.js");
 
@@ -186,5 +186,110 @@ describe("resetForMultiRoom", () => {
     // habits.room_id is the second, independent marker.
     assert.equal(resetForMultiRoom(), true);
     assert.ok(columnNames("habits").includes("room_id"));
+  });
+});
+
+/**
+ * Recreate the *first* multi-room schema — the one PR #12 shipped, before
+ * registration grew an admin/participant branch and a fasting-reminder opt-in.
+ * This is the shape a Railway volume already carries, so the additive migration
+ * has to patch it in place without touching the rooms already in it.
+ */
+function seedFirstGenerationMultiRoomDatabase(): void {
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    DROP TABLE IF EXISTS habit_logs;
+    DROP TABLE IF EXISTS habits;
+    DROP TABLE IF EXISTS room_admins;
+    DROP TABLE IF EXISTS pending_registrations;
+    DROP TABLE IF EXISTS users;
+    DROP TABLE IF EXISTS rooms;
+
+    CREATE TABLE rooms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      password TEXT NOT NULL UNIQUE,
+      categories_enabled INTEGER NOT NULL DEFAULT 0,
+      owner_user_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id INTEGER NOT NULL UNIQUE,
+      nickname TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'participant',
+      current_room_id INTEGER,
+      reminder_enabled INTEGER NOT NULL DEFAULT 1,
+      reminder_time TEXT NOT NULL DEFAULT '20:00',
+      timezone TEXT,
+      telegram_username TEXT,
+      telegram_first_name TEXT,
+      telegram_last_name TEXT,
+      real_name TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE pending_registrations (
+      telegram_id INTEGER PRIMARY KEY,
+      step TEXT NOT NULL,
+      real_name TEXT,
+      nickname TEXT,
+      reminder_enabled INTEGER,
+      reminder_time TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO rooms (name, password) VALUES ('Live room', 'live-room-pass');
+    INSERT INTO users (telegram_id, nickname, role, current_room_id)
+      VALUES (500000021, 'LiveMember', 'admin', 1);
+    INSERT INTO pending_registrations (telegram_id, step, real_name)
+      VALUES (500000022, 'nickname', 'Half Done');
+  `);
+  db.pragma("foreign_keys = ON");
+}
+
+describe("addMissingColumns", () => {
+  it("adds the new registration columns to an already-multi-room database without touching its data", () => {
+    seedFirstGenerationMultiRoomDatabase();
+    assert.ok(!columnNames("users").includes("fasting_reminder_enabled"));
+    assert.ok(!columnNames("pending_registrations").includes("role"));
+    // The destructive migration must not fire on this DB — it is already
+    // multi-room, and by now may hold a real room.
+    assert.equal(resetForMultiRoom(), false);
+
+    const added = addMissingColumns();
+
+    assert.deepEqual(added, [
+      "users.fasting_reminder_enabled",
+      "users.fasting_reminder_time",
+      "pending_registrations.role",
+      "pending_registrations.room_name",
+      "pending_registrations.categories_enabled",
+      "pending_registrations.room_id",
+      "pending_registrations.fasting_reminder_enabled",
+      "pending_registrations.fasting_reminder_time",
+    ]);
+
+    // Existing rows survive and pick up the documented defaults.
+    const user = db
+      .prepare("SELECT * FROM users WHERE telegram_id = ?")
+      .get(500000021) as Record<string, unknown>;
+    assert.equal(user.nickname, "LiveMember");
+    assert.equal(user.current_room_id, 1);
+    assert.equal(user.fasting_reminder_enabled, 0);
+    assert.equal(user.fasting_reminder_time, "20:00");
+
+    const pending = db
+      .prepare("SELECT * FROM pending_registrations WHERE telegram_id = ?")
+      .get(500000022) as Record<string, unknown>;
+    assert.equal(pending.real_name, "Half Done");
+    assert.equal(pending.role, null);
+    assert.equal(pending.room_id, null);
+
+    const room = db.prepare("SELECT * FROM rooms WHERE id = 1").get() as Record<string, unknown>;
+    assert.equal(room.name, "Live room");
+  });
+
+  it("is idempotent", () => {
+    assert.deepEqual(addMissingColumns(), []);
   });
 });

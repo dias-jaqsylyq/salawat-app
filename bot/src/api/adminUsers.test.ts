@@ -90,7 +90,7 @@ describe("deleteUserCompletely", () => {
     assert.equal(getPendingRegistration(telegramId), undefined);
 
     const fresh = ensurePendingRegistration(telegramId);
-    assert.equal(fresh.step, "real_name");
+    assert.equal(fresh.step, "role");
     assert.equal(fresh.real_name, null);
   });
 });

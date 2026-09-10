@@ -45,6 +45,14 @@ export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;
 export const REGISTER_RATE_LIMIT_PER_MINUTE = 5;
 /** Max PATCH /api/profile requests per telegram user per rolling minute. */
 export const PROFILE_RATE_LIMIT_PER_MINUTE = 5;
+/**
+ * Max room-password guesses per telegram user per rolling minute during /start
+ * signup (PRD §2 — basic rate limiting, reusing the existing allowRequest
+ * convention). Shares that helper's per-user bucket with the API limits above,
+ * which costs nothing in practice: someone still typing a join password has no
+ * room yet, so no Mini App call to compete with.
+ */
+export const ROOM_JOIN_RATE_LIMIT_PER_MINUTE = 5;
 
 const PLACEHOLDER_MINI_APP_URL = "https://example.com/REPLACE_WITH_VERCEL_URL";
 

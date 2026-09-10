@@ -33,6 +33,8 @@ function user(id: number): User {
     current_room_id: null,
     reminder_enabled: 1,
     reminder_time: "20:00",
+    fasting_reminder_enabled: 0,
+    fasting_reminder_time: "20:00",
     timezone: null,
     telegram_username: null,
     telegram_first_name: null,

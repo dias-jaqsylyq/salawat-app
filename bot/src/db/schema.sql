@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS users (
   current_room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
   reminder_enabled INTEGER NOT NULL DEFAULT 1,
   reminder_time TEXT NOT NULL DEFAULT '20:00',
+  -- Separate opt-in from the daily reminder, default off: a Sunday/Wednesday
+  -- nudge about the coming fast. Collected at registration; the cron that acts
+  -- on it lands with the rest of the pre-pivot task list.
+  fasting_reminder_enabled INTEGER NOT NULL DEFAULT 0,
+  fasting_reminder_time TEXT NOT NULL DEFAULT '20:00',
   -- IANA name (e.g. "Asia/Hong_Kong"), detected client-side in the Mini App
   -- (Intl.DateTimeFormat().resolvedOptions().timeZone). NULL until the user
   -- opens the Mini App at least once — reminders fall back to config.timezone.
@@ -103,14 +108,31 @@ CREATE INDEX IF NOT EXISTS idx_habit_logs_habit_id ON habit_logs(habit_id);
 CREATE INDEX IF NOT EXISTS idx_habit_logs_room_id ON habit_logs(room_id);
 CREATE INDEX IF NOT EXISTS idx_habit_logs_log_date ON habit_logs(log_date);
 
-/** In-progress /start signup — survives Railway redeploys; deleted on finalize. */
+/**
+ * In-progress /start signup — survives Railway redeploys; deleted on finalize.
+ * Holds the answers of both registration branches (PRD §2): the admin one fills
+ * room_name/categories_enabled and creates its room at the end, the participant
+ * one resolves room_id from a password up front and joins that room.
+ */
 CREATE TABLE IF NOT EXISTS pending_registrations (
   telegram_id INTEGER PRIMARY KEY,
   step TEXT NOT NULL,
+  -- Which branch this signup is on. NULL only at the very first step, before
+  -- the admin-or-participant question is answered.
+  role TEXT CHECK (role IS NULL OR role IN ('admin','participant')),
   real_name TEXT,
   nickname TEXT,
+  -- Admin branch only: the room to create at finalize.
+  room_name TEXT,
+  categories_enabled INTEGER,
+  -- Participant branch only: the room their password resolved to. Not a foreign
+  -- key on purpose — a pending row is disposable, and a room deleted mid-signup
+  -- should fail loudly at finalize rather than silently NULL this out.
+  room_id INTEGER,
   reminder_enabled INTEGER,
   reminder_time TEXT,
+  fasting_reminder_enabled INTEGER,
+  fasting_reminder_time TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
