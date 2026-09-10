@@ -5,6 +5,7 @@ import { escapeHtml } from "../api/broadcastFormatting.js";
 import {
   createUser,
   deletePendingRegistration,
+  getUserByTelegramId,
   isNicknameTaken,
   updatePendingRegistration,
 } from "../db/repository.js";
@@ -89,9 +90,35 @@ async function finalizeRegistration(ctx: MyContext, pending: PendingRegistration
     });
     deletePendingRegistration(telegramId);
   } catch (err) {
-    // Never let a DB failure here vanish silently into bot.catch() — the pending
-    // row is left in place (not deleted) so the user can simply retry.
-    console.error(`finalizeRegistration: failed to save user ${telegramId}:`, err);
+    // Never let a DB failure here vanish silently into bot.catch() — log the
+    // concrete SQL error plus a diagnostic snapshot of what's colliding, so a
+    // future occurrence is diagnosable from Railway logs alone.
+    const message = err instanceof Error ? err.message : String(err);
+    const code = (err as { code?: string })?.code;
+    console.error(
+      `finalizeRegistration: failed to save user ${telegramId} (nickname "${pending.nickname}"): ` +
+        `${message}${code ? ` [${code}]` : ""}\n` +
+        `  diagnostic: users row already exists for this telegram_id? ` +
+        `${getUserByTelegramId(telegramId) !== undefined}; ` +
+        `nickname "${pending.nickname}" taken by someone else? ${isNicknameTaken(pending.nickname)}`,
+      err
+    );
+
+    // The only UNIQUE constraint createUser's INSERT can hit is users.telegram_id
+    // — so if a row for this id exists now, the account was already created
+    // (by an earlier attempt, or some other path) and this "failure" just means
+    // we're out of sync with our own pending row. Reconcile instead of scaring
+    // an already-registered person with a generic error.
+    if (getUserByTelegramId(telegramId) !== undefined) {
+      deletePendingRegistration(telegramId);
+      await ctx.reply(
+        "Looks like you're already registered! Open the Mini App from the menu button (☰) to get started."
+      );
+      return;
+    }
+
+    // Pending row is deliberately left in place (not deleted) so the user can
+    // simply retry once whatever this was is resolved.
     await ctx.reply(
       "Something went wrong finishing your signup. Please try again — resend your last answer, " +
         "or contact an admin if this keeps happening."

@@ -168,10 +168,14 @@ describe("registration flow", () => {
     assert.match(last.text, /ali_2005/);
   });
 
-  it("logs and tells the user when saving the account fails, keeping the pending row for a retry", async () => {
+  it("reconciles instead of erroring when a users row already exists for this telegram_id " +
+    "(the only constraint createUser's INSERT can violate), logging the real SQL error either way",
+  async () => {
     const telegramId = makeTelegramId();
-    // Force createUser's INSERT to violate UNIQUE(telegram_id), simulating any
-    // unexpected DB-layer failure at the exact point finalizeRegistration writes.
+    // A stale/pre-existing users row for this telegram_id — the exact condition
+    // reproduced for the live "Something went wrong finishing your signup" report
+    // (a users row survived from before this signup attempt, so createUser's
+    // INSERT hits UNIQUE(users.telegram_id) at finalize time).
     db.prepare("INSERT INTO users (telegram_id, nickname) VALUES (?, ?)").run(
       telegramId,
       "Collision"
@@ -194,12 +198,18 @@ describe("registration flow", () => {
       console.error = originalConsoleError;
     }
 
-    assert.ok(
-      errors.some((args) => String(args[0]).includes("finalizeRegistration")),
-      "expected the failure to be logged, not swallowed silently"
-    );
-    // Retry-able: the pending row must still be there, not deleted on failure.
-    assert.equal(getPendingRegistration(telegramId)?.step, "reminder_time");
-    assert.match(replies.at(-1)!.text, /went wrong|try again/i);
+    // The real SQL error and a diagnostic snapshot must be logged, not just
+    // "something failed" — this is what makes the next occurrence diagnosable.
+    const logged = errors.map((args) => args.map(String).join(" ")).join("\n");
+    assert.match(logged, /finalizeRegistration/);
+    assert.match(logged, /UNIQUE constraint failed: users\.telegram_id/);
+    assert.match(logged, /users row already exists for this telegram_id\? true/);
+    assert.match(logged, /nickname .* taken by someone else\? false/);
+
+    // Self-healing: the stale collision means the account already exists, so
+    // this isn't a scary failure — clean up the now-redundant pending row and
+    // tell the user plainly, instead of "something went wrong".
+    assert.equal(getPendingRegistration(telegramId), undefined);
+    assert.match(replies.at(-1)!.text, /already registered/i);
   });
 });
