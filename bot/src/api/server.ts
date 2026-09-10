@@ -6,7 +6,7 @@ import type { MyContext } from "../context.js";
 import { requireAdmin } from "./adminAuth.js";
 import { telegramAuth } from "./authMiddleware.js";
 import { registerRoute } from "./routes/register.js";
-import { listHabitsRoute, logHabitRoute } from "./routes/habits.js";
+import { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } from "./routes/habits.js";
 import { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } from "./routes/adminHabits.js";
 import { progressRoute } from "./routes/progress.js";
 import { leaderboardRoute } from "./routes/leaderboard.js";
@@ -38,6 +38,7 @@ export function createApiServer(bot: Bot<MyContext>) {
   app.post("/api/register", telegramAuth, registerRoute);
   app.get("/api/habits", telegramAuth, listHabitsRoute);
   app.post("/api/habits/:id/log", telegramAuth, logHabitRoute);
+  app.delete("/api/habits/:id/log", telegramAuth, deleteHabitLogRoute);
   app.get("/api/progress", telegramAuth, progressRoute);
   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
   app.get("/api/profile", telegramAuth, getProfileRoute);

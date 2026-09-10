@@ -12,9 +12,11 @@ const {
   createHabit,
   createUser,
   deactivateHabit,
+  deleteHabitLog,
   getHabitById,
   getHabitStreak,
   getJamaatTotal,
+  getUserHabitLogsForDate,
   getUserTotalPoints,
   listHabits,
   updateHabit,
@@ -134,6 +136,33 @@ describe("getHabitStreak", () => {
 
     assert.equal(getHabitStreak(userId, habit.id, "2026-08-14"), 3);
     assert.equal(getHabitStreak(userId, habit.id, "2026-08-15"), 0);
+  });
+});
+
+describe("deleteHabitLog", () => {
+  it("removes the row so the day drops out of the streak and today's totals", () => {
+    const userId = makeUser();
+    const habit = createHabit("Qiyam al-layl", "binary", 30);
+
+    upsertHabitLog(userId, habit.id, 1, "2026-08-12");
+    upsertHabitLog(userId, habit.id, 1, "2026-08-13");
+    upsertHabitLog(userId, habit.id, 1, "2026-08-14");
+    assert.equal(getHabitStreak(userId, habit.id, "2026-08-14"), 3);
+    assert.equal(getUserTotalPoints(userId), 90);
+
+    deleteHabitLog(userId, habit.id, "2026-08-14");
+
+    assert.equal(getHabitStreak(userId, habit.id, "2026-08-14"), 0);
+    assert.equal(getUserTotalPoints(userId), 60);
+    assert.equal(getUserHabitLogsForDate(userId, "2026-08-14").has(habit.id), false);
+  });
+
+  it("is a no-op when there is no log for that day", () => {
+    const userId = makeUser();
+    const habit = createHabit("Qiyam al-layl", "binary", 30);
+
+    assert.doesNotThrow(() => deleteHabitLog(userId, habit.id, "2026-08-14"));
+    assert.equal(getUserTotalPoints(userId), 0);
   });
 });
 
