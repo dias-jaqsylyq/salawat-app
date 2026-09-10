@@ -85,106 +85,140 @@ Authorization: tma <initData>
 ```
 Requests with a missing or invalid header get `401 { success: false, error: "missing_init_data" | "invalid_init_data" }`. This is the exact convention the `salawat-miniapp` frontend must use.
 
+**Everything below is room-scoped** (`api/roomScope.ts`). The client never passes a room identifier: each request is resolved to whatever room the caller is currently in, via `req.telegramId` → `users.current_room_id`. Two consequences worth stating explicitly:
+
+- A route that reads another row by id (a habit, a member) also checks that row belongs to the **same** room. `requireAdmin` only proves the caller is an admin of *their own* room, never of the room an id happens to point at. A habit or member of another room answers exactly like one that does not exist (`404 habit_not_found` / `participant_not_found`), so the API never confirms that some other room's id is real.
+- A registered user **between rooms** (`current_room_id IS NULL`, e.g. after leaving one) has nothing to scope to. Reads answer empty (`[]`, `room: null`, an empty leaderboard); writes answer `400 { success: false, error: "no_room" }`.
+
+The two `ADMIN_EXPORT_SECRET`-gated routes at the end are the deliberate exception — there is no calling Telegram user behind the secret, so they stay global.
+
 Unauthenticated:
 - **GET /health** → `200 { ok: true }` (for Railway / uptime checks)
 
 **POST /api/register** — disabled (signup is the bot `/start` conversation)
 → `403 { success: false, error: "register_via_bot" }`
 
-**POST /api/log** — body `{ count: number }`
-- `count`: integer, `1`…`10000` inclusive
-- Rate limits: 30 requests/minute/user and 50_000 salawat/calendar day (challenge `TIMEZONE`)
-→ `200 { success: true, newTotal: number, newTodayTotal: number }`
-→ `400 { success: false, error: "invalid_count" }`
-→ `403 { success: false, error: "not_registered" }`
-→ `429 { success: false, error: "rate_limited" }`
+**GET /api/habits** — active habits of the caller's room, for the logging screen
+→ `200 [{ id, name, type: "quantity" | "binary", pointsWeight, category }]`
+- `category` is echoed as stored; the client decides whether to group by it, from the room's `categoriesEnabled` (see `GET /api/progress`)
+- `200 []` for a caller between rooms
+
+**POST /api/habits/:id/log** — body `{ value?: number }`, upserts today's log
+- `quantity`: `value` is an integer `0`…`10000`. `binary`: omit `value` or send `1`
+- Always writes today's `TIMEZONE`-local `log_date`, so a log is only editable the same day — there is no way to reach a past day through this endpoint
+- Not cumulative: a second call the same day overwrites `value`/`points_earned` rather than adding
+- Points are computed from the habit's current weight and **frozen** on the row (`computePoints`), so a later weight change is never retroactive
+- Rate limit: 30 requests/minute/user
+→ `200 { success: true, habitId, value, points, logged: true }`
+→ `400 invalid_habit_id | no_room | habit_inactive | invalid_value`
+→ `403 not_registered` · `404 habit_not_found` · `429 rate_limited`
+
+**DELETE /api/habits/:id/log** — removes today's log, if any
+- Idempotent (no log today is still `200`), and allowed against a **deactivated** habit: it corrects an existing entry rather than logging new engagement
+→ `200 { success: true, habitId, logged: false }` · same error shapes as POST minus `habit_inactive`
 
 **GET /api/progress**
-→ `200 { registered: false, challengeStatus, challengeStartDate, challengeEndDate }` if not yet registered
-→ `200 { registered: true, nickname, total, todayTotal, dailyGoal, streak, last7Days, daysLeft, needsRealName, challengeStatus, challengeStartDate, challengeEndDate }`
-- `total`: all-time sum
-- `todayTotal` / `newTodayTotal`: salawat logged so far on the current calendar day in `TIMEZONE` (not UTC midnight)
-- `dailyGoal`: daily target (`users.goal`)
-- `streak`: consecutive TIMEZONE days (walking backward from today) where that day is effectively met. Today uses live logs only (overrides ignored). Past days use a per-day override when set, otherwise `total ≥ dailyGoal`. Streak does not extend before the user's registration day.
-- `last7Days`: array of 7 `{ date, total, metGoal, locked }` entries, oldest → newest, ending with today (`date` is `YYYY-MM-DD` in `TIMEZONE`). `total` is always from logs; `metGoal` for past days follows override when present. Days before the user's registration day have `locked: true` (not missed / not makeup-eligible).
-- `needsRealName`: `true` when `users.real_name` is null/empty (legacy users); the Mini App shows a one-time prompt. The name itself is never returned.
-- `challengeStatus`: `"not_started" | "active" | "ended"`
-
-**PUT /api/day-override** — body `{ date: string, met: boolean }`
-- Sets a per-day met/missed override for makeup (does **not** change logged salawat totals)
-- `date` must be a past day in the visible last-7 window (`today-6` … `today-1` in `TIMEZONE`); today, future, and days before registration are rejected
-- → `200 { success: true, streak, last7Days }`
-- → `400 { success: false, error: "invalid_date" | "invalid_met" | "date_not_editable" }`
-- → `403 { success: false, error: "not_registered" }`
+→ `200 { registered: false }` if not registered
+→ `200 { registered: true, nickname, room, totalPoints, today, streaks, needsRealName }`
+- `room`: `{ id, name, categoriesEnabled }` — the name the Mini App shows in its header and the room's category mode; `null` for a caller between rooms
+- `totalPoints`: all-time sum of `points_earned` **earned in this room**. A member who moved here from another room keeps their old logs but does not carry their old points in
+- `today`: `[{ habitId, logged, value, points }]` for each active habit of the room
+- `streaks`: `[{ habitId, streak }]` — consecutive `TIMEZONE` days ending today with a log row for that habit (`0` if today has none). Per habit, never combined
+- `needsRealName`: `true` when `users.real_name` is null/empty; the name itself is never returned
 
 **GET /api/leaderboard**
-→ `200 { jamaatTotal, leaderboard: [{ nickname, total, rank, isYou }] }`
-- `jamaatTotal`: active log sums plus contributions retained by users who reset without dropping from Jamaat; individual leaderboard rows show active personal totals only
-- `isYou`: `true` for the authenticated requester's row (for Mini App “(You)” highlighting) — Telegram ids are not exposed
+→ `200 { leaderboard: [{ nickname, totalPoints, rank, isYou }] }`
+- Only the caller's room: its current members, ranked by the points they earned in it
 - Competition ranks (ties share a rank: 1, 1, 3)
+- `isYou`: `true` for the requester's row — Telegram ids are not exposed
+- `{ leaderboard: [] }` for a caller between rooms
 
 **GET /api/profile**
-→ `200 { nickname, dailyGoal, reminderEnabled, reminderTime, fastingReminderEnabled, fastingReminderTime }`
-- `reminderTime`: effective `HH:mm` in challenge `TIMEZONE` (`users.reminder_time` if set, else global `REMINDER_TIME`)
-- `fastingReminderEnabled`: default `false` (opt-in)
-- `fastingReminderTime`: stored `HH:mm`, default `20:00`
-→ `403 { success: false, error: "not_registered" }`
-
-**PATCH /api/profile** — body (all fields optional; at least one required): `{ nickname?, dailyGoal?, reminderEnabled?, reminderTime?, realName?, fastingReminderEnabled?, fastingReminderTime? }`
-- Same nickname / daily-goal / real-name rules as register
-- `realName` is write-only (used by the one-time completion prompt); GET/PATCH responses never include it
-- Nickname and real name must differ case-insensitively (new or existing values)
-- `reminderEnabled`: boolean
-- `reminderTime`: `HH:mm` (24h), or `null` to clear override and use global `REMINDER_TIME`
-- `fastingReminderEnabled`: boolean
-- `fastingReminderTime`: required `HH:mm` when present (`null` rejected)
-- Rate limit: 5 requests/minute/user
-→ `200` same shape as GET
-→ `400 { success: false, error: "invalid_body" | "invalid_nickname" | "invalid_goal" | "invalid_real_name" | "nickname_matches_real_name" | "invalid_reminder_enabled" | "invalid_reminder_time" | "invalid_fasting_reminder_enabled" | "invalid_fasting_reminder_time" }`
-→ `403 { success: false, error: "not_registered" }`
-→ `409 { success: false, error: "nickname_taken" }`
-→ `429 { success: false, error: "rate_limited" }`
-
-**POST /api/reset-progress** — body `{ dropFromJamaat?: boolean }` (defaults `false`)
-- Deletes the authenticated user's logs and day-goal overrides; keeps nickname, goal, Telegram profile, and reminder settings
-- Starts a new personal progress epoch so pre-reset days are locked/not missed
-- `dropFromJamaat: false`: moves the current net total into a retained all-time Jamaat counter, keeping `jamaatTotal` unchanged
-- `dropFromJamaat: true`: clears active and previously retained contribution for that user
-- Retained contribution affects unfiltered all-time Jamaat total only; Mawlid filtered totals/CSV remain based on timestamped active logs
-→ `200 { success: true, dropFromJamaat, total: 0, deleted: { logs, dayGoalOverrides } }`
-→ `400 invalid_drop_from_jamaat`
+→ `200 { nickname, realName, reminderEnabled, reminderTime, timezone, room }`
+- Self-scoped, so `realName` is the caller's own; public and other-user surfaces still hide it
+- `reminderTime`: effective `HH:mm` (`users.reminder_time` if valid, else global `REMINDER_TIME`)
+- `timezone`: IANA name detected in the Mini App, or `null` (reminders then fall back to `TIMEZONE`)
+- `room`: `{ id, name, categoriesEnabled }` or `null`
 → `403 not_registered`
 
-**Reminders:** a minute cron in `TIMEZONE` messages each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm`. Global `REMINDER_TIME` is the default when `reminder_time` is null. Sends **independent of** `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` (before start and after end included). Turn reminders off in Settings to stop DMs. Overlapping ticks are skipped while a send is in flight. No catch-up if the process was down during a user’s minute.
+**PATCH /api/profile** — body (all optional; at least one required): `{ nickname?, reminderEnabled?, reminderTime?, realName?, timezone? }`
+- **Nickname uniqueness is per room**, not global: the check is scoped to the caller's room, so the same nickname can exist in two rooms at once. A caller between rooms is checked globally — there is no room to collide within yet
+- Nickname and real name must differ case-insensitively (new or existing values)
+- `reminderTime`: `HH:mm` (24h), or `null` to fall back to global `REMINDER_TIME`
+- `timezone`: IANA name, or `null` to clear
+- Rate limit: 5 requests/minute/user
+→ `200` same shape as GET
+→ `400 invalid_body | invalid_nickname | invalid_real_name | nickname_matches_real_name | invalid_reminder_enabled | invalid_reminder_time | invalid_timezone`
+→ `403 not_registered` · `409 nickname_taken` · `429 rate_limited`
 
-**Fasting reminders:** a separate minute cron (not shared with daily salawat reminders) DMs users with `fasting_reminder_enabled` on, only when the `TIMEZONE` weekday is Sunday or Wednesday and the user's `fasting_reminder_time` matches the current `HH:mm` (default `20:00`). Sunday copy frames Monday's fast; Wednesday copy frames Thursday's. The hadith rotates deterministically across three texts so consecutive fire days do not repeat. Opt-in (default off). Same no-catch-up / overlapping-tick rules.
+**POST /api/room/leave** — leave the room you are currently in
+- **Non-destructive**, unlike a kick: habit logs stay in the database; membership and co-admin status are dropped. Afterwards the user has no room (reminders pause) until they join another one with its password, which happens in the bot
+- Refused for a room's **last admin** — promote someone else first
+→ `200 { success: true, leftRoomId }`
+→ `400 no_room` · `403 not_registered` · `409 last_admin`
+
+**Reminders:** a minute cron in `TIMEZONE` DMs each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm` in **their own** timezone (`users.timezone`, falling back to `TIMEZONE`). The message lists the active habits of **their current room** they have not logged today; users with no current room are skipped entirely. Overlapping ticks are skipped while a send is in flight, and there is no catch-up if the process was down during a user's minute. The separate opt-in fasting reminder is stored at signup but its cron is not built yet.
 
 **GET /api/is-admin**
-→ `200 { isAdmin: boolean }` based on whether the authenticated Telegram id is an admin (owner or co-admin) **of the room they are currently in**. A user with no current room is never an admin.
+→ `200 { isAdmin: boolean }` — whether the authenticated Telegram id is an admin (owner or co-admin) **of the room they are currently in**. A user with no current room is never an admin.
 
-The following Mini App admin routes require an authenticated Telegram id with room-scoped admin status:
+### Admin routes
 
-- **GET /api/admin/stats** → `{ participantCount, mawlidStartDate, mawlidEndDate }`
-- **GET /api/admin/leaderboard?period=all|mawlid** → live ranked totals `{ rank, nickname, realName, total }` for all logs or only the configured Mawlid period
-- **GET /api/admin/export-csv?period=all|mawlid** → authenticated CSV download for the selected result period
+All of the following require an authenticated Telegram id with admin status **in their own current room**, and act on that room only.
+
+- **GET /api/admin/stats** → `{ participantCount }` — members of the caller's room
+- **GET /api/admin/room** → `{ id, name, categoriesEnabled, password, inviteLink, participantCount }`
+  - The password and its `t.me/<bot>?start=<password>` link are **admin-only** — they are absent from every participant-facing response. `inviteLink` is `null` until the bot knows its own username
+- **PATCH /api/admin/room** — body `{ categoriesEnabled: boolean }`
+  - Toggleable at any time, not only at room creation. Stored habit categories are left alone in **both** directions: switching off preserves them, switching back on does not silently resurrect them — the admin re-confirms each habit through `PATCH /api/admin/habits/:id`
+  - → `400 invalid_categories_enabled`
+- **POST /api/admin/room/password** — body `{ password? }`
+  - With a password: the admin's own choice (6–64 chars of `A-Za-z0-9_-`, case-sensitive). Without: a generated replacement, retried on a UNIQUE collision. Retyping the room's current password is a no-op `200`
+  - Only blocks **future** joins — everyone already in the room keeps their membership, no re-verification
+  - → `400 invalid_password` · `409 password_taken` (another room already answers to it; which room is never revealed)
+- **GET /api/admin/habits** → every habit of the caller's room, including inactive ones, as `{ id, name, type, pointsWeight, category, isActive, createdAt, updatedAt }`
+- **POST /api/admin/habits** — body `{ name, type, pointsWeight, category? }`
+- **PATCH /api/admin/habits/:id** — body `{ name?, pointsWeight?, isActive?, category? }`; non-destructive and reversible, so no YES-confirm
+  - `category` follows the room's mode (the application-layer half of the invariant): required and one of `IQ`/`SQ`/`PQ`/`EQ` when the room has categories enabled, rejected when it does not
+  - → `400 invalid_name | invalid_type | invalid_points_weight | invalid_is_active | invalid_body | category_required | invalid_category | category_not_allowed` · `404 habit_not_found`
+- **GET /api/admin/leaderboard** → `{ leaderboard: [{ rank, nickname, realName, telegramId, totalPoints, isRoomAdmin, isYou }] }`
+  - The caller's room only. Adds `realName`/`telegramId` for moderation beyond the public leaderboard, and `isRoomAdmin` because this screen is also where co-admins are promoted, demoted and kicked
+- **POST /api/admin/participants/:telegramId/admin** — promote a member to co-admin; idempotent
+- **DELETE /api/admin/participants/:telegramId/admin** — demote a co-admin (or the owner) back to plain participant
+  - Co-admins are flat and equal: **any** of them may promote or demote **any** other, the room's original owner included. Demoting yourself is allowed
+  - **Last-admin protection**: refused when it would leave the room with zero admins. The count and the delete run in one transaction, so two co-admins demoting each other at the same moment cannot both succeed
+  - → `409 last_admin`
+- **DELETE /api/admin/participants/:telegramId** — kick a member out of the room
+  - **Destructive**, unlike a voluntary leave: every log they earned **in this room** is deleted, so a later rejoin starts from zero. Logs they earned in other rooms are untouched
+  - The kicked member gets a bot DM. A failed DM is logged and does not undo the kick or fail the request
+  - Not a ban — they can rejoin with the correct password
+  - → `400 cannot_kick_self` (leaving is `POST /api/room/leave`) · `409 last_admin`
+- Promote/demote/kick all → `400 invalid_telegram_id` · `404 participant_not_found` (including for anyone who is not a current member of *your* room)
+- **GET /api/admin/export-csv** → CSV of the caller's room, filename `habit-tracker-<room-name>-<room-id>-<date>.csv`
+  - The room name is reduced to ASCII for the `Content-Disposition` header (which is latin1); a name with no ASCII left falls back to `room-<id>`
 - **POST /api/admin/broadcast** — JSON:
   - `{ type: "text", message }` supports non-nested `**bold**`, `*italic*`, `_italic_`
   - `{ type: "link", url, message? }` sends an optional caption plus previewable URL
   - `{ type: "file", fileUrl, message? }` sends an HTTPS document URL
 - **POST /api/admin/broadcast-file** — multipart `file` (PDF, max 20 MB) and optional `message`; held in memory and forwarded as Telegram documents without disk persistence
 
-Broadcast responses are `{ success, participantCount, sentCount, failedCount }`. Sends are sequential and error-tolerant: one failed DM does not stop later recipients. A concurrent request returns `409 broadcast_in_progress`.
+Broadcasts reach **the caller's own room only**, never another one. Responses are `{ success, participantCount, sentCount, failedCount }`. Sends are sequential and error-tolerant: one failed DM does not stop later recipients. The in-flight lock is **per room**, so a concurrent send into the *same* room returns `409 broadcast_in_progress` while another room's admin is unaffected.
 
-**GET /api/admin/export?key=…&period=all|mawlid** (or header `X-Admin-Key`) — CSV of `rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal`; defaults to all-time
+### Owner-only routes (not room-scoped)
+
+These two are authenticated by `ADMIN_EXPORT_SECRET` rather than Telegram `initData`. There is no calling user behind the secret and therefore no "own room" to scope to — cross-room visibility belongs to the app owner via direct access, not to any in-product admin.
+
+**GET /api/admin/export?key=…** (or header `X-Admin-Key`) — CSV of `rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total_points` across **every** room
 - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
-- Telegram profile name fields are stored from `initData.user` at registration and refreshed on later authenticated requests; existing users stay null until they open the app again
+- Telegram profile name fields are stored from `initData.user` at registration and refreshed on later authenticated requests
 → `401 unauthorized` if key wrong
 
-**POST /api/admin/reset?key=…** (or header `X-Admin-Key`) — wipe all users, logs, and day overrides so everyone re-registers
+**POST /api/admin/reset?key=…** (or header `X-Admin-Key`) — wipe **all** users and habit logs, across every room, so everyone re-registers. Habit definitions and rooms survive
 - Body: `{ "confirm": "RESET" }` (required)
 - Requires `ADMIN_EXPORT_SECRET`; otherwise `503 export_disabled`
-→ `200 { success: true, deleted: { dayGoalOverrides, logs, users } }`
+→ `200 { success: true, deleted: { habitLogs, users } }`
 → `400 confirm_required` / `401 unauthorized`
+
 
 ## Deploying (Railway)
 This already assumes the service is on Railway per the original setup. To make the API publicly reachable for the Mini App:

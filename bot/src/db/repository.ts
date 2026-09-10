@@ -46,8 +46,9 @@ export interface NicknameScope {
   /**
    * Restrict the collision check to one room. Nickname uniqueness is per-room,
    * not global — the same nickname may exist in two rooms (PRD §3a). Omitted
-   * means "across all rooms", which is what the pre-multi-room callers still do
-   * until the registration flow is rewritten (build step 2).
+   * means "across all rooms", which no room-scoped caller wants; it stays
+   * available for checks made before a room is known (a roomless user editing
+   * their profile).
    */
   roomId?: number;
 }
@@ -127,12 +128,43 @@ export function getRoomByPassword(password: string): Room | undefined {
 /**
  * Point the room at a new password. Only blocks *future* joins — everyone who
  * already joined keeps their membership, no re-verification (PRD §3a).
+ *
+ * Throws on the rooms.password UNIQUE constraint when the chosen password is
+ * already some other room's — see isRoomPasswordCollision.
  */
 export function updateRoomPassword(roomId: number, password: string): Room {
   db.prepare("UPDATE rooms SET password = ? WHERE id = ?").run(password, roomId);
   return getRoomById(roomId) ?? (() => {
     throw new Error(`updateRoomPassword: room ${roomId} not found`);
   })();
+}
+
+/**
+ * True for the one error a password write can legitimately produce: the chosen
+ * password is already in use by another room. UNIQUE on rooms.password — not
+ * the generator — is what guarantees a password resolves to exactly one room.
+ */
+export function isRoomPasswordCollision(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("UNIQUE constraint failed: rooms.password");
+}
+
+/**
+ * Swap the room's password for a fresh random one, retrying the (vanishingly
+ * unlikely) UNIQUE collision — same contract as room creation, since the admin
+ * asked for "a new one", not for any particular string.
+ */
+export function regenerateRoomPassword(roomId: number): Room {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return updateRoomPassword(roomId, generateRoomPassword());
+    } catch (err) {
+      if (!isRoomPasswordCollision(err) || attempt >= ROOM_PASSWORD_ATTEMPTS) throw err;
+      console.warn(
+        `regenerateRoomPassword: generated room password collided (attempt ${attempt}), retrying`
+      );
+    }
+  }
 }
 
 /**
@@ -209,6 +241,119 @@ export function countRoomAdmins(roomId: number): number {
     .prepare("SELECT COUNT(*) AS count FROM room_admins WHERE room_id = ?")
     .get(roomId) as { count: number };
   return row.count;
+}
+
+/**
+ * `demoted` is false either because the user was not an admin of that room at
+ * all, or because they were its last one — `lastAdmin` separates the two so the
+ * caller can answer 409 vs. a no-op 200.
+ */
+export interface DemoteRoomAdminResult {
+  demoted: boolean;
+  lastAdmin: boolean;
+}
+
+/**
+ * Demote a room admin back to plain participant, refusing to empty the room
+ * (last-admin protection, PRD §3a).
+ *
+ * The count and the delete run in one transaction on purpose: two co-admins
+ * demoting each other at the same moment must not both read "2 admins" and both
+ * delete. Prefer this over a bare removeRoomAdmin anywhere the room is meant to
+ * keep working afterwards.
+ */
+export function demoteRoomAdmin(roomId: number, userId: number): DemoteRoomAdminResult {
+  const demote = db.transaction((): DemoteRoomAdminResult => {
+    if (!isRoomAdmin(userId, roomId)) {
+      return { demoted: false, lastAdmin: false };
+    }
+    if (countRoomAdmins(roomId) <= 1) {
+      return { demoted: false, lastAdmin: true };
+    }
+    removeRoomAdmin(roomId, userId);
+    return { demoted: true, lastAdmin: false };
+  });
+  return demote();
+}
+
+export interface LeaveRoomResult {
+  left: boolean;
+  /** True when the leave was refused because they are the room's only admin. */
+  lastAdmin: boolean;
+  /** The room they left (or are still in, when refused); null if they had none. */
+  roomId: number | null;
+}
+
+/**
+ * A member leaving their room voluntarily (PRD §0/§3a): membership is detached,
+ * co-admin status is stripped, and their habit_logs are kept — a voluntary
+ * leave is not destructive, unlike a kick (kickUserFromRoom).
+ *
+ * Refused when they are the room's last admin: promote someone else first
+ * (PRD §3a). Checked inside the transaction for the same race reason as
+ * demoteRoomAdmin.
+ */
+export function leaveCurrentRoom(userId: number): LeaveRoomResult {
+  const leave = db.transaction((): LeaveRoomResult => {
+    const row = db.prepare("SELECT current_room_id FROM users WHERE id = ?").get(userId) as
+      | { current_room_id: number | null }
+      | undefined;
+    if (!row) {
+      throw new Error(`leaveCurrentRoom: user ${userId} not found`);
+    }
+    const roomId = row.current_room_id;
+    if (roomId === null) {
+      return { left: false, lastAdmin: false, roomId: null };
+    }
+    if (isRoomAdmin(userId, roomId) && countRoomAdmins(roomId) <= 1) {
+      return { left: false, lastAdmin: true, roomId };
+    }
+    setUserCurrentRoom(userId, null);
+    return { left: true, lastAdmin: false, roomId };
+  });
+  return leave();
+}
+
+export interface KickUserFromRoomResult {
+  kicked: boolean;
+  /** True when the kick was refused because the target is the room's only admin. */
+  lastAdmin: boolean;
+  habitLogsDeleted: number;
+  wasRoomAdmin: boolean;
+}
+
+/**
+ * Kick a member out of a room (PRD §3a). Destructive, unlike a voluntary leave:
+ * every habit_logs row they earned *in this room* is deleted, so a later rejoin
+ * with the same password starts from zero. Logs they earned in other rooms are
+ * untouched — that is what habit_logs.room_id is for.
+ *
+ * Refused for the room's last admin, so a kick can never leave a room
+ * admin-less; the caller separately blocks kicking yourself.
+ */
+export function kickUserFromRoom(userId: number, roomId: number): KickUserFromRoomResult {
+  const kick = db.transaction((): KickUserFromRoomResult => {
+    const row = db.prepare("SELECT current_room_id FROM users WHERE id = ?").get(userId) as
+      | { current_room_id: number | null }
+      | undefined;
+    if (!row || row.current_room_id !== roomId) {
+      return { kicked: false, lastAdmin: false, habitLogsDeleted: 0, wasRoomAdmin: false };
+    }
+
+    const wasRoomAdmin = isRoomAdmin(userId, roomId);
+    if (wasRoomAdmin && countRoomAdmins(roomId) <= 1) {
+      return { kicked: false, lastAdmin: true, habitLogsDeleted: 0, wasRoomAdmin };
+    }
+
+    const habitLogsDeleted = db
+      .prepare("DELETE FROM habit_logs WHERE user_id = ? AND room_id = ?")
+      .run(userId, roomId).changes;
+    // Also drops their room_admins row for this room.
+    setUserCurrentRoom(userId, null);
+
+    return { kicked: true, lastAdmin: false, habitLogsDeleted, wasRoomAdmin };
+  });
+  return kick();
 }
 
 /**
@@ -390,9 +535,7 @@ export function createAdminWithRoom(
       }
       return { user, room: created };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const isPasswordCollision = message.includes("UNIQUE constraint failed: rooms.password");
-      if (!isPasswordCollision || attempt >= ROOM_PASSWORD_ATTEMPTS) throw err;
+      if (!isRoomPasswordCollision(err) || attempt >= ROOM_PASSWORD_ATTEMPTS) throw err;
       console.warn(
         `createAdminWithRoom: generated room password collided (attempt ${attempt}), retrying`
       );
@@ -540,10 +683,13 @@ export function updateTelegramProfileIfRegistered(
 /**
  * Every user, or just one room's members.
  *
- * The room filter is optional throughout this file: passing a roomId gives the
- * room-scoped answer the multi-room product wants, omitting it keeps the
- * pre-multi-room global behaviour the API routes still rely on until they are
- * re-scoped (build step 3).
+ * The room filter is optional throughout this file. Every Mini App route passes
+ * a roomId — a request is only ever about the caller's own room (PRD §3). The
+ * roomId-less form is for the two callers that legitimately span rooms: the
+ * reminder cron (which walks every room's members) and the owner-only,
+ * secret-gated export/reset routes, which have no calling user and therefore no
+ * room to scope to (PRD §3a — cross-room visibility is a DB-access affair, not
+ * a product feature).
  */
 export function getAllUsers(roomId?: number): User[] {
   if (roomId === undefined) {
@@ -614,8 +760,11 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
  * Delete all habit logs and users so participants must re-register. Habit
  * definitions are untouched.
  *
- * Still global, across every room: POST /api/admin/reset is re-scoped to the
- * caller's own room together with the rest of the API (build step 3).
+ * Global, across every room, by design: its only caller is POST
+ * /api/admin/reset, which is authenticated by ADMIN_EXPORT_SECRET rather than
+ * Telegram initData. There is no calling user behind that secret and so no
+ * "own room" to scope to — it is the app owner's nuke, not an in-product admin
+ * action (PRD §3a).
  */
 export function resetAllChallengeData(): {
   habitLogs: number;

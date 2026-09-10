@@ -19,7 +19,7 @@ import {
   isNicknameTaken,
   updatePendingRegistration,
 } from "../db/repository.js";
-import { isValidRoomPassword } from "../utils/roomPassword.js";
+import { isValidRoomPassword, roomInviteLink } from "../utils/roomPassword.js";
 import type { MyContext } from "../context.js";
 import type {
   PendingRegistration,
@@ -165,16 +165,6 @@ function botUsername(ctx: MyContext): string | null {
   } catch {
     return null;
   }
-}
-
-/**
- * A room's Telegram deep link (PRD §3a): following it pre-fills the password
- * and drops a brand-new user straight into this room's signup. Room passwords
- * are restricted to Telegram's start-payload charset (see roomPassword.ts), so
- * no escaping is needed here.
- */
-export function roomInviteLink(botUsername: string, password: string): string {
-  return `https://t.me/${botUsername}?start=${password}`;
 }
 
 /** Reminder answers as stored on a finished pending row. */

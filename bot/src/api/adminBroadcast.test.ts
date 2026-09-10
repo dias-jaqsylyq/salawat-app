@@ -16,7 +16,7 @@ const {
   adminMarkdownToTelegramHtml,
   validHttpUrl,
 } = await import("./broadcastFormatting.js");
-const { broadcastUsers } = await import("./broadcastService.js");
+const { broadcastToRoom, broadcastUsers } = await import("./broadcastService.js");
 const {
   createPdfSender,
   hasPdfSignature,
@@ -137,6 +137,65 @@ describe("error-tolerant broadcast loop", () => {
     } finally {
       console.error = previousError;
     }
+  });
+});
+
+describe("room-scoped broadcast", () => {
+  it("reaches the caller's own room only (PRD §3a)", async () => {
+    const mineOwner = createUser(999000010, "mine-broadcast-owner");
+    const mine = createRoom("Mine", "mine-broadcast-pass", mineOwner.id);
+    setUserCurrentRoom(mineOwner.id, mine.id);
+    const mineMember = createUser(999000011, "mine-broadcast-member");
+    setUserCurrentRoom(mineMember.id, mine.id);
+
+    const theirsOwner = createUser(999000012, "theirs-broadcast-owner");
+    const theirs = createRoom("Theirs", "theirs-broadcast-pass", theirsOwner.id);
+    setUserCurrentRoom(theirsOwner.id, theirs.id);
+
+    const reached: number[] = [];
+    const result = await broadcastToRoom(mine.id, async (recipient) => {
+      reached.push(recipient.telegram_id);
+    });
+
+    assert.deepEqual(reached.sort(), [999000010, 999000011]);
+    assert.equal(result.participantCount, 2);
+    assert.equal(result.sentCount, 2);
+  });
+
+  it("locks per room, so one room's send never blocks another's", async () => {
+    const firstOwner = createUser(999000020, "lock-owner-a");
+    const first = createRoom("Lock A", "lock-a-pass", firstOwner.id);
+    setUserCurrentRoom(firstOwner.id, first.id);
+
+    const secondOwner = createUser(999000021, "lock-owner-b");
+    const second = createRoom("Lock B", "lock-b-pass", secondOwner.id);
+    setUserCurrentRoom(secondOwner.id, second.id);
+
+    let release: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const slow = broadcastToRoom(first.id, async () => {
+      await blocked;
+    });
+
+    // The other room goes through while the first is still in flight...
+    const other = await broadcastToRoom(second.id, async () => {});
+    assert.equal(other.sentCount, 1);
+
+    // ...but a second send into the same room is refused.
+    await assert.rejects(
+      broadcastToRoom(first.id, async () => {}),
+      (err: Error) => err.message === "broadcast_in_progress"
+    );
+
+    release();
+    await slow;
+
+    // The lock is released once it finishes.
+    const after = await broadcastToRoom(first.id, async () => {});
+    assert.equal(after.sentCount, 1);
   });
 });
 

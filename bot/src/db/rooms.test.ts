@@ -11,6 +11,7 @@ const {
   createHabit,
   createRoom,
   createUser,
+  demoteRoomAdmin,
   getExportRows,
   getHabitById,
   getLeaderboard,
@@ -21,8 +22,11 @@ const {
   getUsersWithRemindersEnabled,
   isNicknameTaken,
   isRoomAdmin,
+  kickUserFromRoom,
+  leaveCurrentRoom,
   listHabits,
   listRoomAdminUserIds,
+  regenerateRoomPassword,
   removeRoomAdmin,
   setRoomCategoriesEnabled,
   setUserCurrentRoom,
@@ -318,5 +322,114 @@ describe("membership", () => {
     });
     assert.equal(admin.role, "admin");
     assert.equal(admin.current_room_id, null);
+  });
+});
+
+describe("demoteRoomAdmin", () => {
+  it("demotes a co-admin but refuses to empty the room", () => {
+    const { room, owner } = makeRoom("Demote room", "demote-room-pass");
+    const coAdmin = makeUser();
+    setUserCurrentRoom(coAdmin.id, room.id);
+    addRoomAdmin(room.id, coAdmin.id);
+
+    assert.deepEqual(demoteRoomAdmin(room.id, coAdmin.id), { demoted: true, lastAdmin: false });
+    assert.equal(isRoomAdmin(coAdmin.id, room.id), false);
+
+    // The owner is now the only admin left, so the room refuses to lose them —
+    // promote someone else first (PRD §3a).
+    assert.deepEqual(demoteRoomAdmin(room.id, owner.id), { demoted: false, lastAdmin: true });
+    assert.equal(countRoomAdmins(room.id), 1);
+  });
+
+  it("reports a plain participant as neither demoted nor the last admin", () => {
+    const { room } = makeRoom("Plain demote room", "plain-demote-pass");
+    const member = makeUser();
+    setUserCurrentRoom(member.id, room.id);
+
+    assert.deepEqual(demoteRoomAdmin(room.id, member.id), { demoted: false, lastAdmin: false });
+  });
+});
+
+describe("leaveCurrentRoom", () => {
+  it("detaches membership and co-admin status while keeping the logs", () => {
+    const { room, owner } = makeRoom("Leave room", "leave-room-pass");
+    const coAdmin = makeUser();
+    setUserCurrentRoom(coAdmin.id, room.id);
+    addRoomAdmin(room.id, coAdmin.id);
+    const habit = createHabit(room.id, "Leave habit", "quantity", 3);
+    upsertHabitLog(coAdmin.id, habit.id, 4, "2026-09-10");
+
+    const result = leaveCurrentRoom(coAdmin.id);
+    assert.deepEqual(result, { left: true, lastAdmin: false, roomId: room.id });
+    assert.equal(getUserByTelegramId(coAdmin.telegram_id)?.current_room_id, null);
+    assert.equal(isRoomAdmin(coAdmin.id, room.id), false);
+    // A voluntary leave deletes nothing (PRD §1).
+    assert.equal(getUserTotalPoints(coAdmin.id, room.id), 12);
+
+    assert.deepEqual(leaveCurrentRoom(owner.id), {
+      left: false,
+      lastAdmin: true,
+      roomId: room.id,
+    });
+  });
+
+  it("reports no room for someone already between rooms", () => {
+    const stray = makeUser();
+    assert.deepEqual(leaveCurrentRoom(stray.id), { left: false, lastAdmin: false, roomId: null });
+  });
+});
+
+describe("kickUserFromRoom", () => {
+  it("deletes this room's logs only, and never the room's last admin", () => {
+    const first = makeRoom("Kick room", "kick-room-pass");
+    const second = makeRoom("Other kick room", "other-kick-room-pass");
+    const wanderer = makeUser();
+
+    const firstHabit = createHabit(first.room.id, "First habit", "quantity", 2);
+    setUserCurrentRoom(wanderer.id, first.room.id);
+    upsertHabitLog(wanderer.id, firstHabit.id, 5, "2026-09-10");
+
+    const secondHabit = createHabit(second.room.id, "Second habit", "quantity", 3);
+    setUserCurrentRoom(wanderer.id, second.room.id);
+    upsertHabitLog(wanderer.id, secondHabit.id, 5, "2026-09-10");
+
+    const result = kickUserFromRoom(wanderer.id, second.room.id);
+    assert.equal(result.kicked, true);
+    assert.equal(result.habitLogsDeleted, 1);
+    assert.equal(getUserByTelegramId(wanderer.telegram_id)?.current_room_id, null);
+    assert.equal(getUserTotalPoints(wanderer.id, second.room.id), 0);
+    // The room they were kicked from is the only one that loses anything.
+    assert.equal(getUserTotalPoints(wanderer.id, first.room.id), 10);
+
+    assert.deepEqual(kickUserFromRoom(second.owner.id, second.room.id), {
+      kicked: false,
+      lastAdmin: true,
+      habitLogsDeleted: 0,
+      wasRoomAdmin: true,
+    });
+  });
+
+  it("does nothing to someone who is not in that room", () => {
+    const { room } = makeRoom("Bystander room", "bystander-room-pass");
+    const outsider = makeUser();
+
+    assert.deepEqual(kickUserFromRoom(outsider.id, room.id), {
+      kicked: false,
+      lastAdmin: false,
+      habitLogsDeleted: 0,
+      wasRoomAdmin: false,
+    });
+  });
+});
+
+describe("regenerateRoomPassword", () => {
+  it("swaps the password without touching membership", () => {
+    const { room, owner } = makeRoom("Regen repo room", "regen-repo-pass");
+
+    const updated = regenerateRoomPassword(room.id);
+    assert.notEqual(updated.password, "regen-repo-pass");
+    assert.equal(getRoomByPassword("regen-repo-pass"), undefined);
+    assert.equal(getRoomByPassword(updated.password)?.id, room.id);
+    assert.equal(getUserByTelegramId(owner.telegram_id)?.current_room_id, room.id);
   });
 });

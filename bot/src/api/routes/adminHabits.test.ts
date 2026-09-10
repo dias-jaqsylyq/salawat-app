@@ -46,9 +46,9 @@ function capture(): { res: Response; status: () => number; body: () => any } {
   return { res, status: () => status, body: () => body };
 }
 
-function callList(): { status: number; body: any } {
+function callList(telegramId: number = ADMIN_TELEGRAM_ID): { status: number; body: any } {
   const result = capture();
-  listAdminHabitsRoute({} as unknown as Request, result.res);
+  listAdminHabitsRoute({ telegramId } as unknown as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -61,9 +61,16 @@ function callCreate(
   return { status: result.status(), body: result.body() };
 }
 
-function callPatch(id: number | string, body: unknown): { status: number; body: any } {
+function callPatch(
+  id: number | string,
+  body: unknown,
+  telegramId: number = ADMIN_TELEGRAM_ID
+): { status: number; body: any } {
   const result = capture();
-  patchHabitRoute({ params: { id: String(id) }, body } as unknown as Request, result.res);
+  patchHabitRoute(
+    { params: { id: String(id) }, body, telegramId } as unknown as Request,
+    result.res
+  );
   return { status: result.status(), body: result.body() };
 }
 
