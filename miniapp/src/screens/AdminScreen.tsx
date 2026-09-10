@@ -1,21 +1,23 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  BarChart3,
   FileText,
   Link as LinkIcon,
   ListChecks,
   Megaphone,
   MessageSquareText,
+  Settings2,
+  Trophy,
   Users,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import {
   broadcastAdminContent,
   broadcastAdminPdf,
+  getAdminRoom,
   getAdminStats,
 } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { AdminBroadcastResponse } from "../api/types.ts";
+import type { AdminBroadcastResponse, AdminRoomResponse } from "../api/types.ts";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,9 +32,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import AdminResults from "../components/AdminResults.tsx";
 import AdminHabits from "../components/AdminHabits.tsx";
+import AdminRoom from "../components/AdminRoom.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
-type AdminSection = "broadcasts" | "results" | "habits";
+type AdminSection = "broadcasts" | "leaderboard" | "habits" | "room";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MODES: {
@@ -47,6 +50,11 @@ const MODES: {
 
 interface Props {
   initData: string;
+  /**
+   * Called when an action here may have changed the caller's own admin status —
+   * demoting yourself is allowed (PRD §3a), and the Admin tab must then go away.
+   */
+  onAdminStatusChanged: () => void;
 }
 
 function validHttpUrl(value: string): boolean {
@@ -62,10 +70,13 @@ function fileSizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function AdminScreen({ initData }: Props) {
+export default function AdminScreen({ initData, onAdminStatusChanged }: Props) {
   const [section, setSection] = useState<AdminSection>("broadcasts");
   const [mode, setMode] = useState<AdminMode>("text");
   const [participantCount, setParticipantCount] = useState<number | null>(null);
+  const [room, setRoom] = useState<AdminRoomResponse | null>(null);
+  const [roomLoading, setRoomLoading] = useState(true);
+  const [roomError, setRoomError] = useState<string | null>(null);
   const [textMessage, setTextMessage] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkCaption, setLinkCaption] = useState("");
@@ -89,6 +100,32 @@ export default function AdminScreen({ initData }: Props) {
         if (!cancelled) {
           setError(messageForApiError(err, "Couldn't load participant count."));
         }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initData]);
+
+  // The room drives more than its own tab: the Habits tab needs
+  // categoriesEnabled to know whether a category is required, and the CSV
+  // export is named after the room.
+  useEffect(() => {
+    let cancelled = false;
+    setRoomLoading(true);
+    void getAdminRoom(initData)
+      .then((loaded) => {
+        if (!cancelled) {
+          setRoom(loaded);
+          setRoomError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setRoomError(messageForApiError(err, "Couldn't load this room."));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRoomLoading(false);
       });
     return () => {
       cancelled = true;
@@ -206,7 +243,8 @@ export default function AdminScreen({ initData }: Props) {
       <div className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin</h1>
         <p className="text-sm text-muted-foreground">
-          Broadcast updates and save live leaderboard results.
+          {room ? `Managing ${room.name}.` : "Managing your room."} Everything here applies to
+          this room only.
         </p>
       </div>
 
@@ -225,12 +263,13 @@ export default function AdminScreen({ initData }: Props) {
       <div
         role="tablist"
         aria-label="Admin section"
-        className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-1"
       >
         {([
-          { id: "broadcasts" as const, label: "Broadcasts", icon: Megaphone },
-          { id: "results" as const, label: "Results", icon: BarChart3 },
+          { id: "broadcasts" as const, label: "Posts", icon: Megaphone },
+          { id: "leaderboard" as const, label: "Board", icon: Trophy },
           { id: "habits" as const, label: "Habits", icon: ListChecks },
+          { id: "room" as const, label: "Room", icon: Settings2 },
         ]).map((item) => {
           const Icon = item.icon;
           const active = section === item.id;
@@ -242,7 +281,7 @@ export default function AdminScreen({ initData }: Props) {
               aria-selected={active}
               onClick={() => setSection(item.id)}
               className={cn(
-                "flex min-h-11 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
@@ -473,10 +512,28 @@ export default function AdminScreen({ initData }: Props) {
         </Card>
       </form>
         </>
-      ) : section === "results" ? (
-        <AdminResults initData={initData} />
+      ) : section === "leaderboard" ? (
+        <AdminResults
+          initData={initData}
+          roomName={room?.name ?? null}
+          onAdminStatusChanged={onAdminStatusChanged}
+        />
+      ) : section === "habits" ? (
+        <AdminHabits
+          initData={initData}
+          categoriesEnabled={room?.categoriesEnabled ?? false}
+        />
       ) : (
-        <AdminHabits initData={initData} />
+        <AdminRoom
+          initData={initData}
+          room={room}
+          loading={roomLoading}
+          error={roomError}
+          onRoomChanged={(updated) => {
+            setRoom(updated);
+            setParticipantCount(updated.participantCount);
+          }}
+        />
       )}
     </main>
   );

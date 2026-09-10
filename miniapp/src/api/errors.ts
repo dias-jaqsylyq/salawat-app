@@ -44,6 +44,28 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "Registration happens in the bot — send /start there.";
     case "not_admin":
       return "This account does not have admin access.";
+    case "no_room":
+      return "You're not in a room right now — join one in the bot first.";
+    case "last_admin":
+      return "You'd leave the room with no admins — promote someone else first.";
+    case "cannot_kick_self":
+      return "You can't kick yourself — use Leave room in Settings.";
+    case "participant_not_found":
+      return "That participant isn't in this room anymore.";
+    case "invalid_telegram_id":
+      return "That participant reference is invalid.";
+    case "invalid_password":
+      return "Password must be 6–64 characters, using letters, digits, - or _.";
+    case "password_taken":
+      return "That password is already in use — choose another.";
+    case "invalid_categories_enabled":
+      return "That categories setting is invalid.";
+    case "category_required":
+      return "Choose a category for this habit.";
+    case "category_not_allowed":
+      return "This room has categories turned off.";
+    case "invalid_category":
+      return "Choose one of IQ, SQ, PQ or EQ.";
     case "broadcast_in_progress":
       return "Another broadcast is still sending — wait for it to finish.";
     case "invalid_message":

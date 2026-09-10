@@ -4,6 +4,7 @@ import { getHabits, getIsAdmin, getProgress, patchProfile } from "./api/client.t
 import { messageForApiError } from "./api/errors.ts";
 import type { Habit, RegisteredProgress } from "./api/types.ts";
 import IncompleteRegistrationScreen from "./screens/IncompleteRegistrationScreen.tsx";
+import NoRoomScreen from "./screens/NoRoomScreen.tsx";
 import RealNamePromptScreen from "./screens/RealNamePromptScreen.tsx";
 import LogHabitsScreen from "./screens/LogHabitsScreen.tsx";
 import ProgressScreen from "./screens/ProgressScreen.tsx";
@@ -18,6 +19,8 @@ type LoadState =
   | { status: "error"; message: string }
   | { status: "needs-registration" }
   | { status: "needs-real-name"; progress: RegisteredProgress }
+  /** Registered, but between rooms — joining another one happens in the bot. */
+  | { status: "no-room"; progress: RegisteredProgress }
   | { status: "ready"; progress: RegisteredProgress };
 
 function Centered({ children }: { children: ReactNode }) {
@@ -68,6 +71,10 @@ export default function App() {
         setState({ status: "needs-real-name", progress: result });
         return;
       }
+      if (result.room === null) {
+        setState({ status: "no-room", progress: result });
+        return;
+      }
       setState({ status: "ready", progress: result });
     } catch (err) {
       setState({
@@ -99,8 +106,26 @@ export default function App() {
     void loadHabits();
   }, [available, loadHabits]);
 
+  // Admin status is room-scoped and is dropped the moment someone leaves for
+  // another room (PRD §3a), so it is re-resolved whenever the current room
+  // changes — not once per session. No room at all means no admin, with nothing
+  // to ask the server.
+  const currentRoomId =
+    state.status === "ready" || state.status === "no-room"
+      ? (state.progress.room?.id ?? null)
+      : null;
+
+  const refreshAdminStatus = useCallback(async () => {
+    try {
+      const result = await getIsAdmin(initData);
+      setIsAdmin(result.isAdmin);
+    } catch {
+      setIsAdmin(false);
+    }
+  }, [initData]);
+
   useEffect(() => {
-    if (!available) {
+    if (!available || currentRoomId === null) {
       setIsAdmin(false);
       return;
     }
@@ -116,7 +141,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [available, initData]);
+  }, [available, initData, currentRoomId]);
 
   useEffect(() => {
     if (!isAdmin && activeTab === "admin") setActiveTab("progress");
@@ -185,6 +210,18 @@ export default function App() {
     return <IncompleteRegistrationScreen />;
   }
 
+  if (state.status === "no-room") {
+    return (
+      <NoRoomScreen
+        nickname={state.progress.nickname}
+        onRefresh={() => {
+          void loadProgress();
+          void loadHabits();
+        }}
+      />
+    );
+  }
+
   if (state.status === "needs-real-name") {
     return (
       <RealNamePromptScreen
@@ -203,6 +240,10 @@ export default function App() {
             initData={initData}
             onBack={closeSettings}
             onSaved={() => void loadProgress()}
+            onLeftRoom={() => {
+              closeSettings();
+              void loadProgress();
+            }}
           />
         </div>
       ) : (
@@ -223,7 +264,12 @@ export default function App() {
             />
           )}
           {activeTab === "leaderboard" && <LeaderboardScreen initData={initData} />}
-          {activeTab === "admin" && isAdmin && <AdminScreen initData={initData} />}
+          {activeTab === "admin" && isAdmin && (
+            <AdminScreen
+              initData={initData}
+              onAdminStatusChanged={() => void refreshAdminStatus()}
+            />
+          )}
           <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
         </div>
       )}

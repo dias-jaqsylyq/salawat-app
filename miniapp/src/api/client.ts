@@ -3,12 +3,17 @@ import type {
   AdminBroadcastResponse,
   AdminHabit,
   AdminLeaderboardResponse,
+  AdminRoomResponse,
   AdminStatsResponse,
   AdminStatusResponse,
   Habit,
+  HabitCategory,
   HabitType,
+  KickParticipantResponse,
   LeaderboardResponse,
+  LeaveRoomResponse,
   LogHabitResponse,
+  ParticipantAdminResponse,
   ProfileResponse,
   ProfileUpdate,
   ProgressResponse,
@@ -102,6 +107,16 @@ export function patchProfile(initData: string, update: ProfileUpdate): Promise<P
   });
 }
 
+/**
+ * POST /api/room/leave — leave the current room. Non-destructive: habit logs
+ * stay in the database, membership and co-admin status are dropped. Refused
+ * with `last_admin` for a room's last admin (PRD §3a). Joining another room
+ * happens in the bot, with its password.
+ */
+export function leaveRoom(initData: string): Promise<LeaveRoomResponse> {
+  return request(initData, "/api/room/leave", { method: "POST" });
+}
+
 export function getIsAdmin(initData: string): Promise<AdminStatusResponse> {
   return request(initData, "/api/is-admin");
 }
@@ -114,9 +129,10 @@ export function getAdminHabits(initData: string): Promise<AdminHabit[]> {
   return request(initData, "/api/admin/habits");
 }
 
+/** `category` is required in a categories-enabled room and rejected in one without. */
 export function createHabit(
   initData: string,
-  habit: { name: string; type: HabitType; pointsWeight: number }
+  habit: { name: string; type: HabitType; pointsWeight: number; category?: HabitCategory }
 ): Promise<AdminHabit> {
   return request(initData, "/api/admin/habits", {
     method: "POST",
@@ -127,11 +143,76 @@ export function createHabit(
 export function patchHabit(
   initData: string,
   id: number,
-  patch: { name?: string; pointsWeight?: number; isActive?: boolean }
+  patch: { name?: string; pointsWeight?: number; isActive?: boolean; category?: HabitCategory }
 ): Promise<AdminHabit> {
   return request(initData, `/api/admin/habits/${id}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
+  });
+}
+
+/** GET /api/admin/room — the caller's own room, password and invite link included. */
+export function getAdminRoom(initData: string): Promise<AdminRoomResponse> {
+  return request(initData, "/api/admin/room");
+}
+
+/** PATCH /api/admin/room — turn habit categories on or off for the room. */
+export function patchAdminRoom(
+  initData: string,
+  update: { categoriesEnabled: boolean }
+): Promise<AdminRoomResponse> {
+  return request(initData, "/api/admin/room", {
+    method: "PATCH",
+    body: JSON.stringify(update),
+  });
+}
+
+/**
+ * POST /api/admin/room/password — set the room's join password. Pass one to
+ * choose it, omit it for a generated replacement. Either way only *future*
+ * joins are affected; current members keep their membership (PRD §3a).
+ */
+export function setRoomPassword(
+  initData: string,
+  password?: string
+): Promise<AdminRoomResponse> {
+  return request(initData, "/api/admin/room/password", {
+    method: "POST",
+    body: JSON.stringify(password === undefined ? {} : { password }),
+  });
+}
+
+/** POST /api/admin/participants/:telegramId/admin — promote to co-admin. Idempotent. */
+export function promoteParticipant(
+  initData: string,
+  telegramId: number
+): Promise<ParticipantAdminResponse> {
+  return request(initData, `/api/admin/participants/${telegramId}/admin`, {
+    method: "POST",
+  });
+}
+
+/** DELETE /api/admin/participants/:telegramId/admin — demote back to plain participant. */
+export function demoteParticipant(
+  initData: string,
+  telegramId: number
+): Promise<ParticipantAdminResponse> {
+  return request(initData, `/api/admin/participants/${telegramId}/admin`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * DELETE /api/admin/participants/:telegramId — kick a member out of the room.
+ * Destructive: their logs for this room are deleted and the bot DMs them. They
+ * may rejoin later with the password — a kick is not a ban (PRD §3a).
+ */
+export function kickParticipant(
+  initData: string,
+  telegramId: number
+): Promise<KickParticipantResponse> {
+  return request(initData, `/api/admin/participants/${telegramId}`, {
+    method: "DELETE",
   });
 }
 

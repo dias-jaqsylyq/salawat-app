@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { ChevronLeft } from "lucide-react";
-import { getProfile, patchProfile } from "../api/client.ts";
+import { ChevronLeft, DoorOpen, Users } from "lucide-react";
+import { getProfile, leaveRoom, patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
+import type { Room } from "../api/types.ts";
 import {
   NICKNAME_MATCHES_REAL_NAME_MESSAGE,
   REAL_NAME_MAX_LENGTH,
@@ -21,6 +22,8 @@ interface Props {
   onBack: () => void;
   /** Called after a successful save so the parent can refresh progress. */
   onSaved: () => void;
+  /** Called after leaving the room, so the parent can re-resolve the now-roomless state. */
+  onLeftRoom: () => void;
 }
 
 const CONFIRM_MS = 900;
@@ -46,14 +49,18 @@ export default function SettingsScreen({
   timezoneLabel = "Asia/Hong_Kong",
   onBack,
   onSaved,
+  onLeftRoom,
 }: Props) {
   const [nickname, setNickname] = useState("");
   const [realName, setRealName] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(true);
   const [reminderTime, setReminderTime] = useState("20:00");
+  const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,6 +74,7 @@ export default function SettingsScreen({
         setRealName(profile.realName ?? "");
         setReminderEnabled(profile.reminderEnabled);
         setReminderTime(profile.reminderTime);
+        setRoom(profile.room);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -80,6 +88,28 @@ export default function SettingsScreen({
       cancelled = true;
     };
   }, [initData]);
+
+  async function handleLeaveRoom() {
+    if (leaving || saving || !room) return;
+    const confirmed = window.confirm(
+      `Leave ${room.name}?\n\nYou'll stop appearing on its leaderboard and won't be able to log ` +
+        "habits until you join a room again with its password, in the bot."
+    );
+    if (!confirmed) return;
+
+    setLeaving(true);
+    setLeaveError(null);
+    try {
+      await leaveRoom(initData);
+      onLeftRoom();
+    } catch (err) {
+      // last_admin is the expected refusal here: a room may never be left
+      // without admins (PRD §3a).
+      setLeaveError(messageForApiError(err, "Couldn't leave the room — please try again."));
+    } finally {
+      setLeaving(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -191,6 +221,45 @@ export default function SettingsScreen({
                       Times use the server timezone ({timezoneLabel}).
                     </p>
                   </div>
+                </section>
+
+                <section className="space-y-4">
+                  <h3 className="text-sm font-semibold text-foreground">Room</h3>
+                  {room ? (
+                    <>
+                      <div className="flex items-center gap-3 rounded-lg bg-secondary/40 px-3 py-2.5">
+                        <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">{room.name}</p>
+                          <p className="text-xs text-muted-foreground">Your current room</p>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 w-full text-destructive hover:text-destructive"
+                        onClick={() => void handleLeaveRoom()}
+                        disabled={leaving || saving}
+                      >
+                        <DoorOpen className="h-4 w-4" />
+                        {leaving ? "Leaving…" : "Leave room"}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        Your logs are kept, but they stop counting here. Joining another room
+                        happens in the bot, with that room's password.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      You're not in a room. Send /start in the bot and enter a room password to
+                      join one.
+                    </p>
+                  )}
+                  {leaveError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {leaveError}
+                    </p>
+                  )}
                 </section>
               </>
             )}

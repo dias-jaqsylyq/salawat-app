@@ -3,6 +3,7 @@ import { Download, RefreshCw, Trophy } from "lucide-react";
 import { downloadAdminExport, getAdminLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminLeaderboardResponse } from "../api/types.ts";
+import AdminParticipantRow from "./AdminParticipantRow.tsx";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,9 +16,13 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
+  /** Names the CSV file after the room, so exports from several rooms stay apart. */
+  roomName: string | null;
+  /** Bubbled up when the caller demotes themselves — see AdminScreen. */
+  onAdminStatusChanged: () => void;
 }
 
-export default function AdminResults({ initData }: Props) {
+export default function AdminResults({ initData, roomName, onAdminStatusChanged }: Props) {
   const [data, setData] = useState<AdminLeaderboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -45,7 +50,12 @@ export default function AdminResults({ initData }: Props) {
     setError(null);
     try {
       const blob = await downloadAdminExport(initData);
-      const filename = `habit-tracker-leaderboard-${new Date().toISOString().slice(0, 10)}.csv`;
+      const slug = roomName
+        ? roomName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+        : "";
+      const filename = `habit-tracker-${slug ? `${slug}-` : ""}${new Date()
+        .toISOString()
+        .slice(0, 10)}.csv`;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -66,8 +76,10 @@ export default function AdminResults({ initData }: Props) {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1.5">
-            <CardTitle>Leaderboard Results</CardTitle>
-            <CardDescription>Live totals from the current database.</CardDescription>
+            <CardTitle>Leaderboard</CardTitle>
+            <CardDescription>
+              Live totals for this room. Promote co-admins or remove members from here.
+            </CardDescription>
           </div>
           <Button
             type="button"
@@ -96,25 +108,13 @@ export default function AdminResults({ initData }: Props) {
               </p>
             ) : (
               data.leaderboard.map((entry) => (
-                <div
-                  key={`${entry.rank}-${entry.nickname}`}
-                  className="flex items-center gap-3 px-3 py-2.5"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold tabular-nums text-secondary-foreground">
-                    {entry.rank}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">
-                      {entry.nickname}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {entry.realName?.trim() ? entry.realName : "—"}
-                    </span>
-                  </div>
-                  <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {entry.totalPoints.toLocaleString()}
-                  </span>
-                </div>
+                <AdminParticipantRow
+                  key={entry.telegramId}
+                  initData={initData}
+                  entry={entry}
+                  onChanged={() => void load()}
+                  onSelfDemoted={onAdminStatusChanged}
+                />
               ))
             )}
           </div>
