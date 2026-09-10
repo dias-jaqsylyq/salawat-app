@@ -1,114 +1,190 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, describe, it } from "node:test";
+import Database from "better-sqlite3";
 
+// A real file (not :memory:) so the pre-wipe snapshot path is exercised too.
+const dataDir = mkdtempSync(join(tmpdir(), "salawat-client-test-"));
 process.env.BOT_TOKEN ??= "client-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
-process.env.DB_PATH ??= ":memory:";
+process.env.DB_PATH = join(dataDir, "salawat.db");
 
-const { db, dropStaleUserColumns } = await import("./client.js");
-const { createHabit, createUser, getUserByTelegramId } = await import("./repository.js");
+const { db, resetForMultiRoom } = await import("./client.js");
+const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
+  await import("./repository.js");
 
-function columnNames(): string[] {
-  return (db.prepare("PRAGMA table_info(users)").all() as { name: string }[]).map((c) => c.name);
+after(() => {
+  db.close();
+  rmSync(dataDir, { recursive: true, force: true });
+});
+
+function tableNames(): string[] {
+  return (
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]
+  ).map((t) => t.name);
 }
 
-describe("dropStaleUserColumns", () => {
-  it(
-    "drops pre-pivot columns, keeps existing rows and FKs intact, and unblocks new registrations",
-    () => {
-      // Simulate a Railway volume created before the habits/habit_logs pivot
-      // (PIVOT_PLAN §1): the old users table carried these columns, including
-      // `goal` — see git show caf5693:bot/src/db/schema.sql. Using a DEFAULT
-      // here (unlike the real pre-pivot NOT NULL-with-no-default `goal`) is
-      // just to satisfy SQLite's ALTER TABLE ADD COLUMN restriction on an
-      // already-populated table — dropStaleUserColumns only keys off column
-      // *name*, so this doesn't weaken what's being verified.
-      db.exec(`
-        ALTER TABLE users ADD COLUMN goal INTEGER NOT NULL DEFAULT 500;
-        ALTER TABLE users ADD COLUMN fasting_reminder_enabled INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE users ADD COLUMN fasting_reminder_time TEXT NOT NULL DEFAULT '20:00';
-        ALTER TABLE users ADD COLUMN retained_jamaat_total INTEGER NOT NULL DEFAULT 0;
-        ALTER TABLE users ADD COLUMN progress_started_at TEXT;
-      `);
-      assert.ok(columnNames().includes("goal"));
+function columnNames(table: string): string[] {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+}
 
-      // A pre-existing registered user and a habit log referencing them, so we
-      // can confirm the migration doesn't disturb existing data or the FK.
-      const oldUser = createUser(500000001, "OldUser");
-      const habit = createHabit("Salawat count", "quantity", 1);
-      db.prepare(
-        "INSERT INTO habit_logs (user_id, habit_id, log_date, value, points_earned) VALUES (?, ?, ?, ?, ?)"
-      ).run(oldUser.id, habit.id, "2026-01-01", 10, 10);
+function snapshotFiles(): string[] {
+  return readdirSync(dataDir).filter((f) => f.startsWith("salawat.pre-multiroom-"));
+}
 
-      const dropped = dropStaleUserColumns();
-      assert.deepEqual(
-        [...dropped].sort(),
-        [
-          "fasting_reminder_time",
-          "fasting_reminder_enabled",
-          "goal",
-          "progress_started_at",
-          "retained_jamaat_total",
-        ].sort()
-      );
+/**
+ * Recreate the single-tenant schema this DB had before the multi-room pivot
+ * (see git show HEAD~1:bot/src/db/schema.sql) and put a registered user, a
+ * habit, a log and an admin row in it — the exact contents a Railway volume
+ * would carry into the migration.
+ */
+function seedPreMultiRoomDatabase(): void {
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    DROP TABLE IF EXISTS habit_logs;
+    DROP TABLE IF EXISTS habits;
+    DROP TABLE IF EXISTS room_admins;
+    DROP TABLE IF EXISTS pending_registrations;
+    DROP TABLE IF EXISTS users;
+    DROP TABLE IF EXISTS rooms;
 
-      for (const name of dropped) {
-        assert.ok(!columnNames().includes(name), `expected ${name} to be dropped`);
-      }
-
-      // Existing data survived, and the FK join into habit_logs still resolves.
-      assert.equal(getUserByTelegramId(500000001)?.nickname, "OldUser");
-      const joined = db
-        .prepare(
-          "SELECT u.nickname, hl.value FROM habit_logs hl JOIN users u ON u.id = hl.user_id WHERE u.telegram_id = ?"
-        )
-        .get(500000001) as { nickname: string; value: number };
-      assert.deepEqual(joined, { nickname: "OldUser", value: 10 });
-
-      // The exact reported case: a fresh registration that previously hit
-      // "NOT NULL constraint failed: users.goal" now succeeds.
-      createUser(7171181415, "Cr7");
-      assert.equal(getUserByTelegramId(7171181415)?.nickname, "Cr7");
-
-      // Idempotent: nothing left to drop on a second run.
-      assert.deepEqual(dropStaleUserColumns(), []);
-    }
-  );
-
-  it("rolls back cleanly if one of the five DROP COLUMNs fails partway through", () => {
-    // Re-add all five stale columns (the previous test already dropped them
-    // from this shared :memory: db).
-    db.exec(`
-      ALTER TABLE users ADD COLUMN goal INTEGER NOT NULL DEFAULT 500;
-      ALTER TABLE users ADD COLUMN fasting_reminder_enabled INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE users ADD COLUMN fasting_reminder_time TEXT NOT NULL DEFAULT '20:00';
-      ALTER TABLE users ADD COLUMN retained_jamaat_total INTEGER NOT NULL DEFAULT 0;
-      ALTER TABLE users ADD COLUMN progress_started_at TEXT;
-    `);
-    // Force the 3rd column in STALE_USER_COLUMNS order (fasting_reminder_time)
-    // to fail its DROP: SQLite refuses to drop a column that's still indexed.
-    // This is a real SQLite-enforced failure, not a mock.
-    db.exec("CREATE INDEX idx_client_test_frt ON users(fasting_reminder_time)");
-
-    assert.throws(
-      () => dropStaleUserColumns(),
-      /no such column: fasting_reminder_time/,
-      "expected the real SQLite DROP COLUMN failure to propagate, not be swallowed"
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id INTEGER NOT NULL UNIQUE,
+      nickname TEXT NOT NULL,
+      reminder_enabled INTEGER NOT NULL DEFAULT 1,
+      reminder_time TEXT NOT NULL DEFAULT '20:00',
+      timezone TEXT,
+      telegram_username TEXT,
+      telegram_first_name TEXT,
+      telegram_last_name TEXT,
+      real_name TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE habits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+      points_weight INTEGER NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE habit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      habit_id INTEGER NOT NULL REFERENCES habits(id),
+      log_date TEXT NOT NULL,
+      value INTEGER NOT NULL,
+      points_earned INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (user_id, habit_id, log_date)
+    );
+    CREATE TABLE pending_registrations (
+      telegram_id INTEGER PRIMARY KEY,
+      step TEXT NOT NULL,
+      real_name TEXT,
+      nickname TEXT,
+      reminder_enabled INTEGER,
+      reminder_time TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE admins (
+      telegram_id INTEGER PRIMARY KEY,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE pending_admin_actions (
+      admin_telegram_id INTEGER PRIMARY KEY,
+      action TEXT NOT NULL,
+      target_telegram_id INTEGER NOT NULL,
+      target_label TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    // db.transaction() rolls back the whole batch on throw: the first two
-    // columns that were dropped before the failure must be back too — never
-    // a half-migrated table.
-    for (const name of [
-      "goal",
-      "fasting_reminder_enabled",
-      "fasting_reminder_time",
-      "retained_jamaat_total",
-      "progress_started_at",
-    ]) {
-      assert.ok(columnNames().includes(name), `expected ${name} to survive the rollback`);
+    INSERT INTO users (telegram_id, nickname) VALUES (500000001, 'OldUser');
+    INSERT INTO habits (name, type, points_weight) VALUES ('Salawat count', 'quantity', 1);
+    INSERT INTO habit_logs (user_id, habit_id, log_date, value, points_earned)
+      VALUES (1, 1, '2026-01-01', 10, 10);
+    INSERT INTO admins (telegram_id) VALUES (500000001);
+    INSERT INTO pending_admin_actions (admin_telegram_id, action, target_telegram_id, target_label)
+      VALUES (500000001, 'delete_user', 500000002, 'someone');
+  `);
+  db.pragma("foreign_keys = ON");
+}
+
+describe("resetForMultiRoom", () => {
+  it("no-ops on a database that is already multi-room", () => {
+    const owner = createUser(500000009, "already-migrated");
+    const room = createRoom("Kept room", "kept-room-pass", owner.id);
+    setUserCurrentRoom(owner.id, room.id);
+
+    assert.equal(resetForMultiRoom(), false);
+    // Nothing was touched — the guard is what stops a redeploy wiping live data.
+    assert.equal(getUserByTelegramId(500000009)?.nickname, "already-migrated");
+    assert.equal(snapshotFiles().length, 0);
+  });
+
+  it("wipes a pre-multi-room database and recreates the room-scoped schema", () => {
+    seedPreMultiRoomDatabase();
+    assert.ok(tableNames().includes("admins"));
+    assert.ok(!columnNames("habits").includes("room_id"));
+
+    assert.equal(resetForMultiRoom(), true);
+
+    // Retired tables are gone, room-scoped ones exist with their new columns.
+    assert.ok(!tableNames().includes("admins"));
+    assert.ok(!tableNames().includes("pending_admin_actions"));
+    assert.ok(tableNames().includes("rooms"));
+    assert.ok(tableNames().includes("room_admins"));
+    assert.ok(columnNames("habits").includes("room_id"));
+    assert.ok(columnNames("habits").includes("category"));
+    assert.ok(columnNames("habit_logs").includes("room_id"));
+    assert.ok(columnNames("users").includes("current_room_id"));
+    assert.ok(columnNames("users").includes("role"));
+
+    // No data is migrated: the old competition is gone, not folded into a room.
+    for (const table of ["users", "habits", "habit_logs", "rooms", "room_admins"]) {
+      const { count } = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
+        count: number;
+      };
+      assert.equal(count, 0, `expected ${table} to be empty after the wipe`);
     }
 
-    db.exec("DROP INDEX idx_client_test_frt");
+    // The wiped data is still recoverable from the snapshot taken first.
+    const snapshots = snapshotFiles();
+    assert.equal(snapshots.length, 1);
+    const snapshot = new Database(join(dataDir, snapshots[0]!), { readonly: true });
+    try {
+      const old = snapshot.prepare("SELECT nickname FROM users WHERE telegram_id = ?").get(500000001) as
+        | { nickname: string }
+        | undefined;
+      assert.equal(old?.nickname, "OldUser");
+    } finally {
+      snapshot.close();
+    }
+  });
+
+  it("is idempotent, and the fresh schema is immediately usable", () => {
+    assert.equal(resetForMultiRoom(), false);
+
+    const owner = createUser(500000002, "NewOwner");
+    const room = createRoom("Fresh room", "fresh-room-pass", owner.id);
+    setUserCurrentRoom(owner.id, room.id);
+    const habit = createHabit(room.id, "Qur'an pages", "quantity", 2, "IQ");
+
+    assert.equal(habit.room_id, room.id);
+    assert.equal(habit.category, "IQ");
+    assert.equal(getUserByTelegramId(500000002)?.current_room_id, room.id);
+  });
+
+  it("also detects a pre-pivot database that has no admins table left", () => {
+    seedPreMultiRoomDatabase();
+    db.exec("DROP TABLE admins");
+    // habits.room_id is the second, independent marker.
+    assert.equal(resetForMultiRoom(), true);
+    assert.ok(columnNames("habits").includes("room_id"));
   });
 });

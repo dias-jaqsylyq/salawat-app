@@ -1,7 +1,52 @@
+/** Room-scoped habit category — only used while the room has categories enabled. */
+export type HabitCategory = "IQ" | "SQ" | "PQ" | "EQ";
+
+export const HABIT_CATEGORIES: readonly HabitCategory[] = ["IQ", "SQ", "PQ", "EQ"] as const;
+
+/** Chosen once at registration and never re-selectable (MULTI ROOM PRD §0). */
+export type UserRole = "admin" | "participant";
+
+/**
+ * One independent competition. Rooms are isolated by room_id inside this one
+ * database — never separate bot instances (MULTI ROOM PRD §0).
+ */
+export interface Room {
+  id: number;
+  /** Free text, not unique across rooms — only id disambiguates them. */
+  name: string;
+  /**
+   * Plain text, case-sensitive room invite code. Stored readable because the
+   * admin must be able to show and re-share it (PRD §3, §3a).
+   */
+  password: string;
+  /** SQLite 0/1; default 0. When 1, every habit here carries a HabitCategory. */
+  categories_enabled: number;
+  /**
+   * Who originally created the room. Historical record only — it grants no
+   * power over co-admins (PRD §3a). NULL if that user was deleted.
+   */
+  owner_user_id: number | null;
+  created_at: string;
+}
+
+/** Room-scoped admin status (owner + co-admins, all equal) — replaces the retired global `admins` table. */
+export interface RoomAdmin {
+  room_id: number;
+  user_id: number;
+  created_at: string;
+}
+
 export interface User {
   id: number;
   telegram_id: number;
   nickname: string;
+  /** 'admin' users are also ordinary participants of the room they created. */
+  role: UserRole;
+  /**
+   * At most one room at a time. NULL only between leaving one room and joining
+   * the next — reminders pause while it is NULL (PRD §3a).
+   */
+  current_room_id: number | null;
   /** SQLite 0/1; default 1 (reminders on). */
   reminder_enabled: number;
   /** HH:mm in TIMEZONE; default '20:00'. */
@@ -51,23 +96,20 @@ export interface PendingRegistration {
   updated_at: string;
 }
 
-export type AdminActionType = "delete_user" | "make_admin";
-
-export interface PendingAdminAction {
-  admin_telegram_id: number;
-  action: AdminActionType;
-  target_telegram_id: number;
-  target_label: string;
-  created_at: string;
-}
-
 export type HabitType = "quantity" | "binary";
 
 export interface Habit {
   id: number;
+  room_id: number;
   name: string;
   type: HabitType;
   points_weight: number;
+  /**
+   * NULL in a room with categories disabled. Preserved (not cleared) when a room
+   * turns categories off, but a re-enable asks the admin to re-confirm rather
+   * than silently reusing it (PRD §0).
+   */
+  category: HabitCategory | null;
   /** SQLite 0/1; default 1 (active). */
   is_active: number;
   created_at: string;
@@ -78,6 +120,8 @@ export interface HabitLog {
   id: number;
   user_id: number;
   habit_id: number;
+  /** Denormalized from the habit at write time — see schema.sql. */
+  room_id: number;
   /** TIMEZONE-local day, 'YYYY-MM-DD'. */
   log_date: string;
   /** quantity: entered number; binary: 1. */

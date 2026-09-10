@@ -9,6 +9,21 @@ One Node process runs two things side by side:
 
 Both share the same SQLite database (`db/repository.ts`) and challenge-date logic (`utils/challenge.ts`).
 
+## Data model (rooms)
+
+One bot serves many independent **rooms** (competitions). Rooms are isolated by `room_id` inside this single database, not by separate bot instances. Full spec: `MULTI ROOM PRD.md`; the schema itself is `src/db/schema.sql`.
+
+- **`rooms`** — `name` (free text, **not** unique), `password`, `categories_enabled`, `owner_user_id`, `created_at`.
+  - The password is stored **in plain text** on purpose: an admin has to be able to read it back to share it, and it is embedded in a `t.me/<bot>?start=<password>` deep link. It is a room invite code, not a personal secret. Comparison is **case-sensitive** (`ABC` ≠ `abc`) and the column is `UNIQUE`, so one password resolves to exactly one room.
+  - Format (`utils/roomPassword.ts`): 6–64 characters from `A-Za-z0-9_-`, either admin-typed or generated. The charset is Telegram's start-payload limit — anything outside it would produce a share deep link that silently drops the password.
+  - `owner_user_id` is historical record-keeping ("who created this") and grants no power — co-admins are fully equal and may demote the owner.
+- **`room_admins`** (`room_id`, `user_id`) — the room's owner and every co-admin, flat and equal. This **replaces the old global `admins` table**. Status is per room, so it is dropped the moment a user leaves for another room, and last-admin protection is a `COUNT(*)` over one `room_id`.
+- **`users`** — gain `role` (`admin` | `participant`, chosen once at registration) and `current_room_id` (at most one room at a time; `NULL` between leaving one room and joining the next, which also pauses their reminders). Nickname uniqueness is **per room**, not global.
+- **`habits`** — gain `room_id` and `category` (`IQ` / `SQ` / `PQ` / `EQ`, nullable). A habit in a room with `categories_enabled = 1` always carries a category and one in a room without categories never does — enforced in the application layer, not by the column. Turning categories off **keeps** the stored values; turning them back on asks the admin to re-confirm rather than silently reusing them.
+- **`habit_logs`** — gain `room_id`, denormalized from the habit at write time, so leaderboard/progress queries are a filter rather than a join and a member's old logs stay attached to the room they were earned in after they move.
+
+**Destructive migration.** On boot, a DB file from before the multi-room pivot (detected by a leftover `admins` table or a `habits` table with no `room_id`) is **wiped**: every app table is dropped and recreated from `schema.sql`, with no data migrated. A timestamped snapshot of the old file is written next to it as `salawat.pre-multiroom-<utc>.db` first. The check is idempotent and never touches an already-migrated database.
+
 ## Requirements
 - Node.js 20+
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
@@ -34,7 +49,8 @@ Open `.env` and set:
 - `MINI_APP_DEEP_LINK` — `t.me/salawat_challenge_bot/challenge` deep link used in the daily reminder's button. Works today independent of the Vercel deployment.
 - `INIT_DATA_MAX_AGE_SECONDS` — how old a Telegram `initData` payload can be before it's rejected as stale (prefer `3600` in production; code default is 24h if unset).
 - `ADMIN_EXPORT_SECRET` — optional. When set, enables `GET /api/admin/export?key=…` for prize-time CSV download.
-- `ADMIN_TELEGRAM_ID` — seed/bootstrap Telegram user id inserted into the SQLite `admins` table on boot. Runtime Mini App + bot admin checks use that table (add more with `/makeadmin`). Invalid or empty skips seeding (existing `admins` rows still work).
+
+There is no `ADMIN_TELEGRAM_ID`: with rooms there is no global admin to bootstrap. Admin status is room-scoped and granted by creating a room or by being promoted inside one — see [Data model](#data-model-rooms).
 
 **Never commit `.env` or paste your bot token anywhere public.** If a token leaks, revoke it via `@BotFather` → `/revoke`.
 
@@ -141,9 +157,9 @@ Unauthenticated:
 **Fasting reminders:** a separate minute cron (not shared with daily salawat reminders) DMs users with `fasting_reminder_enabled` on, only when the `TIMEZONE` weekday is Sunday or Wednesday and the user's `fasting_reminder_time` matches the current `HH:mm` (default `20:00`). Sunday copy frames Monday's fast; Wednesday copy frames Thursday's. The hadith rotates deterministically across three texts so consecutive fire days do not repeat. Opt-in (default off). Same no-catch-up / overlapping-tick rules.
 
 **GET /api/is-admin**
-→ `200 { isAdmin: boolean }` based on whether the authenticated Telegram id is in the `admins` table (seeded from `ADMIN_TELEGRAM_ID`, plus anyone granted via `/makeadmin`).
+→ `200 { isAdmin: boolean }` based on whether the authenticated Telegram id is an admin (owner or co-admin) **of the room they are currently in**. A user with no current room is never an admin.
 
-The following Mini App admin routes require an authenticated Telegram id present in `admins`:
+The following Mini App admin routes require an authenticated Telegram id with room-scoped admin status:
 
 - **GET /api/admin/stats** → `{ participantCount, mawlidStartDate, mawlidEndDate }`
 - **GET /api/admin/leaderboard?period=all|mawlid** → live ranked totals `{ rank, nickname, realName, total }` for all logs or only the configured Mawlid period
@@ -195,8 +211,8 @@ Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on th
 ## Bot commands
 - `/start` — if already registered: menu-button nudge. If not: starts or **resumes** the signup conversation (full name → nickname → daily goal → salawat reminder opt-in/time → fasting reminder opt-in/time). Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
 - `/help` — registered users get the menu nudge; unregistered users with a pending signup are re-prompted at their current step; others are told to send `/start`.
-- `/deleteuser <nickname|telegram_id>` — **admins only.** Asks for a `YES` reply, then permanently deletes that user's row, logs, day-goal overrides, pending signup, and admin row (as if they never existed). Self-delete is refused. Afterward `/start` runs full registration again.
-- `/makeadmin <telegram_id|@username>` — **admins only.** Asks for a `YES` reply, then inserts that Telegram id into `admins` with the same powers as every other admin (Mini App Admin tab, broadcast/export, `/deleteuser`, `/makeadmin`). Target need not be registered yet; `@username` resolves from stored `telegram_username` or Telegram `getChat`.
+
+`/deleteuser` and `/makeadmin` are **removed**. Both were global, single-tenant user management; they are superseded by room-scoped kick and co-admin promote/demote. No global user-management command remains.
 
 ## Notes / v1 scope
 Group-chat announcements, multi-timezone support, and manual count correction remain out of scope. Daily goals, streaks, and per-user reminder preferences are included via `/api/progress` and `/api/profile`. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Signup is in the bot; logging, progress, leaderboard, and settings live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.

@@ -36,14 +36,6 @@ export function isValidReminderTime(value: string): boolean {
   }
 }
 
-/** Parse an optional positive Telegram user ID. Invalid values fail closed. */
-export function parseAdminTelegramId(value: string | undefined): number | null {
-  if (!value) return null;
-  if (!/^\d+$/.test(value)) return null;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
 /** Per-log quantity-habit value ceiling (friend-group sanity cap). */
 export const MAX_HABIT_VALUE = 10_000;
 
@@ -71,11 +63,6 @@ const miniAppUrlIsPlaceholder =
   miniAppUrl.includes("REPLACE_WITH_VERCEL_URL") ||
   miniAppUrl.includes("example.com");
 
-const adminTelegramId = parseAdminTelegramId(process.env.ADMIN_TELEGRAM_ID);
-if (process.env.ADMIN_TELEGRAM_ID && adminTelegramId === null) {
-  console.warn("ADMIN_TELEGRAM_ID is invalid; Mini App admin access is disabled.");
-}
-
 export const config = {
   botToken: required("BOT_TOKEN"),
   timezone: process.env.TIMEZONE ?? "Asia/Hong_Kong",
@@ -94,6 +81,7 @@ export const config = {
   initDataMaxAgeSeconds: Number(process.env.INIT_DATA_MAX_AGE_SECONDS) || 86_400,
   /** Optional secret for GET /api/admin/export. Empty = endpoint returns 503. */
   adminExportSecret: process.env.ADMIN_EXPORT_SECRET ?? "",
-  /** Telegram user allowed to access Mini App broadcast administration. */
-  adminTelegramId,
+  // No ADMIN_TELEGRAM_ID: with rooms there is no global admin to bootstrap —
+  // admin status is granted by creating a room or being promoted inside one
+  // (MULTI ROOM PRD §3a).
 };

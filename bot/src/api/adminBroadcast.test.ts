@@ -9,10 +9,9 @@ process.env.BOT_TOKEN ??= "test-token";
 process.env.CHALLENGE_START_DATE ??= "2026-08-01";
 process.env.CHALLENGE_END_DATE ??= "2026-09-01";
 process.env.DB_PATH ??= ":memory:";
-process.env.ADMIN_TELEGRAM_ID ??= "1225110756";
 
-const { parseAdminTelegramId } = await import("../config.js");
 const { isAdminTelegramId, requireAdmin } = await import("./adminAuth.js");
+const { createRoom, createUser, setUserCurrentRoom } = await import("../db/repository.js");
 const {
   adminMarkdownToTelegramHtml,
   validHttpUrl,
@@ -30,6 +29,8 @@ function user(id: number): User {
     id,
     telegram_id: id,
     nickname: `user-${id}`,
+    role: "participant",
+    current_room_id: null,
     reminder_enabled: 1,
     reminder_time: "20:00",
     timezone: null,
@@ -42,16 +43,28 @@ function user(id: number): User {
 }
 
 describe("admin Telegram authorization", () => {
-  it("parses only positive safe integer ids", () => {
-    assert.equal(parseAdminTelegramId("1225110756"), 1225110756);
-    assert.equal(parseAdminTelegramId(""), null);
-    assert.equal(parseAdminTelegramId("-1"), null);
-    assert.equal(parseAdminTelegramId("abc"), null);
+  it("recognises an admin of the room the caller is currently in", () => {
+    const owner = createUser(1225110756, "broadcast-room-owner");
+    const room = createRoom("Broadcast room", "broadcast-room-pass", owner.id);
+    setUserCurrentRoom(owner.id, room.id);
+
+    assert.equal(isAdminTelegramId(1225110756), true);
+    // A registered participant of the same room is not an admin of it, and an
+    // unregistered id is not an admin of anything.
+    const member = createUser(999000002, "broadcast-room-member");
+    setUserCurrentRoom(member.id, room.id);
+    assert.equal(isAdminTelegramId(999000002), false);
+    assert.equal(isAdminTelegramId(999000001), false);
   });
 
-  it("matches seeded env admin from the admins table", () => {
-    assert.equal(isAdminTelegramId(1225110756), true);
-    assert.equal(isAdminTelegramId(999000001), false);
+  it("drops admin status when that admin leaves the room", () => {
+    const owner = createUser(999000003, "leaving-owner");
+    const room = createRoom("Leaving room", "leaving-room-pass", owner.id);
+    setUserCurrentRoom(owner.id, room.id);
+    assert.equal(isAdminTelegramId(999000003), true);
+
+    setUserCurrentRoom(owner.id, null);
+    assert.equal(isAdminTelegramId(999000003), false);
   });
 
   it("returns 403 for a non-admin", () => {
