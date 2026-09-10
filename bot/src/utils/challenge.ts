@@ -27,39 +27,6 @@ export function getTodayInTimezone(timeZone: string, now: Date = new Date()): Da
   return { year, month, day };
 }
 
-function toEpochDay(parts: DateParts): number {
-  return Date.UTC(parts.year, parts.month - 1, parts.day) / 86_400_000;
-}
-
-/**
- * Days remaining until (and including) the challenge end date.
- * 0 means today is the last day; negative values are clamped to 0.
- */
-export function getDaysLeft(now: Date = new Date()): number {
-  const today = getTodayInTimezone(config.timezone, now);
-  const daysLeft = toEpochDay(config.challengeEndDate) - toEpochDay(today);
-  return Math.max(0, daysLeft);
-}
-
-/** True once today's date in TIMEZONE is on or after CHALLENGE_START_DATE. */
-export function hasChallengeStarted(now: Date = new Date()): boolean {
-  const today = getTodayInTimezone(config.timezone, now);
-  return toEpochDay(today) >= toEpochDay(config.challengeStartDate);
-}
-
-export function hasChallengeEnded(now: Date = new Date()): boolean {
-  const today = getTodayInTimezone(config.timezone, now);
-  return toEpochDay(today) > toEpochDay(config.challengeEndDate);
-}
-
-export type ChallengeStatus = "not_started" | "active" | "ended";
-
-export function getChallengeStatus(now: Date = new Date()): ChallengeStatus {
-  if (!hasChallengeStarted(now)) return "not_started";
-  if (hasChallengeEnded(now)) return "ended";
-  return "active";
-}
-
 /** Calendar day key (YYYY-MM-DD) in the challenge timezone — for daily caps. */
 export function getDayKeyInTimezone(now: Date = new Date()): string {
   return formatDateParts(getTodayInTimezone(config.timezone, now));
@@ -150,17 +117,6 @@ export function getUtcRangeForDate(
  */
 export function getTodayUtcRange(now: Date = new Date()): { startUtc: string; endUtc: string } {
   return getUtcRangeForDate(getTodayInTimezone(config.timezone, now), config.timezone);
-}
-
-/**
- * Informational Mawlid period as a UTC half-open range. The configured end
- * calendar date is inclusive in TIMEZONE.
- */
-export function getChallengeWindowUtc(): { startUtc: string; endUtc: string } {
-  return {
-    startUtc: getUtcRangeForDate(config.challengeStartDate, config.timezone).startUtc,
-    endUtc: getUtcRangeForDate(config.challengeEndDate, config.timezone).endUtc,
-  };
 }
 
 /**

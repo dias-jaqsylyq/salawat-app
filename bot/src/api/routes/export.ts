@@ -1,12 +1,7 @@
 import type { Request, Response } from "express";
 import { config } from "../../config.js";
 import { getExportRows } from "../../db/repository.js";
-import {
-  exportFilename,
-  logWindowForPeriod,
-  parseLeaderboardPeriod,
-  type LeaderboardPeriod,
-} from "../adminPeriod.js";
+import { formatDateParts, getTodayInTimezone } from "../../utils/challenge.js";
 
 /**
  * Prize-time CSV export. Auth: ?key= or X-Admin-Key header matching ADMIN_EXPORT_SECRET.
@@ -28,31 +23,27 @@ export function exportRoute(req: Request, res: Response) {
     return;
   }
 
-  sendPeriodCsv(req, res);
+  sendCsv(res);
 }
 
 /** Telegram-initData + requireAdmin auth is applied in server.ts. */
-export function adminExportCsvRoute(req: Request, res: Response): void {
-  sendPeriodCsv(req, res);
+export function adminExportCsvRoute(_req: Request, res: Response): void {
+  sendCsv(res);
 }
 
-function sendPeriodCsv(req: Request, res: Response): void {
-  const period = parseLeaderboardPeriod(req.query.period);
-  if (!period) {
-    res.status(400).json({ success: false, error: "invalid_period" });
-    return;
-  }
-  const csv = buildExportCsv(period);
+function sendCsv(res: Response): void {
+  const csv = buildExportCsv();
+  const today = formatDateParts(getTodayInTimezone(config.timezone));
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader(
     "Content-Disposition",
-    `attachment; filename="${exportFilename(period)}"`
+    `attachment; filename="habit-tracker-leaderboard-${today}.csv"`
   );
   res.send(csv);
 }
 
-export function buildExportCsv(period: LeaderboardPeriod): string {
-  const rows = getExportRows(logWindowForPeriod(period));
+export function buildExportCsv(): string {
+  const rows = getExportRows();
   let rank = 1;
   const ranked = rows.map((row, i) => {
     if (i > 0 && row.total < rows[i - 1]!.total) {
@@ -62,10 +53,10 @@ export function buildExportCsv(period: LeaderboardPeriod): string {
   });
 
   const lines = [
-    "rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total,daily_goal",
+    "rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total_points",
     ...ranked.map(
       (r) =>
-        `${r.rank},${csvEscape(r.nickname)},${csvEscape(r.real_name ?? "")},${r.telegram_id},${csvEscape(r.telegram_username ?? "")},${csvEscape(r.telegram_first_name ?? "")},${csvEscape(r.telegram_last_name ?? "")},${r.total},${r.goal}`
+        `${r.rank},${csvEscape(r.nickname)},${csvEscape(r.real_name ?? "")},${r.telegram_id},${csvEscape(r.telegram_username ?? "")},${csvEscape(r.telegram_first_name ?? "")},${csvEscape(r.telegram_last_name ?? "")},${r.total}`
     ),
   ];
 

@@ -3,9 +3,11 @@ import { formatDateParts, parseDateKey, subtractOneCalendarDay } from "../utils/
 import type {
   AdminActionType,
   CreateUserReminders,
+  ExportRow,
   Habit,
   HabitLog,
   HabitType,
+  LeaderboardRow,
   PendingAdminAction,
   PendingRegistration,
   RegistrationStep,
@@ -450,4 +452,53 @@ export function getHabitStreak(userId: number, habitId: number, asOfDate: string
     cursor = formatDateParts(subtractOneCalendarDay(parseDateKey(cursor)));
   }
   return streak;
+}
+
+/**
+ * All-time, perpetual leaderboard: one row per user (including users with no
+ * logs at all, at total 0), ranked by total points descending. No date
+ * window — the tracker has no periodic resets (PIVOT_PLAN §0).
+ */
+export function getLeaderboard(): LeaderboardRow[] {
+  return db
+    .prepare(
+      `SELECT u.id AS user_id,
+              u.telegram_id AS telegram_id,
+              u.nickname AS nickname,
+              u.real_name AS real_name,
+              COALESCE(SUM(hl.points_earned), 0) AS total
+       FROM users u
+       LEFT JOIN habit_logs hl ON hl.user_id = u.id
+       GROUP BY u.id
+       ORDER BY total DESC, u.nickname ASC`
+    )
+    .all() as LeaderboardRow[];
+}
+
+/** Same ranking as getLeaderboard, plus raw Telegram identity fields, for the admin CSV export. */
+export function getExportRows(): ExportRow[] {
+  return db
+    .prepare(
+      `SELECT u.id AS user_id,
+              u.telegram_id AS telegram_id,
+              u.nickname AS nickname,
+              u.real_name AS real_name,
+              u.telegram_username AS telegram_username,
+              u.telegram_first_name AS telegram_first_name,
+              u.telegram_last_name AS telegram_last_name,
+              COALESCE(SUM(hl.points_earned), 0) AS total
+       FROM users u
+       LEFT JOIN habit_logs hl ON hl.user_id = u.id
+       GROUP BY u.id
+       ORDER BY total DESC, u.nickname ASC`
+    )
+    .all() as ExportRow[];
+}
+
+/** This user's habit_logs rows for one TIMEZONE-local day, keyed by habit_id. */
+export function getUserHabitLogsForDate(userId: number, date: string): Map<number, HabitLog> {
+  const rows = db
+    .prepare("SELECT * FROM habit_logs WHERE user_id = ? AND log_date = ?")
+    .all(userId, date) as HabitLog[];
+  return new Map(rows.map((row) => [row.habit_id, row]));
 }

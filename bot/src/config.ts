@@ -1,5 +1,4 @@
 import "dotenv/config";
-import type { DateParts } from "./types.js";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -7,20 +6,6 @@ function required(name: string): string {
     throw new Error(`Missing required environment variable: ${name}`);
   }
   return value;
-}
-
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-function parseDateParts(name: string, value: string): DateParts {
-  const match = DATE_RE.exec(value);
-  if (!match) {
-    throw new Error(`Invalid date for ${name}: "${value}" (expected YYYY-MM-DD)`);
-  }
-  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
-}
-
-function toEpochDay(parts: DateParts): number {
-  return Date.UTC(parts.year, parts.month - 1, parts.day) / 86_400_000;
 }
 
 export function parseReminderTime(value: string): { hour: number; minute: number } {
@@ -59,24 +44,11 @@ export function parseAdminTelegramId(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-const challengeStartDate = parseDateParts("CHALLENGE_START_DATE", required("CHALLENGE_START_DATE"));
-const challengeEndDate = parseDateParts("CHALLENGE_END_DATE", required("CHALLENGE_END_DATE"));
+/** Per-log quantity-habit value ceiling (friend-group sanity cap). */
+export const MAX_HABIT_VALUE = 10_000;
 
-if (toEpochDay(challengeStartDate) > toEpochDay(challengeEndDate)) {
-  throw new Error(
-    `CHALLENGE_START_DATE must be on or before CHALLENGE_END_DATE (got start after end)`
-  );
-}
-
-/** Per-request log count ceiling (friend-group sanity cap). */
-export const MAX_LOG_COUNT = 10_000;
-/** Registration daily-goal ceiling (friend-group sanity cap). */
-export const MAX_GOAL = 100_000_000;
-
-/** Max POST /api/log requests per telegram user per rolling minute. */
-export const LOG_RATE_LIMIT_PER_MINUTE = 30;
-/** Max salawat logged per telegram user per calendar day (challenge TIMEZONE). */
-export const LOG_DAILY_COUNT_CAP = 50_000;
+/** Max POST /api/habits/:id/log requests per telegram user per rolling minute. */
+export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;
 /** Max POST /api/register requests per telegram user per rolling minute. */
 export const REGISTER_RATE_LIMIT_PER_MINUTE = 5;
 /** Max PATCH /api/profile requests per telegram user per rolling minute. */
@@ -106,8 +78,6 @@ if (process.env.ADMIN_TELEGRAM_ID && adminTelegramId === null) {
 
 export const config = {
   botToken: required("BOT_TOKEN"),
-  challengeStartDate,
-  challengeEndDate,
   timezone: process.env.TIMEZONE ?? "Asia/Hong_Kong",
   reminderTime: parseReminderTime(process.env.REMINDER_TIME ?? "20:00"),
   dbPath: process.env.DB_PATH ?? "./data/salawat.db",
