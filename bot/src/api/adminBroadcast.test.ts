@@ -30,17 +30,12 @@ function user(id: number): User {
     id,
     telegram_id: id,
     nickname: `user-${id}`,
-    goal: 100,
     reminder_enabled: 1,
-    reminder_time: null,
-    fasting_reminder_enabled: 0,
-    fasting_reminder_time: "20:00",
+    reminder_time: "20:00",
     telegram_username: null,
     telegram_first_name: null,
     telegram_last_name: null,
     real_name: null,
-    retained_jamaat_total: 0,
-    progress_started_at: null,
     created_at: "2026-08-01 00:00:00",
   };
 }
