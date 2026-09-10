@@ -3,6 +3,7 @@ import {
   BarChart3,
   FileText,
   Link as LinkIcon,
+  ListChecks,
   Megaphone,
   MessageSquareText,
   Users,
@@ -28,9 +29,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import AdminResults from "../components/AdminResults.tsx";
+import AdminHabits from "../components/AdminHabits.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
-type AdminSection = "broadcasts" | "results";
+type AdminSection = "broadcasts" | "results" | "habits";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MODES: {
@@ -64,8 +66,6 @@ export default function AdminScreen({ initData }: Props) {
   const [section, setSection] = useState<AdminSection>("broadcasts");
   const [mode, setMode] = useState<AdminMode>("text");
   const [participantCount, setParticipantCount] = useState<number | null>(null);
-  const [mawlidStartDate, setMawlidStartDate] = useState("");
-  const [mawlidEndDate, setMawlidEndDate] = useState("");
   const [textMessage, setTextMessage] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkCaption, setLinkCaption] = useState("");
@@ -83,8 +83,6 @@ export default function AdminScreen({ initData }: Props) {
       .then((stats) => {
         if (!cancelled) {
           setParticipantCount(stats.participantCount);
-          setMawlidStartDate(stats.mawlidStartDate);
-          setMawlidEndDate(stats.mawlidEndDate);
         }
       })
       .catch((err) => {
@@ -227,11 +225,12 @@ export default function AdminScreen({ initData }: Props) {
       <div
         role="tablist"
         aria-label="Admin section"
-        className="grid grid-cols-2 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/60 p-1"
       >
         {([
           { id: "broadcasts" as const, label: "Broadcasts", icon: Megaphone },
           { id: "results" as const, label: "Results", icon: BarChart3 },
+          { id: "habits" as const, label: "Habits", icon: ListChecks },
         ]).map((item) => {
           const Icon = item.icon;
           const active = section === item.id;
@@ -474,18 +473,10 @@ export default function AdminScreen({ initData }: Props) {
         </Card>
       </form>
         </>
-      ) : mawlidStartDate && mawlidEndDate ? (
-        <AdminResults
-          initData={initData}
-          mawlidStartDate={mawlidStartDate}
-          mawlidEndDate={mawlidEndDate}
-        />
+      ) : section === "results" ? (
+        <AdminResults initData={initData} />
       ) : (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            Loading result periods…
-          </CardContent>
-        </Card>
+        <AdminHabits initData={initData} />
       )}
     </main>
   );

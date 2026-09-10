@@ -1,17 +1,18 @@
 import type {
   AdminBroadcastPayload,
   AdminBroadcastResponse,
+  AdminHabit,
   AdminLeaderboardResponse,
   AdminStatsResponse,
   AdminStatusResponse,
-  DayOverrideResponse,
+  Habit,
+  HabitType,
   LeaderboardResponse,
-  LogResponse,
-  LeaderboardPeriod,
+  LogHabitResponse,
   ProfileResponse,
   ProfileUpdate,
   ProgressResponse,
-  ResetProgressResponse,
+  UnlogHabitResponse,
 } from "./types.ts";
 
 const BASE_URL = import.meta.env.VITE_API_URL;
@@ -61,26 +62,29 @@ async function multipartRequest<T>(
   return body as T;
 }
 
-export function logSalawat(initData: string, count: number): Promise<LogResponse> {
-  return request(initData, "/api/log", {
+export function getHabits(initData: string): Promise<Habit[]> {
+  return request(initData, "/api/habits");
+}
+
+/** POST /api/habits/:id/log — upsert today's value. Omit `value` for a binary habit. */
+export function logHabit(
+  initData: string,
+  habitId: number,
+  value?: number
+): Promise<LogHabitResponse> {
+  return request(initData, `/api/habits/${habitId}/log`, {
     method: "POST",
-    body: JSON.stringify({ count }),
+    body: JSON.stringify(value === undefined ? {} : { value }),
   });
+}
+
+/** DELETE /api/habits/:id/log — remove today's log, if any. Idempotent. */
+export function deleteHabitLog(initData: string, habitId: number): Promise<UnlogHabitResponse> {
+  return request(initData, `/api/habits/${habitId}/log`, { method: "DELETE" });
 }
 
 export function getProgress(initData: string): Promise<ProgressResponse> {
   return request(initData, "/api/progress");
-}
-
-export function putDayOverride(
-  initData: string,
-  date: string,
-  met: boolean
-): Promise<DayOverrideResponse> {
-  return request(initData, "/api/day-override", {
-    method: "PUT",
-    body: JSON.stringify({ date, met }),
-  });
 }
 
 export function getLeaderboard(initData: string): Promise<LeaderboardResponse> {
@@ -98,16 +102,6 @@ export function patchProfile(initData: string, update: ProfileUpdate): Promise<P
   });
 }
 
-export function resetProgress(
-  initData: string,
-  dropFromJamaat: boolean = false
-): Promise<ResetProgressResponse> {
-  return request(initData, "/api/reset-progress", {
-    method: "POST",
-    body: JSON.stringify({ dropFromJamaat }),
-  });
-}
-
 export function getIsAdmin(initData: string): Promise<AdminStatusResponse> {
   return request(initData, "/api/is-admin");
 }
@@ -116,18 +110,37 @@ export function getAdminStats(initData: string): Promise<AdminStatsResponse> {
   return request(initData, "/api/admin/stats");
 }
 
-export function getAdminLeaderboard(
-  initData: string,
-  period: LeaderboardPeriod
-): Promise<AdminLeaderboardResponse> {
-  return request(initData, `/api/admin/leaderboard?period=${period}`);
+export function getAdminHabits(initData: string): Promise<AdminHabit[]> {
+  return request(initData, "/api/admin/habits");
 }
 
-export async function downloadAdminExport(
+export function createHabit(
   initData: string,
-  period: LeaderboardPeriod
-): Promise<Blob> {
-  const res = await fetch(`${BASE_URL}/api/admin/export-csv?period=${period}`, {
+  habit: { name: string; type: HabitType; pointsWeight: number }
+): Promise<AdminHabit> {
+  return request(initData, "/api/admin/habits", {
+    method: "POST",
+    body: JSON.stringify(habit),
+  });
+}
+
+export function patchHabit(
+  initData: string,
+  id: number,
+  patch: { name?: string; pointsWeight?: number; isActive?: boolean }
+): Promise<AdminHabit> {
+  return request(initData, `/api/admin/habits/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function getAdminLeaderboard(initData: string): Promise<AdminLeaderboardResponse> {
+  return request(initData, "/api/admin/leaderboard");
+}
+
+export async function downloadAdminExport(initData: string): Promise<Blob> {
+  const res = await fetch(`${BASE_URL}/api/admin/export-csv`, {
     headers: { Authorization: `tma ${initData}` },
   });
   if (!res.ok) {
