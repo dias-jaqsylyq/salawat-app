@@ -19,10 +19,14 @@ function effectiveReminderTime(user: User): string {
 }
 
 function profileResponse(user: User) {
-  // real_name is admin-only (prize/moderation use) and must never be echoed
-  // back through a public API — see the doc comment on User.real_name.
+  // real_name is safe to echo here because GET/PATCH /api/profile are always
+  // self-scoped (looked up by req.telegramId) — this never exposes another
+  // user's name. Public/other-user surfaces (leaderboard, export) must keep
+  // hiding or admin-gating it separately — see the doc comment on
+  // User.real_name.
   return {
     nickname: user.nickname,
+    realName: user.real_name ?? null,
     reminderEnabled: user.reminder_enabled === 1,
     reminderTime: effectiveReminderTime(user),
   };

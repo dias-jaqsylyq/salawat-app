@@ -10,7 +10,12 @@ export interface User {
   telegram_username: string | null;
   telegram_first_name: string | null;
   telegram_last_name: string | null;
-  /** User-typed legal name. Admin-only; never returned from public APIs. */
+  /**
+   * User-typed legal name. Never returned from public/other-user APIs
+   * (leaderboard, export) or admin-scoped-to-others endpoints — only from
+   * self-scoped GET/PATCH /api/profile (to the owner) and admin
+   * leaderboard/CSV (to admins, for prize/moderation use).
+   */
   real_name: string | null;
   created_at: string;
 }
