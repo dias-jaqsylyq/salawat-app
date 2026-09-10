@@ -296,6 +296,7 @@ export default function AdminHabits({ initData }: Props) {
   const [habits, setHabits] = useState<AdminHabit[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -321,6 +322,10 @@ export default function AdminHabits({ initData }: Props) {
     setHabits((prev) => (prev ? [habit, ...prev] : [habit]));
   }
 
+  const visibleHabits = habits?.filter((h) => showInactive || h.isActive) ?? null;
+  const hasHiddenInactive =
+    !showInactive && (habits?.some((h) => !h.isActive) ?? false);
+
   return (
     <div className="space-y-4">
       <CreateHabitForm initData={initData} onCreated={prependHabit} />
@@ -329,7 +334,7 @@ export default function AdminHabits({ initData }: Props) {
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1.5">
-              <CardTitle>All habits</CardTitle>
+              <CardTitle>{showInactive ? "All habits" : "Active habits"}</CardTitle>
               <CardDescription>Tap a habit to edit its name or points.</CardDescription>
             </div>
             <Button
@@ -343,6 +348,16 @@ export default function AdminHabits({ initData }: Props) {
               <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
             </Button>
           </div>
+          <div className="flex items-center justify-between gap-3 pt-2">
+            <Label htmlFor="admin-habits-show-inactive" className="text-sm font-normal text-muted-foreground">
+              Show inactive habits
+            </Label>
+            <Switch
+              id="admin-habits-show-inactive"
+              checked={showInactive}
+              onCheckedChange={setShowInactive}
+            />
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {error && (
@@ -353,12 +368,16 @@ export default function AdminHabits({ initData }: Props) {
           {loading && !habits && (
             <p className="px-4 pb-4 text-sm text-muted-foreground">Loading…</p>
           )}
-          {habits && habits.length === 0 && (
-            <p className="px-4 pb-4 text-sm text-muted-foreground">No habits yet.</p>
+          {visibleHabits && visibleHabits.length === 0 && (
+            <p className="px-4 pb-4 text-sm text-muted-foreground">
+              {hasHiddenInactive
+                ? 'No active habits — turn on "Show inactive habits" to see them.'
+                : "No habits yet."}
+            </p>
           )}
-          {habits && habits.length > 0 && (
+          {visibleHabits && visibleHabits.length > 0 && (
             <div className="divide-y">
-              {habits.map((habit) => (
+              {visibleHabits.map((habit) => (
                 <HabitRow
                   key={habit.id}
                   initData={initData}

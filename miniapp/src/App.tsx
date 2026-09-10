@@ -77,6 +77,14 @@ export default function App() {
     }
   }, [initData]);
 
+  const loadHabits = useCallback(async () => {
+    try {
+      setHabits(await getHabits(initData));
+    } catch {
+      setHabits((prev) => prev ?? []);
+    }
+  }, [initData]);
+
   useEffect(() => {
     if (available) {
       void loadProgress();
@@ -88,18 +96,8 @@ export default function App() {
       setHabits(null);
       return;
     }
-    let cancelled = false;
-    void getHabits(initData)
-      .then((result) => {
-        if (!cancelled) setHabits(result);
-      })
-      .catch(() => {
-        if (!cancelled) setHabits([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [available, initData]);
+    void loadHabits();
+  }, [available, loadHabits]);
 
   useEffect(() => {
     if (!available) {
@@ -124,13 +122,15 @@ export default function App() {
     if (!isAdmin && activeTab === "admin") setActiveTab("progress");
   }, [activeTab, isAdmin]);
 
-  // Refetch progress whenever Progress or Log is shown (keep prior UI; no loading flash).
+  // Refetch progress + habits whenever Progress or Log is shown (keep prior UI; no
+  // loading flash) — picks up habits an admin created/toggled without a full reload.
   useEffect(() => {
     if (state.status !== "ready") return;
     if (settingsOpen) return;
     if (activeTab !== "progress" && activeTab !== "log") return;
     void loadProgress();
-  }, [activeTab, settingsOpen, state.status, loadProgress]);
+    void loadHabits();
+  }, [activeTab, settingsOpen, state.status, loadProgress, loadHabits]);
 
   if (!available) {
     return (
