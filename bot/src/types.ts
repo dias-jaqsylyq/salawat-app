@@ -85,6 +85,23 @@ export interface HabitLog {
   updated_at: string;
 }
 
+/** One row of the all-time, perpetual leaderboard (getLeaderboard). */
+export interface LeaderboardRow {
+  user_id: number;
+  telegram_id: number;
+  nickname: string;
+  real_name: string | null;
+  /** Sum of points_earned across all habits, all time. */
+  total: number;
+}
+
+/** One row of the admin CSV export (getExportRows) — same as LeaderboardRow plus raw Telegram identity fields. */
+export interface ExportRow extends LeaderboardRow {
+  telegram_username: string | null;
+  telegram_first_name: string | null;
+  telegram_last_name: string | null;
+}
+
 export interface DateParts {
   year: number;
   month: number;

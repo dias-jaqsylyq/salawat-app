@@ -2,14 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 process.env.BOT_TOKEN ??= "test-token";
-process.env.CHALLENGE_START_DATE ??= "2026-08-01";
-process.env.CHALLENGE_END_DATE ??= "2026-09-01";
 process.env.DB_PATH ??= ":memory:";
 process.env.ADMIN_TELEGRAM_ID ??= "1225110756";
 
 const {
   addAdmin,
-  addLog,
+  createHabit,
   createUser,
   deleteUserCompletely,
   ensurePendingRegistration,
@@ -19,6 +17,7 @@ const {
   getUserByTelegramUsername,
   isAdmin,
   updatePendingRegistration,
+  upsertHabitLog,
 } = await import("../db/repository.js");
 const { isAdminTelegramId } = await import("./adminAuth.js");
 
@@ -34,21 +33,22 @@ describe("multi-admin table", () => {
 });
 
 describe("deleteUserCompletely", () => {
-  it("wipes user, logs, pending signup, and admin row", () => {
+  it("wipes user, habit logs, pending signup, and admin row", () => {
     const telegramId = 910000001;
-    createUser(telegramId, "wipe-me", 100, {
+    createUser(telegramId, "wipe-me", {
       telegramUsername: "wipe_me",
       telegramFirstName: "Wipe",
       telegramLastName: null,
     }, "Wipe Me");
     const user = getUserByTelegramId(telegramId)!;
-    addLog(user.id, 25);
+    const habit = createHabit("Test habit", "quantity", 1);
+    upsertHabitLog(user.id, habit.id, 25, "2026-08-01");
     addAdmin(telegramId);
     assert.equal(isAdmin(telegramId), true);
 
     const result = deleteUserCompletely(telegramId);
     assert.equal(result.userDeleted, true);
-    assert.equal(result.logsDeleted, 1);
+    assert.equal(result.habitLogsDeleted, 1);
     assert.equal(getUserByTelegramId(telegramId), undefined);
     assert.equal(getUserByNickname("wipe-me"), undefined);
     assert.equal(getUserByTelegramUsername("wipe_me"), undefined);
