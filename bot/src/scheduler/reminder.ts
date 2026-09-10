@@ -1,12 +1,12 @@
 import cron from "node-cron";
 import { InlineKeyboard, type Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
-import { getUsersWithRemindersEnabled } from "../db/repository.js";
+import { getUserHabitLogsForDate, getUsersWithRemindersEnabled, listHabits } from "../db/repository.js";
+import { formatDateParts, getTodayInTimezone } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
 import type { User } from "../types.js";
 
-const REMINDER_TEXT = "🌙 Don't forget today's salawat! Tap below to log it.";
-const REMINDER_KEYBOARD = new InlineKeyboard().url("Log Salawat", config.miniAppDeepLink);
+const REMINDER_KEYBOARD = new InlineKeyboard().url("Open app", config.miniAppDeepLink);
 
 let sending = false;
 
@@ -30,6 +30,25 @@ function effectiveReminderTime(user: User): string {
   return formatReminderHhMm(config.reminderTime);
 }
 
+/** Names of this user's active habits with no log row for `todayKey` yet. */
+function unloggedHabitNames(userId: number, todayKey: string): string[] {
+  const activeHabits = listHabits({ activeOnly: true });
+  const todayLogs = getUserHabitLogsForDate(userId, todayKey);
+  return activeHabits.filter((habit) => !todayLogs.has(habit.id)).map((habit) => habit.name);
+}
+
+/** DM text for a user given the active habits they haven't logged yet today. */
+export function buildReminderMessage(unloggedHabitNames: string[]): string {
+  if (unloggedHabitNames.length === 0) {
+    return "✅ You're all caught up on today's habits. Great job!";
+  }
+  return [
+    "🌙 Don't forget to log today's habits!",
+    "",
+    `Still to log: ${unloggedHabitNames.join(", ")}`,
+  ].join("\n");
+}
+
 export async function sendDueReminders(
   bot: Bot<MyContext>,
   now: Date = new Date()
@@ -42,11 +61,13 @@ export async function sendDueReminders(
   sending = true;
   try {
     const nowHhMm = currentHhMmInTimezone(now);
+    const todayKey = formatDateParts(getTodayInTimezone(config.timezone, now));
     const users = getUsersWithRemindersEnabled();
     for (const user of users) {
       if (effectiveReminderTime(user) !== nowHhMm) continue;
       try {
-        await bot.api.sendMessage(user.telegram_id, REMINDER_TEXT, {
+        const text = buildReminderMessage(unloggedHabitNames(user.id, todayKey));
+        await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });
       } catch (err) {
