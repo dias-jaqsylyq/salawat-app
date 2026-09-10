@@ -9,7 +9,8 @@ import {
 import { allowRequest } from "../rateLimit.js";
 import { getUserByTelegramId, isNicknameTaken, updateUserProfile } from "../../db/repository.js";
 import { nicknameMatchesRealName, parseRealName } from "../realName.js";
-import type { User } from "../../types.js";
+import { resolveCallerRoom, roomResponse } from "../roomScope.js";
+import type { Room, User } from "../../types.js";
 
 function effectiveReminderTime(user: User): string {
   if (user.reminder_time && isValidReminderTime(user.reminder_time)) {
@@ -18,7 +19,7 @@ function effectiveReminderTime(user: User): string {
   return formatReminderHhMm(config.reminderTime);
 }
 
-function profileResponse(user: User) {
+function profileResponse(user: User, room: Room | null) {
   // real_name is safe to echo here because GET/PATCH /api/profile are always
   // self-scoped (looked up by req.telegramId) — this never exposes another
   // user's name. Public/other-user surfaces (leaderboard, export) must keep
@@ -30,6 +31,8 @@ function profileResponse(user: User) {
     reminderEnabled: user.reminder_enabled === 1,
     reminderTime: effectiveReminderTime(user),
     timezone: user.timezone ?? null,
+    // The room name Settings shows (PRD §3a); null while between rooms.
+    room: room ? roomResponse(room) : null,
   };
 }
 
@@ -48,7 +51,7 @@ export function getProfileRoute(req: Request, res: Response) {
     res.status(403).json({ success: false, error: "not_registered" });
     return;
   }
-  res.json(profileResponse(user));
+  res.json(profileResponse(user, resolveCallerRoom(req)?.room ?? null));
 }
 
 export function patchProfileRoute(req: Request, res: Response) {
@@ -75,6 +78,11 @@ export function patchProfileRoute(req: Request, res: Response) {
     return;
   }
 
+  // Nickname uniqueness is per-room, not global — the same nickname may exist
+  // in two rooms at once (PRD §3a). A user between rooms is checked globally:
+  // there is no room to collide within yet.
+  const room = resolveCallerRoom(req)?.room ?? null;
+
   let nickname: string | undefined;
   if (hasNickname) {
     if (typeof body.nickname !== "string" || body.nickname.trim().length === 0 || body.nickname.trim().length > 50) {
@@ -83,7 +91,12 @@ export function patchProfileRoute(req: Request, res: Response) {
     }
     const trimmedNickname = body.nickname.trim();
     nickname = trimmedNickname;
-    if (isNicknameTaken(trimmedNickname, { excludeTelegramId: req.telegramId })) {
+    if (
+      isNicknameTaken(trimmedNickname, {
+        excludeTelegramId: req.telegramId,
+        roomId: room?.id,
+      })
+    ) {
       res.status(409).json({ success: false, error: "nickname_taken" });
       return;
     }
@@ -147,5 +160,5 @@ export function patchProfileRoute(req: Request, res: Response) {
     timezone,
   });
 
-  res.json(profileResponse(updated));
+  res.json(profileResponse(updated, room));
 }

@@ -45,3 +45,13 @@ export function generateRoomPassword(): string {
   }
   return password;
 }
+
+/**
+ * A room's Telegram deep link (MULTI ROOM PRD §3a): following it pre-fills the
+ * password and drops a brand-new user straight into this room's signup. Room
+ * passwords are restricted to Telegram's start-payload charset (above), so no
+ * escaping is needed here.
+ */
+export function roomInviteLink(botUsername: string, password: string): string {
+  return `https://t.me/${botUsername}?start=${password}`;
+}

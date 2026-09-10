@@ -13,7 +13,12 @@ export class BroadcastInProgressError extends Error {
   }
 }
 
-let broadcastInProgress = false;
+/**
+ * Rooms broadcast independently: the lock is per room id, so one room's long
+ * send never makes another room's admin wait (or see broadcast_in_progress for
+ * something they have nothing to do with).
+ */
+const broadcastsInProgress = new Set<number>();
 
 /**
  * Send sequentially to every registered participant. A per-user failure is
@@ -40,16 +45,22 @@ export async function broadcastUsers(
   return { participantCount: users.length, sentCount, failedCount };
 }
 
-export async function broadcastToAll(
+/**
+ * Send to the members of exactly one room. An admin's broadcast reaches their
+ * own room and never another one (PRD §3a) — the room comes from the caller's
+ * current_room_id, so there is no way to address someone else's room at all.
+ */
+export async function broadcastToRoom(
+  roomId: number,
   send: (user: User) => Promise<void>
 ): Promise<BroadcastResult> {
-  if (broadcastInProgress) throw new BroadcastInProgressError();
-  broadcastInProgress = true;
+  if (broadcastsInProgress.has(roomId)) throw new BroadcastInProgressError();
+  broadcastsInProgress.add(roomId);
 
-  const users = getAllUsers();
+  const users = getAllUsers(roomId);
   try {
     return await broadcastUsers(users, send);
   } finally {
-    broadcastInProgress = false;
+    broadcastsInProgress.delete(roomId);
   }
 }

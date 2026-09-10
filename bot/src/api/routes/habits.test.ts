@@ -33,9 +33,9 @@ function capture(): { res: Response; status: () => number; body: () => any } {
   return { res, status: () => status, body: () => body };
 }
 
-function callList(): { status: number; body: any } {
+function callList(telegramId: number): { status: number; body: any } {
   const result = capture();
-  listHabitsRoute({} as unknown as Request, result.res);
+  listHabitsRoute({ telegramId } as unknown as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -89,7 +89,7 @@ describe("GET /api/habits", () => {
     const inactive = makeHabit("Retired habit", "binary", 5);
     updateHabit(inactive.id, { isActive: false });
 
-    const { body } = callList();
+    const { body } = callList(makeUser());
     const ids = body.map((h: any) => h.id);
     assert.ok(ids.includes(active.id));
     assert.ok(!ids.includes(inactive.id));
@@ -100,6 +100,7 @@ describe("GET /api/habits", () => {
       name: "Read Qur'an",
       type: "quantity",
       pointsWeight: 2,
+      category: null,
     });
   });
 });

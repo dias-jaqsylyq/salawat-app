@@ -8,9 +8,10 @@ import {
   validOptionalCaption,
 } from "../broadcastFormatting.js";
 import {
-  broadcastToAll,
+  broadcastToRoom,
   BroadcastInProgressError,
 } from "../broadcastService.js";
+import { requireCallerRoom } from "../roomScope.js";
 
 interface BroadcastBody {
   type?: unknown;
@@ -23,8 +24,13 @@ function invalid(res: Response, error: string): void {
   res.status(400).json({ success: false, error });
 }
 
+/** Reaches the caller's own room only, never another one (PRD §3a). */
 export function createBroadcastRoute(bot: Bot<MyContext>) {
   return async (req: Request, res: Response): Promise<void> => {
+    const caller = requireCallerRoom(req, res);
+    if (!caller) return;
+    const roomId = caller.roomId;
+
     const body = req.body as BroadcastBody | undefined;
     if (
       !body ||
@@ -42,7 +48,7 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
           return;
         }
         const html = adminMarkdownToTelegramHtml(body.message.trim());
-        const result = await broadcastToAll(async (user) => {
+        const result = await broadcastToRoom(roomId, async (user) => {
           await bot.api.sendMessage(user.telegram_id, html, {
             parse_mode: "HTML",
           });
@@ -63,7 +69,7 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
         const caption =
           typeof body.message === "string" ? body.message.trim() : undefined;
         const text = caption ? `${caption}\n\n${body.url}` : body.url;
-        const result = await broadcastToAll(async (user) => {
+        const result = await broadcastToRoom(roomId, async (user) => {
           await bot.api.sendMessage(user.telegram_id, text);
         });
         res.json({ success: true, ...result });
@@ -81,7 +87,7 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
       const caption =
         typeof body.message === "string" ? body.message.trim() || undefined : undefined;
       const fileUrl = body.fileUrl;
-      const result = await broadcastToAll(async (user) => {
+      const result = await broadcastToRoom(roomId, async (user) => {
         await bot.api.sendDocument(user.telegram_id, fileUrl, {
           caption,
         });

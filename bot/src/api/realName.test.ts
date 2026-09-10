@@ -9,7 +9,9 @@ process.env.TIMEZONE = "Asia/Hong_Kong";
 process.env.DB_PATH = ":memory:";
 
 const { db } = await import("../db/client.js");
-const { createUser, getUserByTelegramId } = await import("../db/repository.js");
+const { createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } = await import(
+  "../db/repository.js"
+);
 const { registerRoute } = await import("./routes/register.js");
 const { progressRoute } = await import("./routes/progress.js");
 const { getProfileRoute, patchProfileRoute } = await import("./routes/profile.js");
@@ -74,9 +76,9 @@ function callLeaderboard(telegramId: number) {
   return { status: result.status(), body: result.body() };
 }
 
-function callAdminLeaderboard() {
+function callAdminLeaderboard(telegramId: number) {
   const result = capture();
-  adminLeaderboardRoute({} as unknown as Request, result.res);
+  adminLeaderboardRoute({ telegramId } as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -152,7 +154,10 @@ it("only ever returns the caller's own real name from GET /api/profile", () => {
 });
 
 it("keeps real names off public leaderboard and on admin results/CSV", () => {
-  createUser(850000020, "PublicNick", telegramProfile(850000020), "Private Person");
+  // Both leaderboards are room-scoped now, so the user needs a room to appear on one.
+  const member = createUser(850000020, "PublicNick", telegramProfile(850000020), "Private Person");
+  const room = createRoom("Real name room", "real-name-room-pass", member.id);
+  setUserCurrentRoom(member.id, room.id);
 
   const publicBoard = callLeaderboard(850000020);
   assert.equal(publicBoard.status, 200);
@@ -163,20 +168,20 @@ it("keeps real names off public leaderboard and on admin results/CSV", () => {
   assert.equal(publicRow?.isYou, true);
   assertNoRealNameKeys(publicBoard.body);
 
-  const adminBoard = callAdminLeaderboard();
+  const adminBoard = callAdminLeaderboard(850000020);
   assert.equal(adminBoard.status, 200);
   const row = adminBoard.body.leaderboard.find((entry: { nickname: string }) => entry.nickname === "PublicNick");
   assert.equal(row.realName, "Private Person");
 
-  const csv = buildExportCsv();
+  const csv = buildExportCsv(room.id);
   assert.match(csv, /^rank,nickname,real_name,/);
   assert.match(csv, /,PublicNick,Private Person,/);
 
   db.prepare("UPDATE users SET real_name = NULL WHERE telegram_id = ?").run(850000020);
-  const unnamedAdmin = callAdminLeaderboard();
+  const unnamedAdmin = callAdminLeaderboard(850000020);
   const unnamed = unnamedAdmin.body.leaderboard.find(
     (entry: { nickname: string }) => entry.nickname === "PublicNick"
   );
   assert.equal(unnamed.realName, null);
-  assert.match(buildExportCsv(), /,PublicNick,,/);
+  assert.match(buildExportCsv(room.id), /,PublicNick,,/);
 });

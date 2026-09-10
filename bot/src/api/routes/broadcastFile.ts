@@ -5,9 +5,10 @@ import type { MyContext } from "../../context.js";
 import type { User } from "../../types.js";
 import { validOptionalCaption } from "../broadcastFormatting.js";
 import {
-  broadcastToAll,
+  broadcastToRoom,
   BroadcastInProgressError,
 } from "../broadcastService.js";
+import { requireCallerRoom } from "../roomScope.js";
 
 export const MAX_PDF_BYTES = 20 * 1024 * 1024;
 
@@ -89,8 +90,13 @@ export function createPdfSender(
   };
 }
 
+/** Reaches the caller's own room only, never another one (PRD §3a). */
 export function createBroadcastFileRoute(bot: Bot<MyContext>) {
   return async (req: Request, res: Response): Promise<void> => {
+    const caller = requireCallerRoom(req, res);
+    if (!caller) return;
+    const roomId = caller.roomId;
+
     const file = req.file;
     if (!file || !hasPdfSignature(file.buffer)) {
       res.status(400).json({ success: false, error: "invalid_pdf" });
@@ -105,7 +111,8 @@ export function createBroadcastFileRoute(bot: Bot<MyContext>) {
     const filename = safeFilename(file.originalname);
 
     try {
-      const result = await broadcastToAll(
+      const result = await broadcastToRoom(
+        roomId,
         createPdfSender(bot, file.buffer, filename, caption)
       );
       res.json({ success: true, ...result });
