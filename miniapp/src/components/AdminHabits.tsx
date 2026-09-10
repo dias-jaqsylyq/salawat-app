@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { AdminHabit, HabitType } from "../api/types.ts";
+import type { AdminHabit, HabitCategory, HabitType } from "../api/types.ts";
+import { CATEGORY_META, CATEGORY_ORDER } from "../lib/habitCategories.ts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,11 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
+  /**
+   * The room's category mode. When on, every habit must carry a category — the
+   * API rejects a create without one, and rejects a category when off.
+   */
+  categoriesEnabled: boolean;
 }
 
 /** Must stay in sync with salawat-bot adminHabits.ts. */
@@ -31,16 +37,65 @@ function validateHabitForm(name: string, pointsWeight: string): string | null {
   return null;
 }
 
+interface CategoryPickerProps {
+  id: string;
+  value: HabitCategory | null;
+  disabled?: boolean;
+  onChange: (category: HabitCategory) => void;
+}
+
+/** The fixed four, in the same SQ → IQ → EQ → PQ order the Log screen groups by. */
+function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>Category</Label>
+      <div
+        id={id}
+        role="tablist"
+        aria-label="Habit category"
+        className="grid grid-cols-4 gap-1 rounded-lg bg-secondary/60 p-1"
+      >
+        {CATEGORY_ORDER.map((category) => {
+          const { label, icon: Icon } = CATEGORY_META[category];
+          const active = value === category;
+          return (
+            <button
+              key={category}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              aria-label={`${category} — ${label}`}
+              disabled={disabled}
+              onClick={() => onChange(category)}
+              className={cn(
+                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                active
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Icon className="h-4 w-4" aria-hidden="true" />
+              {category}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface EditRowProps {
   initData: string;
   habit: AdminHabit;
+  categoriesEnabled: boolean;
   onSaved: (updated: AdminHabit) => void;
   onCancel: () => void;
 }
 
-function EditHabitRow({ initData, habit, onSaved, onCancel }: EditRowProps) {
+function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }: EditRowProps) {
   const [name, setName] = useState(habit.name);
   const [pointsWeight, setPointsWeight] = useState(String(habit.pointsWeight));
+  const [category, setCategory] = useState<HabitCategory | null>(habit.category);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,12 +105,19 @@ function EditHabitRow({ initData, habit, onSaved, onCancel }: EditRowProps) {
       setError(validationError);
       return;
     }
+    if (categoriesEnabled && category === null) {
+      setError("Choose a category for this habit.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       const updated = await patchHabit(initData, habit.id, {
         name: name.trim(),
         pointsWeight: Number(pointsWeight),
+        // Omitted when the room has categories off — the API rejects a category
+        // it isn't using.
+        ...(categoriesEnabled && category !== null ? { category } : {}),
       });
       onSaved(updated);
     } catch (err) {
@@ -89,6 +151,14 @@ function EditHabitRow({ initData, habit, onSaved, onCancel }: EditRowProps) {
           disabled={saving}
         />
       </div>
+      {categoriesEnabled && (
+        <CategoryPicker
+          id={`habit-category-${habit.id}`}
+          value={category}
+          disabled={saving}
+          onChange={setCategory}
+        />
+      )}
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex gap-2">
         <Button type="button" size="sm" onClick={() => void handleSave()} disabled={saving}>
@@ -105,10 +175,11 @@ function EditHabitRow({ initData, habit, onSaved, onCancel }: EditRowProps) {
 interface HabitRowProps {
   initData: string;
   habit: AdminHabit;
+  categoriesEnabled: boolean;
   onUpdated: (updated: AdminHabit) => void;
 }
 
-function HabitRow({ initData, habit, onUpdated }: HabitRowProps) {
+function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowProps) {
   const [editing, setEditing] = useState(false);
   const [togglingActive, setTogglingActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +203,7 @@ function HabitRow({ initData, habit, onUpdated }: HabitRowProps) {
       <EditHabitRow
         initData={initData}
         habit={habit}
+        categoriesEnabled={categoriesEnabled}
         onSaved={(updated) => {
           onUpdated(updated);
           setEditing(false);
@@ -161,8 +233,21 @@ function HabitRow({ initData, habit, onUpdated }: HabitRowProps) {
             <Badge variant="outline" className="shrink-0">
               {habit.type}
             </Badge>
+            {categoriesEnabled && habit.category && (
+              <Badge variant="outline" className="shrink-0">
+                {habit.category}
+              </Badge>
+            )}
           </span>
           <span className="text-xs text-muted-foreground">{habit.pointsWeight} pts</span>
+          {/* Categories were turned on after this habit was made — the server
+              keeps the old value hidden until the admin re-confirms it (PRD §0). */}
+          {categoriesEnabled && !habit.category && (
+            <span className="mt-1 flex items-center gap-1 text-xs font-medium text-destructive">
+              <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+              Tap to set a category
+            </span>
+          )}
         </button>
         <Switch
           checked={habit.isActive}
@@ -178,14 +263,17 @@ function HabitRow({ initData, habit, onUpdated }: HabitRowProps) {
 
 function CreateHabitForm({
   initData,
+  categoriesEnabled,
   onCreated,
 }: {
   initData: string;
+  categoriesEnabled: boolean;
   onCreated: (habit: AdminHabit) => void;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<HabitType>("quantity");
   const [pointsWeight, setPointsWeight] = useState("");
+  const [category, setCategory] = useState<HabitCategory | null>(null);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -197,6 +285,10 @@ function CreateHabitForm({
       setError(validationError);
       return;
     }
+    if (categoriesEnabled && category === null) {
+      setError("Choose a category for this habit.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -204,11 +296,13 @@ function CreateHabitForm({
         name: name.trim(),
         type,
         pointsWeight: Number(pointsWeight),
+        ...(categoriesEnabled && category !== null ? { category } : {}),
       });
       onCreated(habit);
       setName("");
       setType("quantity");
       setPointsWeight("");
+      setCategory(null);
     } catch (err) {
       setError(messageForApiError(err, "Couldn't create that habit."));
     } finally {
@@ -280,6 +374,15 @@ function CreateHabitForm({
             />
           </div>
 
+          {categoriesEnabled && (
+            <CategoryPicker
+              id="new-habit-category"
+              value={category}
+              disabled={creating}
+              onChange={setCategory}
+            />
+          )}
+
           {error && <p className="text-sm text-destructive">{error}</p>}
         </CardContent>
         <CardContent className="pt-0">
@@ -292,7 +395,7 @@ function CreateHabitForm({
   );
 }
 
-export default function AdminHabits({ initData }: Props) {
+export default function AdminHabits({ initData, categoriesEnabled }: Props) {
   const [habits, setHabits] = useState<AdminHabit[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -310,9 +413,11 @@ export default function AdminHabits({ initData }: Props) {
     }
   }, [initData]);
 
+  // Reload when the room's category mode flips: the rows and the form change
+  // shape, and habits created before the flip need their warning re-evaluated.
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, categoriesEnabled]);
 
   function updateHabitInList(updated: AdminHabit) {
     setHabits((prev) => prev?.map((h) => (h.id === updated.id ? updated : h)) ?? prev);
@@ -328,7 +433,11 @@ export default function AdminHabits({ initData }: Props) {
 
   return (
     <div className="space-y-4">
-      <CreateHabitForm initData={initData} onCreated={prependHabit} />
+      <CreateHabitForm
+        initData={initData}
+        categoriesEnabled={categoriesEnabled}
+        onCreated={prependHabit}
+      />
 
       <Card>
         <CardHeader>
@@ -382,6 +491,7 @@ export default function AdminHabits({ initData }: Props) {
                   key={habit.id}
                   initData={initData}
                   habit={habit}
+                  categoriesEnabled={categoriesEnabled}
                   onUpdated={updateHabitInList}
                 />
               ))}

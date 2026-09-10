@@ -25,6 +25,12 @@ interface TelegramWebApp {
   HapticFeedback: TelegramHapticFeedback;
   ready(): void;
   expand(): void;
+  /**
+   * Opens a t.me link inside Telegram itself (rather than a browser tab) —
+   * what makes the room invite share sheet work from the Mini App.
+   * Optional: older Telegram clients don't implement it.
+   */
+  openTelegramLink?(url: string): void;
 }
 
 declare global {
