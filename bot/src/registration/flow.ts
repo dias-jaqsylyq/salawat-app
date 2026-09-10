@@ -1,6 +1,7 @@
 import { InlineKeyboard, Keyboard } from "grammy";
 import { formatReminderHhMm, isValidReminderTime, parseReminderTime, config } from "../config.js";
 import { nicknameMatchesRealName, parseRealName } from "../api/realName.js";
+import { escapeHtml } from "../api/broadcastFormatting.js";
 import {
   createUser,
   deletePendingRegistration,
@@ -79,23 +80,56 @@ async function finalizeRegistration(ctx: MyContext, pending: PendingRegistration
 
   const reminderEnabled = pending.reminder_enabled === 1;
 
-  createUser(telegramId, pending.nickname, profileFromContext(ctx), pending.real_name, {
-    reminderEnabled,
-    // reminderTime is a non-nullable column (default '20:00'); this placeholder
-    // is inert whenever reminderEnabled is false.
-    reminderTime: reminderEnabled ? (pending.reminder_time ?? "20:00") : "20:00",
-  });
-
-  deletePendingRegistration(telegramId);
+  try {
+    createUser(telegramId, pending.nickname, profileFromContext(ctx), pending.real_name, {
+      reminderEnabled,
+      // reminderTime is a non-nullable column (default '20:00'); this placeholder
+      // is inert whenever reminderEnabled is false.
+      reminderTime: reminderEnabled ? (pending.reminder_time ?? "20:00") : "20:00",
+    });
+    deletePendingRegistration(telegramId);
+  } catch (err) {
+    // Never let a DB failure here vanish silently into bot.catch() — the pending
+    // row is left in place (not deleted) so the user can simply retry.
+    console.error(`finalizeRegistration: failed to save user ${telegramId}:`, err);
+    await ctx.reply(
+      "Something went wrong finishing your signup. Please try again — resend your last answer, " +
+        "or contact an admin if this keeps happening."
+    );
+    return;
+  }
 
   const openApp = new InlineKeyboard().url("Open App", config.miniAppDeepLink);
-  await ctx.reply(
-    `You're in, *${pending.nickname}*! 🌙\n\n` +
-      `All logging, progress, leaderboard, and settings are in the Mini App.\n` +
-      `You can change your details anytime in Settings.\n\n` +
-      `Tap below (or the menu button ☰) to open the app.`,
-    { parse_mode: "Markdown", reply_markup: openApp }
-  );
+  // HTML, not Markdown: the nickname is free-text and Telegram's legacy Markdown
+  // parser 400s on any unmatched _ * ` [ in the message (e.g. a nickname like
+  // "ali_2005"), which previously made this reply silently vanish into
+  // bot.catch() even though the user had just been fully registered above.
+  const confirmationText =
+    `You're in, <b>${escapeHtml(pending.nickname)}</b>! 🌙\n\n` +
+    `All logging, progress, leaderboard, and settings are in the Mini App.\n` +
+    `You can change your details anytime in Settings.\n\n` +
+    `Tap below (or the menu button ☰) to open the app.`;
+
+  try {
+    await ctx.reply(confirmationText, { parse_mode: "HTML", reply_markup: openApp });
+  } catch (err) {
+    // The account is already saved at this point — don't leave the user
+    // thinking signup failed just because the fancy confirmation didn't send.
+    console.error(
+      `finalizeRegistration: user ${telegramId} was saved but the confirmation reply failed:`,
+      err
+    );
+    try {
+      await ctx.reply(
+        `You're in, ${pending.nickname}! Open the Mini App from the menu button (☰) to get started.`
+      );
+    } catch (fallbackErr) {
+      console.error(
+        `finalizeRegistration: fallback confirmation also failed for ${telegramId}:`,
+        fallbackErr
+      );
+    }
+  }
 }
 
 /**
