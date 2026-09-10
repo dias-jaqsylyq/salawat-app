@@ -9,7 +9,26 @@ process.env.DB_PATH ??= ":memory:";
 const { getPendingRegistration, getUserByTelegramId, ensurePendingRegistration } = await import(
   "../db/repository.js"
 );
+const { db } = await import("../db/client.js");
 const { handleRegistrationAnswer } = await import("./flow.js");
+
+/**
+ * Approximates Telegram Bot API's real legacy-"Markdown" entity parser: a lone
+ * unmatched _ or * anywhere in the text makes sendMessage reject with
+ * "can't parse entities". A plain always-succeeds reply stub would hide this
+ * class of bug entirely (free-text nicknames are never guaranteed balanced).
+ */
+function assertTelegramMarkdownParses(text: string): void {
+  for (const marker of ["_", "*"]) {
+    const count = text.split(marker).length - 1;
+    if (count % 2 !== 0) {
+      throw new Error(
+        `Telegram 400: can't parse entities: Can't find end of the entity starting at byte offset ` +
+          `${text.indexOf(marker)} (unmatched "${marker}")`
+      );
+    }
+  }
+}
 
 function makeCtx(telegramId: number): {
   ctx: MyContext;
@@ -19,6 +38,9 @@ function makeCtx(telegramId: number): {
   const ctx = {
     from: { id: telegramId, is_bot: false, first_name: "Test", username: `user_${telegramId}` },
     reply: async (text: string, opts?: any) => {
+      if (opts?.parse_mode === "Markdown") {
+        assertTelegramMarkdownParses(text);
+      }
       replies.push({ text, opts });
       return {} as any;
     },
@@ -123,5 +145,61 @@ describe("registration flow", () => {
     assert.equal(getPendingRegistration(telegramId)!.step, "reminder_time");
     assert.equal(getUserByTelegramId(telegramId), undefined);
     assert.match(replies.at(-1)!.text, /isn't valid/i);
+  });
+
+  it("finalizes with a nickname containing Markdown-special characters (e.g. an underscore)", async () => {
+    // A plain "*nickname*" Markdown reply would 400 on this — see
+    // assertTelegramMarkdownParses. The real fix sends HTML with an escaped
+    // nickname instead, which this test exercises end to end.
+    const telegramId = makeTelegramId();
+    const { ctx, replies } = makeCtx(telegramId);
+    ensurePendingRegistration(telegramId);
+
+    await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "Ali Nurlanov");
+    await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "ali_2005");
+    await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "Yes");
+    await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "20:00");
+
+    assert.equal(getPendingRegistration(telegramId), undefined);
+    assert.equal(getUserByTelegramId(telegramId)?.nickname, "ali_2005");
+
+    const last = replies.at(-1)!;
+    assert.equal(last.opts?.parse_mode, "HTML");
+    assert.match(last.text, /ali_2005/);
+  });
+
+  it("logs and tells the user when saving the account fails, keeping the pending row for a retry", async () => {
+    const telegramId = makeTelegramId();
+    // Force createUser's INSERT to violate UNIQUE(telegram_id), simulating any
+    // unexpected DB-layer failure at the exact point finalizeRegistration writes.
+    db.prepare("INSERT INTO users (telegram_id, nickname) VALUES (?, ?)").run(
+      telegramId,
+      "Collision"
+    );
+
+    const { ctx, replies } = makeCtx(telegramId);
+    ensurePendingRegistration(telegramId);
+
+    const originalConsoleError = console.error;
+    const errors: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    try {
+      await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "Collision Person");
+      await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "CollisionNick");
+      await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "Yes");
+      await handleRegistrationAnswer(ctx, getPendingRegistration(telegramId)!, "20:00");
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.ok(
+      errors.some((args) => String(args[0]).includes("finalizeRegistration")),
+      "expected the failure to be logged, not swallowed silently"
+    );
+    // Retry-able: the pending row must still be there, not deleted on failure.
+    assert.equal(getPendingRegistration(telegramId)?.step, "reminder_time");
+    assert.match(replies.at(-1)!.text, /went wrong|try again/i);
   });
 });
