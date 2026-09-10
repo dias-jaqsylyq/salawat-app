@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Download, RefreshCw, Trophy } from "lucide-react";
-import {
-  downloadAdminExport,
-  getAdminLeaderboard,
-} from "../api/client.ts";
+import { downloadAdminExport, getAdminLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type {
-  AdminLeaderboardResponse,
-  LeaderboardPeriod,
-} from "../api/types.ts";
+import type { AdminLeaderboardResponse } from "../api/types.ts";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,16 +15,9 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
-  mawlidStartDate: string;
-  mawlidEndDate: string;
 }
 
-export default function AdminResults({
-  initData,
-  mawlidStartDate,
-  mawlidEndDate,
-}: Props) {
-  const [period, setPeriod] = useState<LeaderboardPeriod>("all");
+export default function AdminResults({ initData }: Props) {
   const [data, setData] = useState<AdminLeaderboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
@@ -40,13 +27,13 @@ export default function AdminResults({
     setLoading(true);
     setError(null);
     try {
-      setData(await getAdminLeaderboard(initData, period));
+      setData(await getAdminLeaderboard(initData));
     } catch (err) {
       setError(messageForApiError(err, "Couldn't load leaderboard results."));
     } finally {
       setLoading(false);
     }
-  }, [initData, period]);
+  }, [initData]);
 
   useEffect(() => {
     void load();
@@ -57,11 +44,8 @@ export default function AdminResults({
     setDownloading(true);
     setError(null);
     try {
-      const blob = await downloadAdminExport(initData, period);
-      const filename =
-        period === "mawlid"
-          ? `salawat-leaderboard-mawlid-${mawlidStartDate}-to-${mawlidEndDate}.csv`
-          : `salawat-leaderboard-all-time-${new Date().toISOString().slice(0, 10)}.csv`;
+      const blob = await downloadAdminExport(initData);
+      const filename = `habit-tracker-leaderboard-${new Date().toISOString().slice(0, 10)}.csv`;
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -83,9 +67,7 @@ export default function AdminResults({
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1.5">
             <CardTitle>Leaderboard Results</CardTitle>
-            <CardDescription>
-              Live totals from the current database.
-            </CardDescription>
+            <CardDescription>Live totals from the current database.</CardDescription>
           </div>
           <Button
             type="button"
@@ -100,35 +82,9 @@ export default function AdminResults({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div
-          role="tablist"
-          aria-label="Leaderboard period"
-          className="grid grid-cols-2 gap-1 rounded-lg bg-secondary/60 p-1"
-        >
-          {(["all", "mawlid"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={period === value}
-              onClick={() => setPeriod(value)}
-              className={cn(
-                "min-h-11 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                period === value
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {value === "all" ? "All-time" : "Mawlid"}
-            </button>
-          ))}
-        </div>
-
         <div className="rounded-lg bg-secondary/35 px-4 py-3">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {period === "all"
-              ? "All-time jamaat total"
-              : `Mawlid · ${mawlidStartDate} → ${mawlidEndDate}`}
+            All-time jamaat total
           </p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
             {loading ? "…" : (data?.jamaatTotal ?? 0).toLocaleString()}
@@ -165,7 +121,7 @@ export default function AdminResults({
                     </span>
                   </div>
                   <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-                    {entry.total.toLocaleString()}
+                    {entry.totalPoints.toLocaleString()}
                   </span>
                 </div>
               ))
@@ -185,9 +141,7 @@ export default function AdminResults({
           ) : (
             <Download className="h-4 w-4" />
           )}
-          {downloading
-            ? "Preparing CSV…"
-            : `Download ${period === "all" ? "all-time" : "Mawlid"} CSV`}
+          {downloading ? "Preparing CSV…" : "Download CSV"}
         </Button>
 
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

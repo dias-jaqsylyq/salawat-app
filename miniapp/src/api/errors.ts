@@ -7,10 +7,21 @@ export function messageForApiError(err: unknown, fallback: string): string {
   }
 
   switch (err.code) {
-    case "invalid_count":
-      return "Enter a whole number between 1 and 10,000.";
-    case "invalid_goal":
-      return "Enter a valid positive daily goal.";
+    case "invalid_habit_id":
+    case "habit_not_found":
+      return "That habit isn't available anymore.";
+    case "habit_inactive":
+      return "This habit is no longer active.";
+    case "invalid_value":
+      return "Enter a valid whole number.";
+    case "invalid_name":
+      return "Name must be 1–100 characters.";
+    case "invalid_type":
+      return "Choose a valid habit type.";
+    case "invalid_points_weight":
+      return "Points must be a whole number between 1 and 1,000,000.";
+    case "invalid_is_active":
+      return "That active/inactive value is invalid.";
     case "invalid_nickname":
       return "Nickname must be 1–50 characters.";
     case "invalid_real_name":
@@ -22,10 +33,7 @@ export function messageForApiError(err: unknown, fallback: string): string {
     case "invalid_reminder_enabled":
       return "Reminder setting is invalid.";
     case "invalid_reminder_time":
-    case "invalid_fasting_reminder_time":
       return "Enter a valid reminder time (HH:mm).";
-    case "invalid_fasting_reminder_enabled":
-      return "Fasting reminder setting is invalid.";
     case "invalid_body":
       return "Nothing to save — change something first.";
     case "rate_limited":
@@ -51,12 +59,6 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "PDF must be 20 MB or smaller.";
     case "invalid_caption":
       return "The caption is too long.";
-    case "invalid_period":
-      return "Choose a valid results period.";
-    case "invalid_drop_from_jamaat":
-      return "The Jamaat total option is invalid.";
-    case "export_disabled":
-      return "CSV export is not available.";
     case "missing_init_data":
     case "invalid_init_data":
       return "Telegram session expired — close and reopen the app from the bot menu.";

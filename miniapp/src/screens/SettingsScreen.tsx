@@ -2,46 +2,40 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ChevronLeft } from "lucide-react";
 import { getProfile, patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { ChallengeMeta } from "../api/types.ts";
+import {
+  NICKNAME_MATCHES_REAL_NAME_MESSAGE,
+  REAL_NAME_MAX_LENGTH,
+  nicknameMatchesRealName,
+  validateRealName,
+} from "../lib/realName.ts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import ResetProgressDangerZone from "../components/ResetProgressDangerZone.tsx";
 
 interface Props {
   initData: string;
-  challenge: ChallengeMeta;
-  /** Challenge TIMEZONE label for reminder helper copy. */
+  /** Server TIMEZONE label for reminder helper copy. */
   timezoneLabel?: string;
   onBack: () => void;
   /** Called after a successful save so the parent can refresh progress. */
   onSaved: () => void;
 }
 
-/** Must stay in sync with salawat-bot MAX_GOAL. */
-const MAX_GOAL = 100_000_000;
 const CONFIRM_MS = 900;
 
-function validate(
-  nickname: string,
-  dailyGoal: string,
-  reminderTime: string,
-  fastingReminderTime: string
-): string | null {
-  const trimmed = nickname.trim();
-  if (trimmed.length === 0 || trimmed.length > 50) {
+function validate(nickname: string, realName: string, reminderTime: string): string | null {
+  const trimmedNickname = nickname.trim();
+  if (trimmedNickname.length === 0 || trimmedNickname.length > 50) {
     return "Nickname must be 1–50 characters.";
   }
-  const goalNum = Number(dailyGoal);
-  if (!Number.isInteger(goalNum) || goalNum <= 0) {
-    return "Daily goal must be a positive whole number.";
+  const realNameError = validateRealName(realName);
+  if (realNameError) return realNameError;
+  if (nicknameMatchesRealName(trimmedNickname, realName)) {
+    return NICKNAME_MATCHES_REAL_NAME_MESSAGE;
   }
-  if (goalNum > MAX_GOAL) {
-    return `Daily goal must be at most ${MAX_GOAL.toLocaleString()}.`;
-  }
-  if (!/^\d{2}:\d{2}$/.test(reminderTime) || !/^\d{2}:\d{2}$/.test(fastingReminderTime)) {
+  if (!/^\d{2}:\d{2}$/.test(reminderTime)) {
     return "Enter a valid reminder time (HH:mm).";
   }
   return null;
@@ -49,17 +43,14 @@ function validate(
 
 export default function SettingsScreen({
   initData,
-  challenge,
   timezoneLabel = "Asia/Hong_Kong",
   onBack,
   onSaved,
 }: Props) {
   const [nickname, setNickname] = useState("");
-  const [dailyGoal, setDailyGoal] = useState("");
+  const [realName, setRealName] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(true);
   const [reminderTime, setReminderTime] = useState("20:00");
-  const [fastingReminderEnabled, setFastingReminderEnabled] = useState(false);
-  const [fastingReminderTime, setFastingReminderTime] = useState("20:00");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,11 +64,9 @@ export default function SettingsScreen({
       .then((profile) => {
         if (cancelled) return;
         setNickname(profile.nickname);
-        setDailyGoal(String(profile.dailyGoal));
+        setRealName(profile.realName ?? "");
         setReminderEnabled(profile.reminderEnabled);
         setReminderTime(profile.reminderTime);
-        setFastingReminderEnabled(profile.fastingReminderEnabled ?? false);
-        setFastingReminderTime(profile.fastingReminderTime ?? "20:00");
       })
       .catch((err) => {
         if (!cancelled) {
@@ -96,7 +85,7 @@ export default function SettingsScreen({
     e.preventDefault();
     if (saving || loading) return;
 
-    const validationError = validate(nickname, dailyGoal, reminderTime, fastingReminderTime);
+    const validationError = validate(nickname, realName, reminderTime);
     if (validationError) {
       setError(validationError);
       return;
@@ -108,11 +97,9 @@ export default function SettingsScreen({
     try {
       await patchProfile(initData, {
         nickname: nickname.trim(),
-        dailyGoal: Number(dailyGoal),
+        realName: realName.trim(),
         reminderEnabled,
         reminderTime,
-        fastingReminderEnabled,
-        fastingReminderTime,
       });
       setConfirmation("Saved!");
       onSaved();
@@ -164,17 +151,18 @@ export default function SettingsScreen({
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="settings-goal">Daily goal</Label>
+                    <Label htmlFor="settings-real-name">Full name (real name)</Label>
                     <Input
-                      id="settings-goal"
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={MAX_GOAL}
-                      step={1}
-                      value={dailyGoal}
-                      onChange={(e) => setDailyGoal(e.target.value)}
+                      id="settings-real-name"
+                      type="text"
+                      value={realName}
+                      onChange={(e) => setRealName(e.target.value)}
+                      maxLength={REAL_NAME_MAX_LENGTH}
+                      autoComplete="name"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Only the admin can see this. Other participants see your nickname.
+                    </p>
                   </div>
                 </section>
 
@@ -200,49 +188,9 @@ export default function SettingsScreen({
                       disabled={!reminderEnabled}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Times use the challenge timezone ({timezoneLabel}).
+                      Times use the server timezone ({timezoneLabel}).
                     </p>
                   </div>
-                </section>
-
-                <section className="space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Fasting Reminders</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Get a reminder every Sunday and Wednesday evening to prepare for the Sunnah fast of Monday and Thursday.
-                  </p>
-                  <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="settings-fasting-reminder-enabled" className="flex-1">
-                      Sunday & Wednesday reminder
-                    </Label>
-                    <Switch
-                      id="settings-fasting-reminder-enabled"
-                      checked={fastingReminderEnabled}
-                      onCheckedChange={setFastingReminderEnabled}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="settings-fasting-reminder-time">Reminder time</Label>
-                    <Input
-                      id="settings-fasting-reminder-time"
-                      type="time"
-                      value={fastingReminderTime}
-                      onChange={(e) => setFastingReminderTime(e.target.value)}
-                      disabled={!fastingReminderEnabled}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      One time for both days, in {timezoneLabel}.
-                    </p>
-                  </div>
-                </section>
-
-                <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">About</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Challenge {challenge.challengeStartDate} → {challenge.challengeEndDate}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    Prizes are based on total salawat logged (all-time), not daily goals or streaks.
-                  </p>
                 </section>
               </>
             )}
@@ -258,11 +206,6 @@ export default function SettingsScreen({
           </CardFooter>
         </Card>
       </form>
-      <ResetProgressDangerZone
-        initData={initData}
-        onReset={onSaved}
-        onBack={onBack}
-      />
     </div>
   );
 }

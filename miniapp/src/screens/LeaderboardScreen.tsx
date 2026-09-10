@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Trophy } from "lucide-react";
 import { getLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { LeaderboardEntry, RegisteredProgress } from "../api/types.ts";
-import { daysLeftCopy } from "../lib/challengeCopy.ts";
+import type { LeaderboardEntry } from "../api/types.ts";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +10,6 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
-  progress: Pick<RegisteredProgress, "challengeStatus" | "challengeEndDate" | "daysLeft">;
 }
 
 function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "outline" {
@@ -32,7 +30,7 @@ function isTied(entries: LeaderboardEntry[], entry: LeaderboardEntry): boolean {
   return entries.some((other) => other !== entry && other.rank === entry.rank);
 }
 
-export default function LeaderboardScreen({ initData, progress }: Props) {
+export default function LeaderboardScreen({ initData }: Props) {
   const [entries, setEntries] = useState<LeaderboardEntry[] | null>(null);
   const [jamaatTotal, setJamaatTotal] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,12 +73,8 @@ export default function LeaderboardScreen({ initData, progress }: Props) {
         <p className="text-xl font-semibold tabular-nums text-foreground">
           {loading || jamaatTotal === null
             ? "…"
-            : `${jamaatTotal.toLocaleString()} salawat`}
+            : `${jamaatTotal.toLocaleString()} points`}
         </p>
-      </div>
-
-      <div className="rounded-lg bg-muted px-4 py-3 text-sm text-muted-foreground">
-        {daysLeftCopy(progress)}
       </div>
 
       {error && (
@@ -126,7 +120,7 @@ export default function LeaderboardScreen({ initData, progress }: Props) {
                   </span>
                 </span>
                 <span className="text-sm tabular-nums text-muted-foreground">
-                  {entry.total.toLocaleString()}
+                  {entry.totalPoints.toLocaleString()}
                 </span>
               </div>
             ))}

@@ -1,26 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useTelegram } from "./telegram/useTelegram.ts";
-import { getIsAdmin, getProgress } from "./api/client.ts";
+import { getHabits, getIsAdmin, getProgress } from "./api/client.ts";
 import { messageForApiError } from "./api/errors.ts";
-import type { DayBreakdown, RegisteredProgress } from "./api/types.ts";
+import type { Habit, RegisteredProgress } from "./api/types.ts";
 import IncompleteRegistrationScreen from "./screens/IncompleteRegistrationScreen.tsx";
 import RealNamePromptScreen from "./screens/RealNamePromptScreen.tsx";
-import LogSalawatScreen from "./screens/LogSalawatScreen.tsx";
+import LogHabitsScreen from "./screens/LogHabitsScreen.tsx";
 import ProgressScreen from "./screens/ProgressScreen.tsx";
 import LeaderboardScreen from "./screens/LeaderboardScreen.tsx";
 import SettingsScreen from "./screens/SettingsScreen.tsx";
 import AdminScreen from "./screens/AdminScreen.tsx";
-import CelebrationOverlay from "./components/CelebrationOverlay.tsx";
 import TabBar, { type Tab } from "./components/TabBar.tsx";
 import { Button } from "@/components/ui/button";
-import {
-  type CelebrationEvent,
-  diffMilestones,
-  getCelebrated,
-  markCelebrated,
-  seedAchieved,
-} from "./lib/milestones.ts";
-import { resolveTelegramId } from "./lib/telegramId.ts";
 
 type LoadState =
   | { status: "loading" }
@@ -44,93 +35,27 @@ function useSyncDarkMode() {
 }
 
 export default function App() {
-  const { initData, available, user } = useTelegram();
-  const telegramId = resolveTelegramId(initData, user?.id);
+  const { initData, available } = useTelegram();
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [activeTab, setActiveTab] = useState<Tab>("progress");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [tabSwitching, setTabSwitching] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [celebrationQueue, setCelebrationQueue] = useState<CelebrationEvent[]>([]);
-  const [activeCelebration, setActiveCelebration] = useState<CelebrationEvent | null>(null);
-
-  const flushLogRef = useRef<(() => Promise<void>) | null>(null);
-  const prevProgressRef = useRef<RegisteredProgress | null>(null);
-  const celebratedRef = useRef<Set<string>>(getCelebrated(telegramId));
+  /** null = not loaded yet, distinct from a genuinely empty active-habit list. */
+  const [habits, setHabits] = useState<Habit[] | null>(null);
 
   useSyncDarkMode();
 
-  useEffect(() => {
-    celebratedRef.current = getCelebrated(telegramId);
-  }, [telegramId]);
-
-  // Advance queue → active overlay.
-  useEffect(() => {
-    if (activeCelebration) return;
-    if (celebrationQueue.length === 0) return;
-    const [next, ...rest] = celebrationQueue;
-    setActiveCelebration(next ?? null);
-    setCelebrationQueue(rest);
-  }, [celebrationQueue, activeCelebration]);
-
-  const enqueueCelebrations = useCallback((events: CelebrationEvent[]) => {
-    if (events.length === 0) return;
-    setCelebrationQueue((q) => [...q, ...events]);
-  }, []);
-
-  const handleCelebrationContinue = useCallback(() => {
-    if (activeCelebration) {
-      markCelebrated(telegramId, [activeCelebration.id]);
-      celebratedRef.current.add(activeCelebration.id);
-    }
-    setActiveCelebration(null);
-  }, [activeCelebration, telegramId]);
-
   const handleTabChange = useCallback(
-    async (next: Tab) => {
-      if (next === activeTab || tabSwitching) return;
+    (next: Tab) => {
       if (next === "admin" && !isAdmin) return;
-
-      if (activeTab === "log" && next !== "log") {
-        const flush = flushLogRef.current;
-        if (flush) {
-          setTabSwitching(true);
-          try {
-            await flush();
-          } catch {
-            // Stay on Log — LogSalawatScreen already surfaces the error.
-            return;
-          } finally {
-            setTabSwitching(false);
-          }
-        }
-      }
-
       setActiveTab(next);
     },
-    [activeTab, tabSwitching, isAdmin],
+    [isAdmin]
   );
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
-
-  const handleDayOverride = useCallback((update: { streak: number; last7Days: DayBreakdown[] }) => {
-    setState((prev) => {
-      if (prev.status !== "ready") return prev;
-      const nextProgress = {
-        ...prev.progress,
-        streak: update.streak,
-        last7Days: update.last7Days,
-      };
-      prevProgressRef.current = nextProgress;
-      return { status: "ready", progress: nextProgress };
-    });
-  }, []);
-
-  const registerLogFlush = useCallback((flush: (() => Promise<void>) | null) => {
-    flushLogRef.current = flush;
-  }, []);
 
   const loadProgress = useCallback(async () => {
     try {
@@ -139,19 +64,6 @@ export default function App() {
         setState({ status: "needs-registration" });
         return;
       }
-
-      const prev = prevProgressRef.current;
-      if (prev === null) {
-        // First hydrate: seed historical milestones without animating.
-        seedAchieved(telegramId, result);
-        celebratedRef.current = getCelebrated(telegramId);
-      } else {
-        const events = diffMilestones(prev, result, celebratedRef.current);
-        // In-session dedupe if loadProgress races before Continue.
-        for (const event of events) celebratedRef.current.add(event.id);
-        enqueueCelebrations(events);
-      }
-      prevProgressRef.current = result;
       if (result.needsRealName) {
         setState({ status: "needs-real-name", progress: result });
         return;
@@ -163,13 +75,31 @@ export default function App() {
         message: messageForApiError(err, "Couldn't reach the server."),
       });
     }
-  }, [initData, telegramId, enqueueCelebrations]);
+  }, [initData]);
 
   useEffect(() => {
     if (available) {
       void loadProgress();
     }
   }, [available, loadProgress]);
+
+  useEffect(() => {
+    if (!available) {
+      setHabits(null);
+      return;
+    }
+    let cancelled = false;
+    void getHabits(initData)
+      .then((result) => {
+        if (!cancelled) setHabits(result);
+      })
+      .catch(() => {
+        if (!cancelled) setHabits([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [available, initData]);
 
   useEffect(() => {
     if (!available) {
@@ -194,11 +124,11 @@ export default function App() {
     if (!isAdmin && activeTab === "admin") setActiveTab("progress");
   }, [activeTab, isAdmin]);
 
-  // Refetch progress whenever the Progress tab is shown (keep prior UI; no loading flash).
+  // Refetch progress whenever Progress or Log is shown (keep prior UI; no loading flash).
   useEffect(() => {
     if (state.status !== "ready") return;
     if (settingsOpen) return;
-    if (activeTab !== "progress") return;
+    if (activeTab !== "progress" && activeTab !== "log") return;
     void loadProgress();
   }, [activeTab, settingsOpen, state.status, loadProgress]);
 
@@ -249,7 +179,6 @@ export default function App() {
         <div className="min-h-screen bg-background">
           <SettingsScreen
             initData={initData}
-            challenge={state.progress}
             onBack={closeSettings}
             onSaved={() => void loadProgress()}
           />
@@ -259,37 +188,22 @@ export default function App() {
           {activeTab === "progress" && (
             <ProgressScreen
               progress={state.progress}
-              initData={initData}
+              habits={habits}
               onOpenSettings={openSettings}
-              onDayOverride={handleDayOverride}
             />
           )}
           {activeTab === "log" && (
-            <LogSalawatScreen
+            <LogHabitsScreen
               initData={initData}
-              total={state.progress.total}
-              todayTotal={state.progress.todayTotal ?? 0}
+              habits={habits}
+              progress={state.progress}
               onLogged={() => void loadProgress()}
-              onRegisterFlush={registerLogFlush}
             />
           )}
-          {activeTab === "leaderboard" && (
-            <LeaderboardScreen initData={initData} progress={state.progress} />
-          )}
-          {activeTab === "admin" && isAdmin && (
-            <AdminScreen initData={initData} />
-          )}
-          <TabBar
-            activeTab={activeTab}
-            onChange={(tab) => void handleTabChange(tab)}
-            disabled={tabSwitching}
-            showAdmin={isAdmin}
-          />
+          {activeTab === "leaderboard" && <LeaderboardScreen initData={initData} />}
+          {activeTab === "admin" && isAdmin && <AdminScreen initData={initData} />}
+          <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
         </div>
-      )}
-
-      {activeCelebration && (
-        <CelebrationOverlay celebration={activeCelebration} onContinue={handleCelebrationContinue} />
       )}
     </>
   );
