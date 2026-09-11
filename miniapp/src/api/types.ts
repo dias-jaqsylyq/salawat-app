@@ -132,6 +132,26 @@ export interface LeaderboardResponse {
   leaderboard: LeaderboardEntry[];
 }
 
+/**
+ * One row of the Leaderboard screen, whichever endpoint filled it.
+ *
+ * Everyone sees the same screen; only the source differs. GET /api/leaderboard
+ * gives participants nickname and points alone, while an admin's screen is fed
+ * by GET /api/admin/leaderboard, which also carries the real name, the telegram
+ * id the member actions address, and who holds co-admin. Those three are
+ * optional here precisely because a participant's rows never have them — the
+ * server does not send a member's real name to their room-mates.
+ */
+export interface LeaderboardMember {
+  rank: number;
+  nickname: string;
+  totalPoints: number;
+  isYou: boolean;
+  realName?: string | null;
+  telegramId?: number;
+  isRoomAdmin?: boolean;
+}
+
 export interface ProfileResponse {
   nickname: string;
   realName: string | null;

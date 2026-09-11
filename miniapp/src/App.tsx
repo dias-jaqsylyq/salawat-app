@@ -115,15 +115,9 @@ export default function App() {
       ? (state.progress.room?.id ?? null)
       : null;
 
-  const refreshAdminStatus = useCallback(async () => {
-    try {
-      const result = await getIsAdmin(initData);
-      setIsAdmin(result.isAdmin);
-    } catch {
-      setIsAdmin(false);
-    }
-  }, [initData]);
-
+  // Nothing in the app changes the viewer's own admin status any more — demote
+  // is not offered in the UI — so this effect is the only thing that resolves
+  // it, on mount and on every room change.
   useEffect(() => {
     if (!available || currentRoomId === null) {
       setIsAdmin(false);
@@ -269,13 +263,14 @@ export default function App() {
               onLogged={() => void loadProgress()}
             />
           )}
-          {activeTab === "leaderboard" && <LeaderboardScreen initData={initData} />}
-          {activeTab === "admin" && isAdmin && (
-            <AdminScreen
+          {activeTab === "leaderboard" && (
+            <LeaderboardScreen
               initData={initData}
-              onAdminStatusChanged={() => void refreshAdminStatus()}
+              isAdmin={isAdmin}
+              roomName={state.progress.room?.name ?? null}
             />
           )}
+          {activeTab === "admin" && isAdmin && <AdminScreen initData={initData} />}
           <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
         </div>
       )}
