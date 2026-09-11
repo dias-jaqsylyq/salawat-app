@@ -36,6 +36,8 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "Enter a valid reminder time (HH:mm).";
     case "invalid_body":
       return "Nothing to save — change something first.";
+    case "invalid_json":
+      return "That request was malformed — please try again.";
     case "rate_limited":
       return "You're doing that too fast — wait a moment and try again.";
     case "not_registered":

@@ -235,7 +235,9 @@ export default function App() {
   return (
     <>
       {settingsOpen ? (
-        <div className="min-h-screen bg-background">
+        // No TabBar here, but the last control still has to clear the home
+        // indicator on gesture-navigation devices.
+        <div className="min-h-screen bg-background pb-[env(safe-area-inset-bottom)]">
           <SettingsScreen
             initData={initData}
             onBack={closeSettings}
@@ -247,7 +249,10 @@ export default function App() {
           />
         </div>
       ) : (
-        <div className="min-h-screen bg-background pb-16">
+        // Room for the fixed TabBar: its own height (pb-16) *plus* the safe-area
+        // inset the bar itself adds. A flat 4rem left the last ~25px of every
+        // screen hidden behind the bar on devices with a home indicator.
+        <div className="min-h-screen bg-background pb-[calc(4rem+env(safe-area-inset-bottom))]">
           {activeTab === "progress" && (
             <ProgressScreen
               initData={initData}

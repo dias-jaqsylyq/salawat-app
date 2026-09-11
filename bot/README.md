@@ -52,7 +52,7 @@ Open `.env` and set:
 - `CORS_ORIGIN` — origin(s) allowed to call the API. Defaults to `*` (dev only). **In production (`NODE_ENV=production`) this must be set to the real Vercel domain** (not `*`) or the process refuses to start.
 - `MINI_APP_URL` — the deployed Mini App's real HTTPS URL, used for the bot's chat menu button. If left as the placeholder, menu-button setup is skipped (process still boots).
 - `MINI_APP_DEEP_LINK` — `t.me/salawat_challenge_bot/challenge` deep link used in the daily reminder's button. Works today independent of the Vercel deployment.
-- `INIT_DATA_MAX_AGE_SECONDS` — how old a Telegram `initData` payload can be before it's rejected as stale (prefer `3600` in production; code default is 24h if unset).
+- `INIT_DATA_MAX_AGE_SECONDS` — how old a Telegram `initData` payload can be before it's rejected as stale (replay protection). Defaults to `3600` (1h) when `NODE_ENV=production` and `86400` (24h) otherwise, so production is safe without setting it. A value that is set but not a positive whole number is a startup error rather than a silent fallback.
 - `ADMIN_EXPORT_SECRET` — optional. When set, enables `GET /api/admin/export?key=…` for prize-time CSV download.
 
 There is no `ADMIN_TELEGRAM_ID`: with rooms there is no global admin to bootstrap. Admin status is room-scoped and granted by creating a room or by being promoted inside one — see [Data model](#data-model-rooms).
@@ -66,8 +66,8 @@ Before sharing the invite beyond a tiny trusted group:
 2. `CORS_ORIGIN=https://<vercel-domain>` (not `*`); `NODE_ENV=production`
 3. `MINI_APP_URL` + BotFather Web App URL = same HTTPS URL; redeploy bot
 4. Vercel `VITE_API_URL` = Railway public API URL → **redeploy** the Mini App (Vite bakes env at build time)
-5. Copy `salawat.backup.db` (or `npm run backup` output) **off** the Railway volume on a schedule
-6. `INIT_DATA_MAX_AGE_SECONDS=3600`
+5. Copy `data/backups/` **off** the Railway volume on a schedule (manual step — see [Backups](#backups))
+6. `INIT_DATA_MAX_AGE_SECONDS=3600` (optional — production already defaults to 1h)
 7. Set `ADMIN_EXPORT_SECRET` to a long random string if you want CSV export at prize time
 8. Confirm challenge dates / `TIMEZONE` / `MINI_APP_DEEP_LINK`
 
@@ -255,13 +255,97 @@ This already assumes the service is on Railway per the original setup. To make t
    - Redeploy. Without a volume, every redeploy starts with an empty database.
 
 ### Backups
-The process writes a rolling WAL-safe backup to `data/salawat.backup.db` shortly after boot and daily at 03:00 (challenge timezone) via better-sqlite3. Railway volumes are still not snapshotted for you — copy that file (or timestamped backups) off the volume if the data matters.
 
-For an on-demand timestamped copy (requires `sqlite3` CLI):
+The process writes WAL-safe backups via better-sqlite3 into `data/backups/`
+(next to `DB_PATH`), named `salawat-<UTC timestamp>.db`:
+
+- **daily at 03:00** in the challenge timezone, and
+- **once shortly after boot** — but only if the newest existing backup is
+  already at least 12 hours old.
+
+The **7 most recent** are kept; older ones are pruned automatically.
+
+Two details worth knowing, because both are deliberate:
+
+- Backups are never overwritten, only added and pruned. A bad snapshot can
+  therefore never destroy a good one.
+- The boot-time backup is skipped while a recent backup exists. Without that,
+  a service stuck in a restart loop would write seven backups of the broken
+  state within a minute and rotate away exactly the history you need.
+
+For an on-demand copy before something risky (requires the `sqlite3` CLI). It
+writes into the same directory and prunes to the same depth:
 
 ```bash
 npm run backup   # writes data/backups/salawat-<UTC timestamp>.db via sqlite3 .backup
 ```
+
+#### Copy backups off the volume (manual)
+
+Railway volumes are **not** snapshotted for you, and the backups live on the
+same volume as the live database — so losing the volume loses both. Nothing in
+the app does this for you; if the data matters, copy it off on a schedule:
+
+```bash
+railway run -- tar -czf - /data/backups > "salawat-backups-$(date -u +%Y%m%d).tar.gz"
+```
+
+#### Restoring from a backup
+
+If something goes wrong in production, this is the whole procedure.
+
+1. **Stop the bot** so nothing writes to the database while you work.
+   Railway → your service → **Settings → pause the service** (or redeploy
+   after step 4 — just don't leave it running).
+
+2. **Pick which backup to restore.** They're on the volume in
+   `/data/backups/`, newest last:
+
+   ```bash
+   ls -la /data/backups/
+   ```
+
+   The filename is the UTC time the backup was taken, so
+   `salawat-20260911T030000Z.db` is 03:00 UTC on 11 September 2026. Pick the
+   newest one from *before* the problem started — if bad data was written on
+   Tuesday, a Wednesday backup already contains it.
+
+3. **Move the damaged database aside** rather than deleting it. If the restore
+   goes badly, this is your only way back, and it may still hold the most
+   recent records:
+
+   ```bash
+   mv /data/salawat.db /data/salawat.db.broken
+   mv /data/salawat.db-wal /data/salawat.db-wal.broken 2>/dev/null || true
+   mv /data/salawat.db-shm /data/salawat.db-shm.broken 2>/dev/null || true
+   ```
+
+   The `-wal` and `-shm` files are SQLite's journal for the *old* database.
+   Leaving them next to a restored file lets SQLite try to apply the old
+   journal to it, which is how a clean restore gets corrupted — move all three.
+
+4. **Copy** (don't move) the chosen backup into place, so the backup stays in
+   the rotation:
+
+   ```bash
+   cp /data/backups/salawat-20260911T030000Z.db /data/salawat.db
+   ```
+
+5. **Start the bot.** The migrations that run at boot are idempotent and will
+   not touch restored data.
+
+6. **Check it worked** — open the Mini App and confirm the leaderboard and a
+   couple of habit logs look right. Once you're satisfied, delete the
+   `.broken` files.
+
+**What you lose:** everything logged between the backup you restored and the
+moment things broke — at most a day with the daily schedule. There is no way to
+recover that from the backups themselves; if it matters, take a manual
+`npm run backup` before any risky change.
+
+**If someone was mid-registration** during the restore, their half-finished
+signup may be gone. They just send `/start` again — partial answers live in
+`pending_registrations` and are rebuilt from scratch, nothing else breaks.
 
 ### Small VPS
 Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on the server. Expose `PORT` over HTTPS (e.g. via nginx + Let's Encrypt) so the Mini App can reach `/api/*`. Point `DB_PATH` at a durable disk path and run `npm run backup` on a cron.
