@@ -10,6 +10,7 @@ import { allowRequest } from "../api/rateLimit.js";
 import { nicknameMatchesRealName, parseRealName } from "../api/realName.js";
 import { escapeHtml } from "../api/broadcastFormatting.js";
 import {
+  clearRegistrationMessages,
   createAdminWithRoom,
   createUser,
   deletePendingRegistration,
@@ -17,8 +18,11 @@ import {
   getRoomByPassword,
   getUserByTelegramId,
   isNicknameTaken,
+  listRegistrationMessageIds,
+  recordRegistrationMessage,
   updatePendingRegistration,
 } from "../db/repository.js";
+import { safeDeleteMessage } from "../utils/messages.js";
 import { isValidRoomPassword, roomInviteLink } from "../utils/roomPassword.js";
 import type { MyContext } from "../context.js";
 import type {
@@ -131,17 +135,61 @@ export async function promptCurrentStep(
   // HTML throughout: prompts carry bold markup, and prefaces interpolate free
   // text (room names) that must not be parsed as markup — see escapeHtml calls
   // at every call site that builds one.
-  if (pending.step === "role") {
-    await ctx.reply(text, { parse_mode: "HTML", reply_markup: ROLE_KEYBOARD });
-    return;
-  }
+  const replyMarkup =
+    pending.step === "role"
+      ? ROLE_KEYBOARD
+      : usesYesNoKeyboard(pending.step)
+        ? YES_NO_KEYBOARD
+        : REMOVE_KEYBOARD;
 
-  if (usesYesNoKeyboard(pending.step)) {
-    await ctx.reply(text, { parse_mode: "HTML", reply_markup: YES_NO_KEYBOARD });
-    return;
-  }
+  // Every signup question the bot asks passes through here, which is what makes
+  // this the one place that has to remember them for the post-finalize sweep.
+  const sent = await ctx.reply(text, { parse_mode: "HTML", reply_markup: replyMarkup });
+  trackRegistrationMessage(pending.telegram_id, sent.message_id);
+}
 
-  await ctx.reply(text, { parse_mode: "HTML", reply_markup: REMOVE_KEYBOARD });
+/**
+ * Remember a message that belongs to an in-progress signup, so
+ * finalizeRegistration can delete it once the account exists. Never throws:
+ * losing one id costs a leftover message, which must not cost the signup.
+ */
+export function trackRegistrationMessage(
+  telegramId: number,
+  messageId: number | undefined
+): void {
+  if (messageId === undefined) return;
+  try {
+    recordRegistrationMessage(telegramId, messageId);
+  } catch (err) {
+    console.error(`Could not record registration message ${messageId} for ${telegramId}:`, err);
+  }
+}
+
+/**
+ * Delete the whole signup conversation — every question and every answer that
+ * was recorded before this point. The confirmation message is deliberately not
+ * among them: it is sent *after* the caller snapshots the list, so it stays in
+ * the chat for good (an admin needs to be able to read their room password back
+ * from it).
+ *
+ * Each deletion is isolated: Telegram refuses messages older than 48 hours and
+ * ones the user already removed, and neither may stop the rest of the sweep.
+ */
+async function cleanupRegistrationMessages(
+  ctx: MyContext,
+  telegramId: number,
+  messageIds: number[]
+): Promise<void> {
+  try {
+    for (const messageId of messageIds) {
+      await safeDeleteMessage(ctx.api, telegramId, messageId);
+    }
+    clearRegistrationMessages(telegramId);
+  } catch (err) {
+    // The account is already saved by now — a failed cleanup is cosmetic and
+    // must never surface as a registration error.
+    console.error(`Registration message cleanup failed for ${telegramId}:`, err);
+  }
 }
 
 function profileFromContext(ctx: MyContext): TelegramProfile {
@@ -272,6 +320,10 @@ async function finalizeAdminRegistration(
     throw new Error(`Incomplete room answers for ${telegramId}`);
   }
 
+  // Snapshot before anything is sent: the confirmation below must not end up in
+  // this list, and nothing new is recorded past this point.
+  const conversation = listRegistrationMessageIds(telegramId);
+
   let room: Room;
   try {
     const created = createAdminWithRoom(
@@ -313,6 +365,7 @@ async function finalizeAdminRegistration(
     `Share it with your participants. Open the Mini App from the menu button (☰) to add habits.`;
 
   await sendConfirmation(ctx, telegramId, html, plain);
+  await cleanupRegistrationMessages(ctx, telegramId, conversation);
 }
 
 /** Participant path: join the room their password already resolved to. */
@@ -324,6 +377,9 @@ async function finalizeParticipantRegistration(
   if (pending.room_id === null) {
     throw new Error(`Incomplete room answer for ${telegramId}`);
   }
+
+  // Snapshot before anything is sent, for the same reason as the admin branch.
+  const conversation = listRegistrationMessageIds(telegramId);
 
   // The room is resolved at the password step, but this signup may have sat
   // half-finished for a while since — re-check rather than trusting a stale id.
@@ -371,6 +427,7 @@ async function finalizeParticipantRegistration(
     `Open the Mini App from the menu button (☰) to get started.`;
 
   await sendConfirmation(ctx, telegramId, html, plain);
+  await cleanupRegistrationMessages(ctx, telegramId, conversation);
 }
 
 async function finalizeRegistration(ctx: MyContext, pending: PendingRegistration): Promise<void> {

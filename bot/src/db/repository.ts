@@ -432,6 +432,7 @@ export function deleteUserCompletely(telegramId: number): DeleteUserCompletelyRe
     const pendingDeleted =
       db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId)
         .changes > 0;
+    db.prepare("DELETE FROM registration_messages WHERE telegram_id = ?").run(telegramId);
 
     return {
       userDeleted,
@@ -689,6 +690,80 @@ export function deletePendingRegistration(telegramId: number): void {
   db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId);
 }
 
+/**
+ * Remember one message of an in-progress signup — a question we asked or an
+ * answer they sent — so finalizeRegistration can sweep the whole exchange away.
+ * INSERT OR IGNORE: re-recording the same id is a no-op, never an error.
+ */
+export function recordRegistrationMessage(telegramId: number, messageId: number): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO registration_messages (telegram_id, message_id) VALUES (?, ?)"
+  ).run(telegramId, messageId);
+}
+
+/** Every message id recorded for this signup, oldest first. */
+export function listRegistrationMessageIds(telegramId: number): number[] {
+  const rows = db
+    .prepare(
+      "SELECT message_id FROM registration_messages WHERE telegram_id = ? ORDER BY message_id ASC"
+    )
+    .all(telegramId) as { message_id: number }[];
+  return rows.map((row) => row.message_id);
+}
+
+export function clearRegistrationMessages(telegramId: number): void {
+  db.prepare("DELETE FROM registration_messages WHERE telegram_id = ?").run(telegramId);
+}
+
+/**
+ * Queue a sent message for deletion `delayMinutes` from now. Same (chat,
+ * message) queued twice keeps the earlier deadline rather than erroring — a
+ * message can only be deleted once anyway.
+ */
+export function enqueueMessageDeletion(
+  chatId: number,
+  messageId: number,
+  delayMinutes: number
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO scheduled_message_deletions (chat_id, message_id, delete_at)
+     VALUES (?, ?, datetime('now', ?))`
+  ).run(chatId, messageId, `+${delayMinutes} minutes`);
+}
+
+export interface ScheduledMessageDeletion {
+  id: number;
+  chat_id: number;
+  message_id: number;
+  delete_at: string;
+}
+
+/**
+ * Rows whose deadline has passed, oldest first. Capped per call so a tick that
+ * follows a long outage works through the backlog in batches instead of firing
+ * thousands of API calls at once.
+ */
+export function listDueMessageDeletions(limit: number): ScheduledMessageDeletion[] {
+  return db
+    .prepare(
+      `SELECT id, chat_id, message_id, delete_at
+       FROM scheduled_message_deletions
+       WHERE delete_at <= datetime('now')
+       ORDER BY delete_at ASC
+       LIMIT ?`
+    )
+    .all(limit) as ScheduledMessageDeletion[];
+}
+
+/**
+ * Drop one queued deletion. Called whether or not Telegram accepted the delete:
+ * a message we can never delete (older than 48 hours, already gone) must not be
+ * retried every minute forever.
+ */
+export function deleteScheduledMessageDeletion(id: number): void {
+  db.prepare("DELETE FROM scheduled_message_deletions WHERE id = ?").run(id);
+}
+
 /** Refresh Telegram profile fields if the user is already registered; no-op otherwise. */
 export function updateTelegramProfileIfRegistered(
   telegramId: number,
@@ -840,6 +915,10 @@ export function resetAllChallengeData(): {
   const wipe = db.transaction(() => {
     const habitLogs = db.prepare("DELETE FROM habit_logs").run().changes;
     const users = db.prepare("DELETE FROM users").run().changes;
+    // Bookkeeping for messages that belonged to the users just wiped — the ids
+    // are meaningless without them.
+    db.prepare("DELETE FROM registration_messages").run();
+    db.prepare("DELETE FROM scheduled_message_deletions").run();
     return { habitLogs, users };
   });
   return wipe();

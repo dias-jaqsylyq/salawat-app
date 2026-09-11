@@ -11,6 +11,7 @@ import {
   handleRegistrationAnswer,
   promptCurrentStep,
   resolveJoinPassword,
+  trackRegistrationMessage,
 } from "../registration/flow.js";
 
 export const HELP_UNREGISTERED_TEXT =
@@ -68,6 +69,10 @@ export async function startCommand(ctx: MyContext) {
       // The link answered both the role and the password question — open the
       // conversation at the first thing we still need.
       const pending = startPendingRegistrationForRoom(telegramId, resolution.room.id);
+      // The /start message is part of the signup conversation and goes with the
+      // rest of it at the end. Recorded after the pending row exists, so a
+      // /start from someone already registered leaves nothing behind.
+      trackRegistrationMessage(telegramId, ctx.message?.message_id);
       await promptCurrentStep(
         ctx,
         pending,
@@ -77,11 +82,13 @@ export async function startCommand(ctx: MyContext) {
     }
 
     const pending = ensurePendingRegistration(telegramId);
+    trackRegistrationMessage(telegramId, ctx.message?.message_id);
     await promptCurrentStep(ctx, pending, `That invite link didn't work — ${resolution.error}`);
     return;
   }
 
   const pending = ensurePendingRegistration(telegramId);
+  trackRegistrationMessage(telegramId, ctx.message?.message_id);
   await promptCurrentStep(ctx, pending);
 }
 
@@ -96,6 +103,7 @@ export async function helpCommand(ctx: MyContext) {
 
   const pending = getPendingRegistration(telegramId);
   if (pending) {
+    trackRegistrationMessage(telegramId, ctx.message?.message_id);
     await promptCurrentStep(
       ctx,
       pending,
@@ -139,6 +147,8 @@ async function replyWithNextStep(
 
   const pending = getPendingRegistration(telegramId);
   if (pending) {
+    // promptCurrentStep records the question it sends; the message that
+    // provoked it was recorded by whichever handler called us.
     await promptCurrentStep(ctx, pending, preface);
     return;
   }
@@ -153,6 +163,13 @@ async function replyWithNextStep(
 export async function registrationTextHandler(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
+
+  // Anything sent mid-signup belongs to the signup conversation — a real answer,
+  // a mistyped command, a second guess — and is swept away with it. Recorded
+  // before the handlers below so an unknown command is covered too.
+  if (!getUserByTelegramId(telegramId) && getPendingRegistration(telegramId)) {
+    trackRegistrationMessage(telegramId, ctx.message?.message_id);
+  }
 
   // Only reachable for a command no bot.command() claimed: grammy stops the
   // middleware chain at a matched command, so /start and /help never land here.
@@ -185,6 +202,12 @@ export async function registrationTextHandler(ctx: MyContext) {
 export async function unsupportedMessageHandler(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
+
+  // A sticker sent at the nickname question is as much part of the signup mess
+  // as a typed answer, so it is swept away with the rest.
+  if (!getUserByTelegramId(telegramId) && getPendingRegistration(telegramId)) {
+    trackRegistrationMessage(telegramId, ctx.message?.message_id);
+  }
 
   await replyWithNextStep(ctx, telegramId, UNSUPPORTED_MESSAGE_PREFACE);
 }

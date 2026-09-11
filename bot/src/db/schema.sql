@@ -151,6 +151,42 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+/**
+ * Every message exchanged while a signup is in progress — the bot's questions
+ * and the user's answers alike — so the whole conversation can be swept away
+ * once the account exists, leaving only the final confirmation visible.
+ *
+ * Keyed by telegram_id rather than hung off pending_registrations on purpose:
+ * startPendingRegistrationForRoom drops and recreates that row, which would
+ * take the accumulated ids with it and strand the messages of an abandoned
+ * first attempt.
+ */
+CREATE TABLE IF NOT EXISTS registration_messages (
+  telegram_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (telegram_id, message_id)
+);
+
+/**
+ * Messages to delete later, checked once a minute by the message-cleanup cron.
+ * A row in the database rather than an in-process timer: a reminder sent at
+ * 20:00 has to still disappear at 21:00 across a redeploy, and a setTimeout
+ * does not survive one.
+ */
+CREATE TABLE IF NOT EXISTS scheduled_message_deletions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  -- UTC, same 'YYYY-MM-DD HH:MM:SS' shape as datetime('now'), so the due check
+  -- is a plain string comparison.
+  delete_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_message_deletions_delete_at
+  ON scheduled_message_deletions(delete_at);
+
 -- Retired with the move to multi-room (PRD §1, §3a): the global `admins` table
 -- (replaced by room_admins) and `pending_admin_actions`, which only ever backed
 -- the /deleteuser and /makeadmin YES-confirm flows, both now removed.
