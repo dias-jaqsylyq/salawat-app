@@ -296,6 +296,9 @@ async function handleFinalizeFailure(
   // an already-registered person with a generic error.
   if (getUserByTelegramId(telegramId) !== undefined) {
     deletePendingRegistration(telegramId);
+    // Nothing will ever sweep these now — the finalize that would have is the
+    // one we are reconciling away.
+    clearRegistrationMessages(telegramId);
     await ctx.reply(
       "Looks like you're already registered! Open the Mini App from the menu button (☰) to get started."
     );
