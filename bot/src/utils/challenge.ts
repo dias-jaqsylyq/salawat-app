@@ -32,6 +32,46 @@ export function getDayKeyInTimezone(now: Date = new Date()): string {
   return formatDateParts(getTodayInTimezone(config.timezone, now));
 }
 
+/**
+ * The timezone one user's own calendar day is measured in: the IANA zone the
+ * Mini App detected for them, or config.timezone until it has reported one.
+ *
+ * A stored zone Intl no longer accepts (renamed, or corrupted in the row) falls
+ * back the same way, so a single bad value can never throw its way out of a
+ * request handler.
+ */
+export function getUserTimezone(user: { timezone: string | null }): string {
+  const zone = user.timezone;
+  if (!zone) return config.timezone;
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone });
+    return zone;
+  } catch {
+    return config.timezone;
+  }
+}
+
+/**
+ * Today as *this user* observes it. Their personal day is the one the whole app
+ * works in — the log_date a write lands on, the day Progress and the weekly
+ * grid draw, the day a streak walks back from — so changing timezone moves
+ * "today" for them immediately, without touching anyone else's.
+ */
+export function getUserToday(
+  user: { timezone: string | null },
+  now: Date = new Date()
+): DateParts {
+  return getTodayInTimezone(getUserTimezone(user), now);
+}
+
+/** getUserToday as the YYYY-MM-DD key habit_logs.log_date stores. */
+export function getUserTodayKey(
+  user: { timezone: string | null },
+  now: Date = new Date()
+): string {
+  return formatDateParts(getUserToday(user, now));
+}
+
 /** Convert a wall-clock time in `timeZone` to the corresponding UTC Date. */
 function zonedTimeToUtc(
   year: number,

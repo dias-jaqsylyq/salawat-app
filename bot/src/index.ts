@@ -3,11 +3,13 @@ import { config } from "./config.js";
 import { createBot, setupMenuButton } from "./bot.js";
 import { startBackupScheduler } from "./scheduler/backup.js";
 import { startReminderScheduler } from "./scheduler/reminder.js";
+import { startFastingReminderScheduler } from "./scheduler/fastingReminder.js";
 import { createApiServer } from "./api/server.js";
 
 const bot = createBot();
 
 startReminderScheduler(bot);
+startFastingReminderScheduler(bot);
 startBackupScheduler();
 
 if (config.miniAppUrlIsPlaceholder) {

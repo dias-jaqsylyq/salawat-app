@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { InlineKeyboard, type Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
 import { getUserHabitLogsForDate, getUsersWithRemindersEnabled, listHabits } from "../db/repository.js";
-import { formatDateParts, getTodayInTimezone } from "../utils/challenge.js";
+import { getUserTodayKey } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
 import type { User } from "../types.js";
 
@@ -67,11 +67,6 @@ export async function sendDueReminders(
 
   sending = true;
   try {
-    // The day boundary for "what's still unlogged today" is always the app's
-    // single canonical config.timezone (same as habit_logs/streaks/leaderboard
-    // day-of) — a user's personal timezone only decides WHEN to ping them, not
-    // which app-day their logs belong to.
-    const todayKey = formatDateParts(getTodayInTimezone(config.timezone, now));
     const users = getUsersWithRemindersEnabled();
     for (const user of users) {
       let nowHhMm: string;
@@ -86,7 +81,10 @@ export async function sendDueReminders(
       }
       if (effectiveReminderTime(user) !== nowHhMm) continue;
       try {
-        const text = buildReminderMessage(unloggedHabitNames(user, todayKey));
+        // "Still unlogged today" is asked in the user's own day, the same one
+        // their logs are written under — so someone pinged at 20:00 local is
+        // told about the day they are actually still able to log.
+        const text = buildReminderMessage(unloggedHabitNames(user, getUserTodayKey(user, now)));
         await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });

@@ -9,6 +9,7 @@ import { registerRoute } from "./routes/register.js";
 import { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } from "./routes/habits.js";
 import { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } from "./routes/adminHabits.js";
 import { progressRoute } from "./routes/progress.js";
+import { progressWeekRoute } from "./routes/progressWeek.js";
 import { leaderboardRoute } from "./routes/leaderboard.js";
 import { adminExportCsvRoute, exportRoute } from "./routes/export.js";
 import { resetRoute } from "./routes/reset.js";
@@ -54,6 +55,7 @@ export function createApiServer(bot: Bot<MyContext>) {
   app.post("/api/habits/:id/log", telegramAuth, logHabitRoute);
   app.delete("/api/habits/:id/log", telegramAuth, deleteHabitLogRoute);
   app.get("/api/progress", telegramAuth, progressRoute);
+  app.get("/api/progress/week", telegramAuth, progressWeekRoute);
   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
   app.get("/api/profile", telegramAuth, getProfileRoute);
   app.patch("/api/profile", telegramAuth, patchProfileRoute);
