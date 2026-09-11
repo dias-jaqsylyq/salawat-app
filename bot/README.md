@@ -22,6 +22,9 @@ One bot serves many independent **rooms** (competitions). Rooms are isolated by 
 - **`pending_registrations`** — holds a signup in progress, including which branch it is on: `role`, plus `room_name`/`categories_enabled` (admin branch) or `room_id` (participant branch, resolved from the password up front).
 - **`habits`** — gain `room_id` and `category` (`IQ` / `SQ` / `PQ` / `EQ`, nullable). A habit in a room with `categories_enabled = 1` always carries a category and one in a room without categories never does — enforced in the application layer, not by the column. Turning categories off **keeps** the stored values; turning them back on asks the admin to re-confirm rather than silently reusing them.
 - **`habit_logs`** — gain `room_id`, denormalized from the habit at write time, so leaderboard/progress queries are a filter rather than a join and a member's old logs stay attached to the room they were earned in after they move.
+- **`personal_habits`** / **`personal_habit_logs`** — a member's own private list, room-scoped and never scored. Kept apart from `habits`/`habit_logs` rather than flagged inside them: there is no `points_weight` and no `points_earned`, so "never affects the ranking" is a property of the schema, and no admin query touches these tables, so "invisible to the admin" is too. Deleted (logs and all) the moment their owner leaves the room, is kicked, or moves — `setUserCurrentRoom` is the one place all three go through.
+- **`registration_messages`** — message ids of a signup in progress, so the whole question-and-answer exchange can be deleted once the account exists, leaving only the final confirmation. Keyed by `telegram_id` rather than hung off `pending_registrations`, which is dropped and recreated when an invite link restarts a signup.
+- **`scheduled_message_deletions`** (`chat_id`, `message_id`, `delete_at`) — reminder DMs queued for deletion an hour after they are sent. In the database rather than in a timer so the deletion survives a redeploy.
 
 **Every "today" is the user's own.** `log_date`, the day Progress and the weekly grid draw, the day a streak walks back from, and the day the reminders ask about are all resolved through `getUserTimezone`/`getUserTodayKey` (`utils/challenge.ts`): the user's detected `timezone`, falling back to `TIMEZONE` until the Mini App has reported one, and falling back again if a stored zone stops being valid. Nothing is stored per-day beyond `log_date` itself, so changing timezone moves that user's "today" on the next request with nothing to recompute or invalidate — and moves nobody else's. Points already written keep the `log_date` they were written under; a zone change shifts the window, it does not relabel history.
 
@@ -120,22 +123,56 @@ Unauthenticated:
 - Idempotent (no log today is still `200`), and allowed against a **deactivated** habit: it corrects an existing entry rather than logging new engagement
 → `200 { success: true, habitId, logged: false }` · same error shapes as POST minus `habit_inactive`
 
+### Personal habits
+
+A member's own private list, for personal tracking inside the room they are in. Deliberately **not** rows in `habits` with an owner column — they live in their own `personal_habits` / `personal_habit_logs` tables, which is what makes two properties structural rather than a filter every query has to remember:
+
+- **No points at all.** There is no `points_weight` and no `points_earned`, so nothing here can reach Today's Total, the all-time total, the leaderboard or the CSV export
+- **Invisible to the admin.** `/api/admin/habits` reads `habits`; these routes read `personal_habits`. There is no admin-facing endpoint that returns them in any form
+
+They are scoped to the membership, not to the person: leaving, being kicked or moving rooms deletes them along with their logs (`setUserCurrentRoom`). All six routes take `telegramAuth` but **not** `requireAdmin` — an ordinary participant owns this list. Category rules are exactly the room habit's: required while `categoriesEnabled`, rejected while it is off.
+
+**GET /api/personal-habits** → `200 [{ id, name, type, category, createdAt, updatedAt }]`; `200 []` for a caller between rooms
+
+**POST /api/personal-habits** — body `{ name, type, category? }`
+- At most 20 per member per room
+- Rate limit: 20 mutations/minute/user (shared with PATCH and DELETE below)
+→ `201 { id, name, type, category, … }`
+→ `400 invalid_name | invalid_type | category_required | category_not_allowed | invalid_category | too_many_personal_habits | no_room`
+
+**PATCH /api/personal-habits/:id** — body `{ name?, type?, category? }`
+- Changing the type keeps existing logs rather than discarding the member's own history
+→ `200` the habit · `400 invalid_body | …` · `404 personal_habit_not_found`
+
+**DELETE /api/personal-habits/:id** — a real delete, logs and all (`ON DELETE CASCADE`), not the soft `isActive: false` a room habit gets
+→ `200 { success: true, personalHabitId, deleted: true }` · `404 personal_habit_not_found`
+
+**POST /api/personal-habits/:id/log** — body `{ value? }`, same day key and same validation as the room-habit log
+→ `200 { success: true, personalHabitId, value, logged: true }` — note there is no `points` field
+→ `400 invalid_value` · `404 personal_habit_not_found` · `429 rate_limited`
+
+**DELETE /api/personal-habits/:id/log** — idempotent
+→ `200 { success: true, personalHabitId, logged: false }`
+
+Someone else's personal habit answers `404 personal_habit_not_found`, identically to an id that does not exist — the API never confirms another member has a private habit at all.
+
 **GET /api/progress**
 → `200 { registered: false }` if not registered
-→ `200 { registered: true, nickname, room, totalPoints, todayPoints, today, todayDate, streaks, streakDisplay, weekStartDay, needsRealName }`
+→ `200 { registered: true, nickname, room, totalPoints, todayPoints, today, todayDate, streaks, personalToday, personalStreaks, streakDisplay, weekStartDay, needsRealName }`
 - `room`: `{ id, name, categoriesEnabled }` — the name the Mini App shows in its header and the room's category mode; `null` for a caller between rooms
 - `totalPoints`: all-time sum of `points_earned` **earned in this room**. A member who moved here from another room keeps their old logs but does not carry their old points in
 - `todayPoints`: the same sum narrowed to `todayDate` — the caller's Today's Total. Summed from the stored `points_earned`, so a later weight change is not retroactive here either, and a habit deactivated since still counts: the points were earned while it was active. **Personal screen only** — the leaderboard has no equivalent, and no group/Jamaat total exists anywhere
 - `today`: `[{ habitId, logged, value, points }]` for each active habit of the room
 - `todayDate`: the `YYYY-MM-DD` the two above are measured over — the caller's own day, so it moves with their timezone
 - `streaks`: `[{ habitId, streak }]` — consecutive days ending today (in the caller's own timezone) with a log row for that habit (`0` if today has none). Per habit, never combined
+- `personalToday` / `personalStreaks`: `[{ personalHabitId, logged, value }]` and `[{ personalHabitId, streak }]` for the caller's own private habits. Separate arrays because they key off a different id space, and neither carries points — they contribute to **neither** `todayPoints` nor `totalPoints`
 - `streakDisplay` / `weekStartDay`: the caller's display preferences, echoed so the Progress screen picks a streak shape once instead of rendering one and flipping
 - `needsRealName`: `true` when `users.real_name` is null/empty; the name itself is never returned
 
 **GET /api/progress/week** — the seven days of the caller's current calendar week, per active habit, for the weekly streak view
-→ `200 { weekStart, weekStartDay, today, days: [7 × "YYYY-MM-DD"], habits: [{ habitId, name, days: [{ date, logged, locked, future }] }] }`
+→ `200 { weekStart, weekStartDay, today, days: [7 × "YYYY-MM-DD"], habits: [{ habitId, name, personal, days: [{ date, logged, locked, future }] }] }`
 - A **calendar** week from the caller's own `week_start_day` (default Monday), not a rolling last-7-days window: the row seen on Wednesday covers the same dates it covered on Monday, with the rest of the week still ahead
-- One **flat** list, one row per **active** habit — deactivated habits are absent, and rows are never grouped by category even in a categories-enabled room
+- One **flat** list, one row per **active** habit, the room's followed by the caller's own personal ones — deactivated habits are absent, rows are never grouped by category even in a categories-enabled room, and the two kinds are never split apart. `personal` says which table a row came from: the two id spaces overlap, so the client needs it to key rows, not to style them
 - Cells carry **presence only**, never a count (`logged` is a lit or unlit flame; there is no "X of 7"). Two cell kinds are neither lit nor missed, so the UI can grey them out rather than score them: `locked` (the day precedes `room_joined_at` — joined mid-week) and `future` (has not happened yet in the caller's own timezone)
 - **Read-only by construction**: there is no matching write endpoint, because the weekly view is not tappable. Logging stays today-only, through `POST /api/habits/:id/log` — day-override remains out of scope
 - `{ habits: [] }` for a caller between rooms (the week itself is still returned); `403 not_registered` otherwise

@@ -9,6 +9,7 @@ process.env.DB_PATH ??= ":memory:";
 
 const {
   createHabit,
+  createPersonalHabit,
   createRoom,
   createUser,
   setUserCurrentRoom,
@@ -17,6 +18,7 @@ const {
   updateHabit,
   updateUserProfile,
   upsertHabitLog,
+  upsertPersonalHabitLog,
 } = await import("../db/repository.js");
 const { db } = await import("../db/client.js");
 const { formatDateParts, getTodayInTimezone } = await import("../utils/challenge.js");
@@ -245,6 +247,37 @@ describe("sendDueReminders — message content", () => {
     assert.ok(!captured.includes(logged.name));
   });
 
+  it("lists the user's own personal habits in the same breath as the room's", async () => {
+    const telegramId = makeUser(true, "20:00");
+    const user = getUserByTelegramId(telegramId)!;
+    const roomHabit = makeHabit("Room habit");
+    const unloggedPersonal = createPersonalHabit(
+      user.id,
+      room.id,
+      uniqueHabitName("My unlogged habit"),
+      "binary",
+      null
+    );
+    const loggedPersonal = createPersonalHabit(
+      user.id,
+      room.id,
+      uniqueHabitName("My logged habit"),
+      "binary",
+      null
+    );
+    upsertPersonalHabitLog(loggedPersonal.id, 1, todayKey);
+
+    let captured = "";
+    const bot = mockBot(async (_id, text) => {
+      captured = text;
+    });
+    await sendDueReminders(bot, AT_20);
+
+    assert.ok(captured.includes(roomHabit.name));
+    assert.ok(captured.includes(unloggedPersonal.name));
+    assert.ok(!captured.includes(loggedPersonal.name));
+  });
+
   it("never lists a deactivated habit as unlogged", async () => {
     const telegramId = makeUser(true, "20:00");
     const habit = makeHabit("Retired habit");
@@ -262,6 +295,8 @@ describe("sendDueReminders — message content", () => {
   it("sends the all-caught-up message once every active habit is logged today", async () => {
     const telegramId = makeUser(true, "20:00");
     const user = getUserByTelegramId(telegramId)!;
+    // A fresh user has no personal habits, so the room's habits are all there
+    // is left to log.
     for (const habit of listHabits({ activeOnly: true, roomId: room.id })) {
       upsertHabitLog(user.id, habit.id, 1, todayKey);
     }

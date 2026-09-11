@@ -31,6 +31,55 @@ export interface Habit {
   category: HabitCategory | null;
 }
 
+/**
+ * A habit the member created for themselves, private to them and scoped to the
+ * room they are in.
+ *
+ * No pointsWeight, because personal habits carry no points at all: they never
+ * reach Today's Total, the all-time total, the leaderboard or the CSV export.
+ * That is the whole reason they live in their own table server-side rather than
+ * as flagged rows in `habits`.
+ */
+export interface PersonalHabit {
+  id: number;
+  name: string;
+  type: HabitType;
+  category: HabitCategory | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LogPersonalHabitResponse {
+  success: true;
+  personalHabitId: number;
+  value: number;
+  logged: true;
+}
+
+export interface UnlogPersonalHabitResponse {
+  success: true;
+  personalHabitId: number;
+  logged: false;
+}
+
+export interface DeletePersonalHabitResponse {
+  success: true;
+  personalHabitId: number;
+  deleted: true;
+}
+
+/** Today's state for one personal habit. No `points` — there are none. */
+export interface TodayPersonalHabitEntry {
+  personalHabitId: number;
+  logged: boolean;
+  value: number;
+}
+
+export interface PersonalHabitStreak {
+  personalHabitId: number;
+  streak: number;
+}
+
 export interface AdminHabit extends Habit {
   isActive: boolean;
   createdAt: string;
@@ -83,6 +132,12 @@ export interface WeekDay {
 export interface WeekHabitRow {
   habitId: number;
   name: string;
+  /**
+   * From the caller's personal list rather than the room's. Present so the two
+   * id spaces can be told apart when keying rows — the weekly view draws both
+   * kinds identically, on purpose.
+   */
+  personal: boolean;
   /** Exactly 7, oldest → newest, aligned with WeeklyProgressResponse.days. */
   days: WeekDay[];
 }
@@ -94,7 +149,10 @@ export interface WeeklyProgressResponse {
   today: string;
   /** The week's seven dates, for the weekday header. */
   days: string[];
-  /** One row per active habit — flat, never grouped by category. */
+  /**
+   * One row per active room habit followed by one per personal habit — flat,
+   * never grouped by category and never split by kind.
+   */
   habits: WeekHabitRow[];
 }
 
@@ -113,6 +171,9 @@ export interface RegisteredProgress {
   /** The day todayPoints covers, in the viewer's own timezone. */
   todayDate: string;
   streaks: HabitStreak[];
+  /** The caller's own private habits — never any part of the point totals above. */
+  personalToday: TodayPersonalHabitEntry[];
+  personalStreaks: PersonalHabitStreak[];
   /** Echoed from the profile so the screen picks a streak shape once. */
   streakDisplay: StreakDisplay;
   weekStartDay: number;

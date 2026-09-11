@@ -44,6 +44,18 @@ export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;
 /** Max PATCH /api/profile requests per telegram user per rolling minute. */
 export const PROFILE_RATE_LIMIT_PER_MINUTE = 5;
 /**
+ * Max personal-habit create/edit/delete calls per telegram user per rolling
+ * minute. Separate from the admin bucket because these are ordinary members
+ * editing their own list, not admins reconfiguring a room.
+ */
+export const PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE = 20;
+/**
+ * How many personal habits one member may keep in one room. A private list is
+ * for a handful of things somebody actually tracks; the cap is here so a
+ * runaway client cannot grow the table without bound.
+ */
+export const MAX_PERSONAL_HABITS_PER_ROOM = 20;
+/**
  * Max admin mutations (habit create/edit, room settings, password regeneration,
  * kick/promote/demote) per telegram user per rolling minute. Generous enough
  * that an admin setting a room up in one sitting never notices it, tight enough

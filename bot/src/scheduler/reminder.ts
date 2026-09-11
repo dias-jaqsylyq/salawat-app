@@ -4,8 +4,10 @@ import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
 import {
   enqueueMessageDeletion,
   getUserHabitLogsForDate,
+  getUserPersonalHabitLogsForDate,
   getUsersWithRemindersEnabled,
   listHabits,
+  listPersonalHabits,
 } from "../db/repository.js";
 import { getUserTodayKey } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
@@ -36,17 +38,29 @@ function effectiveReminderTime(user: User): string {
 }
 
 /**
- * Names of this user's active habits with no log row for `todayKey` yet —
- * only habits of the room they are currently in. getUsersWithRemindersEnabled
+ * Names of everything this user still has to log today — the room's active
+ * habits and their own personal ones, in one list. getUsersWithRemindersEnabled
  * never returns a roomless user, so there is always a room to scope to.
+ *
+ * The personal ones are mixed in rather than listed apart: from the member's
+ * side both are "things I meant to do today", and the reminder is a private DM
+ * to them, so nothing about their private list leaks anywhere.
  */
 function unloggedHabitNames(user: User, todayKey: string): string[] {
-  const activeHabits = listHabits({
-    activeOnly: true,
-    roomId: user.current_room_id ?? undefined,
-  });
+  const roomId = user.current_room_id ?? undefined;
+  const activeHabits = listHabits({ activeOnly: true, roomId });
   const todayLogs = getUserHabitLogsForDate(user.id, todayKey);
-  return activeHabits.filter((habit) => !todayLogs.has(habit.id)).map((habit) => habit.name);
+  const names = activeHabits
+    .filter((habit) => !todayLogs.has(habit.id))
+    .map((habit) => habit.name);
+
+  if (roomId !== undefined) {
+    const personalLogs = getUserPersonalHabitLogsForDate(user.id, todayKey);
+    for (const habit of listPersonalHabits(user.id, roomId)) {
+      if (!personalLogs.has(habit.id)) names.push(habit.name);
+    }
+  }
+  return names;
 }
 
 /** DM text for a user given the active habits they haven't logged yet today. */

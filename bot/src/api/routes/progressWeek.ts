@@ -1,5 +1,11 @@
 import type { Request, Response } from "express";
-import { getHabitLogDatesInRange, getUserByTelegramId, listHabits } from "../../db/repository.js";
+import {
+  getHabitLogDatesInRange,
+  getPersonalHabitLogDatesInRange,
+  getUserByTelegramId,
+  listHabits,
+  listPersonalHabits,
+} from "../../db/repository.js";
 import {
   dayKeyFromSqliteUtc,
   formatDateParts,
@@ -30,6 +36,12 @@ const DAYS_IN_WEEK = 7;
  * Read-only by construction: there is no matching write endpoint, because the
  * weekly view is not tappable and logging still happens only for today, through
  * POST /api/habits/:id/log (day-override stays out of scope, PIVOT_PLAN §7).
+ *
+ * The caller's personal habits are appended to the same `habits` array rather
+ * than given one of their own: on the Progress screen a streak is a streak, and
+ * the two kinds are deliberately not separated visually. `personal` says which
+ * table a row came from — the two id spaces overlap, so the client needs it to
+ * key rows apart, not to style them differently.
  */
 export function progressWeekRoute(req: Request, res: Response): void {
   const user = getUserByTelegramId(req.telegramId);
@@ -67,19 +79,39 @@ export function progressWeekRoute(req: Request, res: Response): void {
   const activeHabits = listHabits({ activeOnly: true, roomId: caller.roomId });
   const loggedDates = getHabitLogDatesInRange(user.id, caller.roomId, weekStart, weekEnd);
 
-  const habits = activeHabits.map((habit) => {
-    const logged = loggedDates.get(habit.id);
-    return {
-      habitId: habit.id,
-      name: habit.name,
-      days: days.map((date) => ({
-        date,
-        logged: logged?.has(date) ?? false,
-        locked: joinedDay !== null && date < joinedDay,
-        future: date > todayKey,
-      })),
-    };
+  const personalHabits = listPersonalHabits(user.id, caller.roomId);
+  const personalLoggedDates = getPersonalHabitLogDatesInRange(
+    user.id,
+    caller.roomId,
+    weekStart,
+    weekEnd
+  );
+
+  const buildRow = (
+    habitId: number,
+    name: string,
+    logged: Set<string> | undefined,
+    personal: boolean
+  ) => ({
+    habitId,
+    name,
+    personal,
+    days: days.map((date) => ({
+      date,
+      logged: logged?.has(date) ?? false,
+      locked: joinedDay !== null && date < joinedDay,
+      future: date > todayKey,
+    })),
   });
+
+  const habits = [
+    ...activeHabits.map((habit) =>
+      buildRow(habit.id, habit.name, loggedDates.get(habit.id), false)
+    ),
+    ...personalHabits.map((habit) =>
+      buildRow(habit.id, habit.name, personalLoggedDates.get(habit.id), true)
+    ),
+  ];
 
   res.json({ weekStart, weekStartDay, today: todayKey, days, habits });
 }

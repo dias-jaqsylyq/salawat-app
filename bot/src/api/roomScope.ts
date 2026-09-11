@@ -1,6 +1,11 @@
 import type { Request, Response } from "express";
-import { getHabitById, getRoomById, getUserByTelegramId } from "../db/repository.js";
-import type { Habit, Room, User } from "../types.js";
+import {
+  getHabitById,
+  getPersonalHabitById,
+  getRoomById,
+  getUserByTelegramId,
+} from "../db/repository.js";
+import type { Habit, PersonalHabit, Room, User } from "../types.js";
 
 /**
  * Room scoping for the HTTP API (MULTI ROOM PRD §3).
@@ -60,6 +65,24 @@ export function requireCallerRoom(req: Request, res: Response): CallerRoom | nul
 export function getRoomHabit(habitId: number, roomId: number): Habit | undefined {
   const habit = getHabitById(habitId);
   return habit !== undefined && habit.room_id === roomId ? habit : undefined;
+}
+
+/**
+ * One of the caller's *own* personal habits, in the room they are currently in.
+ * Someone else's habit, one of their own from a room they have since left, and
+ * a habit id that does not exist all come back undefined — callers turn all
+ * three into the same 404, so the API never confirms another member has a
+ * private habit at all.
+ */
+export function getOwnPersonalHabit(
+  personalHabitId: number,
+  userId: number,
+  roomId: number
+): PersonalHabit | undefined {
+  const habit = getPersonalHabitById(personalHabitId);
+  return habit !== undefined && habit.user_id === userId && habit.room_id === roomId
+    ? habit
+    : undefined;
 }
 
 /**

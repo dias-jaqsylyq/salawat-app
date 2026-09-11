@@ -1,11 +1,14 @@
 import type { Request, Response } from "express";
 import {
   getHabitStreak,
+  getPersonalHabitStreak,
   getUserByTelegramId,
   getUserHabitLogsForDate,
+  getUserPersonalHabitLogsForDate,
   getUserPointsForDate,
   getUserTotalPoints,
   listHabits,
+  listPersonalHabits,
 } from "../../db/repository.js";
 import { getUserTodayKey } from "../../utils/challenge.js";
 import { userNeedsRealName } from "../realName.js";
@@ -29,6 +32,11 @@ import { resolveCallerRoom, roomResponse } from "../roomScope.js";
  * `streakDisplay`/`weekStartDay` are display preferences the Progress screen
  * reads to decide which streak shape to draw. They are echoed here rather than
  * fetched separately so the screen never renders one shape and then flips.
+ *
+ * `personalToday`/`personalStreaks` cover the caller's own private habits. They
+ * are separate arrays because they key off a different id space, and they carry
+ * no points field at all — a personal habit is tracking, never scoring, so it
+ * contributes to neither todayPoints nor totalPoints.
  */
 export function progressRoute(req: Request, res: Response): void {
   const user = getUserByTelegramId(req.telegramId);
@@ -49,6 +57,8 @@ export function progressRoute(req: Request, res: Response): void {
       today: [],
       todayDate: todayKey,
       streaks: [],
+      personalToday: [],
+      personalStreaks: [],
       streakDisplay: user.streak_display,
       weekStartDay: user.week_start_day,
       needsRealName: userNeedsRealName(user.real_name),
@@ -76,6 +86,21 @@ export function progressRoute(req: Request, res: Response): void {
     streak: getHabitStreak(user.id, habit.id, todayKey),
   }));
 
+  const personalHabits = listPersonalHabits(user.id, caller.roomId);
+  const personalLogs = getUserPersonalHabitLogsForDate(user.id, todayKey);
+  const personalToday = personalHabits.map((habit) => {
+    const log = personalLogs.get(habit.id);
+    return {
+      personalHabitId: habit.id,
+      logged: log !== undefined,
+      value: log?.value ?? 0,
+    };
+  });
+  const personalStreaks = personalHabits.map((habit) => ({
+    personalHabitId: habit.id,
+    streak: getPersonalHabitStreak(user.id, habit.id, todayKey),
+  }));
+
   res.json({
     registered: true,
     nickname: user.nickname,
@@ -89,6 +114,8 @@ export function progressRoute(req: Request, res: Response): void {
     today,
     todayDate: todayKey,
     streaks,
+    personalToday,
+    personalStreaks,
     streakDisplay: user.streak_display,
     weekStartDay: user.week_start_day,
     needsRealName: userNeedsRealName(user.real_name),

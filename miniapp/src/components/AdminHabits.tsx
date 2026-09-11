@@ -3,7 +3,9 @@ import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminHabit, HabitCategory, HabitType } from "../api/types.ts";
-import { CATEGORY_META, CATEGORY_ORDER } from "../lib/habitCategories.ts";
+import { CATEGORY_META } from "../lib/habitCategories.ts";
+import CategoryPicker from "./CategoryPicker.tsx";
+import HabitTypePicker from "./HabitTypePicker.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,53 +37,6 @@ function validateHabitForm(name: string, pointsWeight: string): string | null {
     return `Points must be a whole number between 1 and ${MAX_POINTS_WEIGHT.toLocaleString()}.`;
   }
   return null;
-}
-
-interface CategoryPickerProps {
-  id: string;
-  value: HabitCategory | null;
-  disabled?: boolean;
-  onChange: (category: HabitCategory) => void;
-}
-
-/** The fixed four, in the same SQ → IQ → EQ → PQ order the Log screen groups by. */
-function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) {
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>Category</Label>
-      <div
-        id={id}
-        role="tablist"
-        aria-label="Habit category"
-        className="grid grid-cols-4 gap-1 rounded-lg bg-secondary/60 p-1"
-      >
-        {CATEGORY_ORDER.map((category) => {
-          const { label, icon: Icon } = CATEGORY_META[category];
-          const active = value === category;
-          return (
-            <button
-              key={category}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-label={`${category} — ${label}`}
-              disabled={disabled}
-              onClick={() => onChange(category)}
-              className={cn(
-                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                active
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              <Icon className="h-4 w-4" aria-hidden="true" />
-              {category}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 interface EditRowProps {
@@ -332,33 +287,7 @@ function CreateHabitForm({
             />
           </div>
 
-          <div className="space-y-2">
-            <Label>Type</Label>
-            <div
-              role="tablist"
-              aria-label="Habit type"
-              className="grid grid-cols-2 gap-1 rounded-lg bg-secondary/60 p-1"
-            >
-              {(["quantity", "binary"] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  role="tab"
-                  aria-selected={type === value}
-                  disabled={creating}
-                  onClick={() => setType(value)}
-                  className={cn(
-                    "min-h-10 rounded-md px-3 text-sm font-medium capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    type === value
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {value}
-                </button>
-              ))}
-            </div>
-          </div>
+          <HabitTypePicker value={type} disabled={creating} onChange={setType} />
 
           <div className="space-y-2">
             <Label htmlFor="new-habit-weight">Points</Label>

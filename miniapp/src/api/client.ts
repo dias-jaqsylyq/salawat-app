@@ -6,6 +6,7 @@ import type {
   AdminRoomResponse,
   AdminStatsResponse,
   AdminStatusResponse,
+  DeletePersonalHabitResponse,
   Habit,
   HabitCategory,
   HabitType,
@@ -13,11 +14,14 @@ import type {
   LeaderboardResponse,
   LeaveRoomResponse,
   LogHabitResponse,
+  LogPersonalHabitResponse,
   ParticipantAdminResponse,
+  PersonalHabit,
   ProfileResponse,
   ProfileUpdate,
   ProgressResponse,
   UnlogHabitResponse,
+  UnlogPersonalHabitResponse,
   WeeklyProgressResponse,
 } from "./types.ts";
 
@@ -87,6 +91,59 @@ export function logHabit(
 /** DELETE /api/habits/:id/log — remove today's log, if any. Idempotent. */
 export function deleteHabitLog(initData: string, habitId: number): Promise<UnlogHabitResponse> {
   return request(initData, `/api/habits/${habitId}/log`, { method: "DELETE" });
+}
+
+/* --- Personal habits: the member's own private list ---------------------- */
+
+export function getPersonalHabits(initData: string): Promise<PersonalHabit[]> {
+  return request(initData, "/api/personal-habits");
+}
+
+export function createPersonalHabit(
+  initData: string,
+  payload: { name: string; type: HabitType; category?: HabitCategory | null }
+): Promise<PersonalHabit> {
+  return request(initData, "/api/personal-habits", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updatePersonalHabit(
+  initData: string,
+  personalHabitId: number,
+  payload: { name?: string; type?: HabitType; category?: HabitCategory | null }
+): Promise<PersonalHabit> {
+  return request(initData, `/api/personal-habits/${personalHabitId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Deletes the habit and its history — unlike a room habit, which is deactivated. */
+export function deletePersonalHabit(
+  initData: string,
+  personalHabitId: number
+): Promise<DeletePersonalHabitResponse> {
+  return request(initData, `/api/personal-habits/${personalHabitId}`, { method: "DELETE" });
+}
+
+export function logPersonalHabit(
+  initData: string,
+  personalHabitId: number,
+  value?: number
+): Promise<LogPersonalHabitResponse> {
+  return request(initData, `/api/personal-habits/${personalHabitId}/log`, {
+    method: "POST",
+    body: JSON.stringify(value === undefined ? {} : { value }),
+  });
+}
+
+export function deletePersonalHabitLog(
+  initData: string,
+  personalHabitId: number
+): Promise<UnlogPersonalHabitResponse> {
+  return request(initData, `/api/personal-habits/${personalHabitId}/log`, { method: "DELETE" });
 }
 
 export function getProgress(initData: string): Promise<ProgressResponse> {
