@@ -1,7 +1,12 @@
 import cron from "node-cron";
 import { InlineKeyboard, type Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
-import { getUserHabitLogsForDate, getUsersWithRemindersEnabled, listHabits } from "../db/repository.js";
+import {
+  enqueueMessageDeletion,
+  getUserHabitLogsForDate,
+  getUsersWithRemindersEnabled,
+  listHabits,
+} from "../db/repository.js";
 import { getUserTodayKey } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
 import type { User } from "../types.js";
@@ -85,9 +90,16 @@ export async function sendDueReminders(
         // their logs are written under — so someone pinged at 20:00 local is
         // told about the day they are actually still able to log.
         const text = buildReminderMessage(unloggedHabitNames(user, getUserTodayKey(user, now)));
-        await bot.api.sendMessage(user.telegram_id, text, {
+        const sent = await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });
+        // Tonight's nudge is worthless tomorrow: queue it for deletion rather
+        // than letting a year of reminders pile up in the chat.
+        enqueueMessageDeletion(
+          user.telegram_id,
+          sent.message_id,
+          config.reminderDeleteAfterMinutes
+        );
       } catch (err) {
         console.error(`Failed to send reminder to user ${user.telegram_id} (${user.nickname}):`, err);
       }

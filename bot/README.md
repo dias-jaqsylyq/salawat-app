@@ -48,6 +48,7 @@ Open `.env` and set:
 - `BOT_TOKEN` — **your real bot token from BotFather.** Gitignored, never committed.
 - `CHALLENGE_START_DATE` / `CHALLENGE_END_DATE` — informational Gregorian bounds of this year's Mawlid period, `YYYY-MM-DD` (start must be on or before end). They never gate registration, logging, streaks, or reminders; only Admin Mawlid results/CSV use them as a filter.
 - `TIMEZONE`, `REMINDER_TIME`, `DB_PATH` — defaults: `Asia/Hong_Kong`, `20:00`, `./data/salawat.db`.
+- `REMINDER_DELETE_AFTER_MINUTES` — how long a reminder DM (daily and fasting alike) stays in the chat before the bot deletes it. Defaults to `60`. Keep it well under `2880`: Telegram refuses to delete anything older than 48 hours, so a longer window means the message is never removed. Set but not a positive whole number is a startup error, not a silent fallback.
 - `PORT` — API port (defaults to `3000` locally; Railway injects this automatically in production).
 - `CORS_ORIGIN` — origin(s) allowed to call the API. Defaults to `*` (dev only). **In production (`NODE_ENV=production`) this must be set to the real Vercel domain** (not `*`) or the process refuses to start.
 - `MINI_APP_URL` — the deployed Mini App's real HTTPS URL, used for the bot's chat menu button. If left as the placeholder, menu-button setup is skipped (process still boots).

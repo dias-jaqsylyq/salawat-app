@@ -82,6 +82,39 @@ export const ADMIN_SECRET_RATE_LIMIT_PER_MINUTE = 10;
  */
 export const ROOM_JOIN_RATE_LIMIT_PER_MINUTE = 5;
 
+/**
+ * How long a reminder DM stays in the chat before the message-cleanup cron
+ * removes it. A reminder is worth nothing the morning after — the point is a
+ * nudge at 20:00, not a permanent record — and a year of them makes the chat
+ * unusable.
+ *
+ * Keep it well under Telegram's 48-hour deletion window: past that the Bot API
+ * refuses outright and the message is stuck in the chat for good.
+ */
+export const DEFAULT_REMINDER_DELETE_AFTER_MINUTES = 60;
+
+/**
+ * Same strict parsing as parseInitDataMaxAge, and for the same reason: a typo
+ * in the variable should stop the boot, not silently resolve to the default.
+ */
+export function parseReminderDeleteAfterMinutes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_REMINDER_DELETE_AFTER_MINUTES;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid REMINDER_DELETE_AFTER_MINUTES: "${raw}" (expected a positive whole number of minutes, e.g. 60)`
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Queued deletions handled per cron tick. Bounds the burst after a long outage
+ * so the backlog is worked through in batches instead of thousands of API calls
+ * landing in one minute.
+ */
+export const MESSAGE_DELETION_BATCH_SIZE = 200;
+
 const PLACEHOLDER_MINI_APP_URL = "https://example.com/REPLACE_WITH_VERCEL_URL";
 
 export const isProduction = process.env.NODE_ENV === "production";
@@ -140,6 +173,10 @@ export const config = {
   miniAppDeepLink: process.env.MINI_APP_DEEP_LINK ?? "https://t.me/salawat_challenge_bot/challenge",
   // Max age (seconds) a Telegram initData payload is accepted before being treated as stale/replayed.
   initDataMaxAgeSeconds: parseInitDataMaxAge(process.env.INIT_DATA_MAX_AGE_SECONDS),
+  /** Minutes a reminder DM survives before the cleanup cron deletes it. */
+  reminderDeleteAfterMinutes: parseReminderDeleteAfterMinutes(
+    process.env.REMINDER_DELETE_AFTER_MINUTES
+  ),
   /** Optional secret for GET /api/admin/export. Empty = endpoint returns 503. */
   adminExportSecret: process.env.ADMIN_EXPORT_SECRET ?? "",
   // No ADMIN_TELEGRAM_ID: with rooms there is no global admin to bootstrap —
