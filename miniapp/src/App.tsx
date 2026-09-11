@@ -250,6 +250,7 @@ export default function App() {
         <div className="min-h-screen bg-background pb-16">
           {activeTab === "progress" && (
             <ProgressScreen
+              initData={initData}
               progress={state.progress}
               habits={habits}
               onOpenSettings={openSettings}

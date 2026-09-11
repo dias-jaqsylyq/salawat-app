@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { ChevronLeft, DoorOpen, Users } from "lucide-react";
 import { getProfile, leaveRoom, patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { Room } from "../api/types.ts";
+import type { Room, StreakDisplay } from "../api/types.ts";
 import {
   NICKNAME_MATCHES_REAL_NAME_MESSAGE,
   REAL_NAME_MAX_LENGTH,
@@ -14,6 +14,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
@@ -28,7 +29,28 @@ interface Props {
 
 const CONFIRM_MS = 900;
 
-function validate(nickname: string, realName: string, reminderTime: string): string | null {
+const STREAK_DISPLAYS: { id: StreakDisplay; label: string; hint: string }[] = [
+  { id: "current", label: "Current", hint: "One running streak count per habit." },
+  { id: "weekly", label: "Weekly", hint: "This week's days, one row per habit." },
+];
+
+/** 0 = Sunday … 6 = Saturday, matching users.week_start_day. */
+const WEEK_START_DAYS = [
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" },
+  { value: 0, label: "Sunday" },
+];
+
+function validate(
+  nickname: string,
+  realName: string,
+  reminderTime: string,
+  fastingReminderTime: string
+): string | null {
   const trimmedNickname = nickname.trim();
   if (trimmedNickname.length === 0 || trimmedNickname.length > 50) {
     return "Nickname must be 1–50 characters.";
@@ -40,6 +62,9 @@ function validate(nickname: string, realName: string, reminderTime: string): str
   }
   if (!/^\d{2}:\d{2}$/.test(reminderTime)) {
     return "Enter a valid reminder time (HH:mm).";
+  }
+  if (!/^\d{2}:\d{2}$/.test(fastingReminderTime)) {
+    return "Enter a valid fasting reminder time (HH:mm).";
   }
   return null;
 }
@@ -55,6 +80,11 @@ export default function SettingsScreen({
   const [realName, setRealName] = useState("");
   const [reminderEnabled, setReminderEnabled] = useState(true);
   const [reminderTime, setReminderTime] = useState("20:00");
+  const [fastingReminderEnabled, setFastingReminderEnabled] = useState(false);
+  const [fastingReminderTime, setFastingReminderTime] = useState("20:00");
+  const [streakDisplay, setStreakDisplay] = useState<StreakDisplay>("weekly");
+  const [weekStartDay, setWeekStartDay] = useState(1);
+  const [timezone, setTimezone] = useState<string | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -74,6 +104,11 @@ export default function SettingsScreen({
         setRealName(profile.realName ?? "");
         setReminderEnabled(profile.reminderEnabled);
         setReminderTime(profile.reminderTime);
+        setFastingReminderEnabled(profile.fastingReminderEnabled);
+        setFastingReminderTime(profile.fastingReminderTime);
+        setStreakDisplay(profile.streakDisplay);
+        setWeekStartDay(profile.weekStartDay);
+        setTimezone(profile.timezone);
         setRoom(profile.room);
       })
       .catch((err) => {
@@ -115,7 +150,7 @@ export default function SettingsScreen({
     e.preventDefault();
     if (saving || loading) return;
 
-    const validationError = validate(nickname, realName, reminderTime);
+    const validationError = validate(nickname, realName, reminderTime, fastingReminderTime);
     if (validationError) {
       setError(validationError);
       return;
@@ -130,6 +165,12 @@ export default function SettingsScreen({
         realName: realName.trim(),
         reminderEnabled,
         reminderTime,
+        fastingReminderEnabled,
+        fastingReminderTime,
+        // Saved with the rest of the form, not applied as you tap: the streak
+        // shape is a preference, not a live toggle on the Progress screen.
+        streakDisplay,
+        weekStartDay,
       });
       setConfirmation("Saved!");
       onSaved();
@@ -218,7 +259,92 @@ export default function SettingsScreen({
                       disabled={!reminderEnabled}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Times use the server timezone ({timezoneLabel}).
+                      Reminders arrive in your own timezone ({timezone ?? timezoneLabel}),
+                      detected automatically.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex-1">
+                      <Label htmlFor="settings-fasting-enabled">Fasting reminder</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Sunday and Wednesday evenings, about Monday's and Thursday's fast.
+                      </p>
+                    </div>
+                    <Switch
+                      id="settings-fasting-enabled"
+                      checked={fastingReminderEnabled}
+                      onCheckedChange={setFastingReminderEnabled}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-fasting-time">Fasting reminder time</Label>
+                    <Input
+                      id="settings-fasting-time"
+                      type="time"
+                      value={fastingReminderTime}
+                      onChange={(e) => setFastingReminderTime(e.target.value)}
+                      disabled={!fastingReminderEnabled}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      One time covers both evenings.
+                    </p>
+                  </div>
+                </section>
+
+                <section className="space-y-4">
+                  <h3 className="text-sm font-semibold text-foreground">Streaks</h3>
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-streak-display">Display</Label>
+                    <div
+                      id="settings-streak-display"
+                      role="radiogroup"
+                      aria-label="Streak display"
+                      className="grid grid-cols-2 gap-1 rounded-xl bg-secondary/60 p-1"
+                    >
+                      {STREAK_DISPLAYS.map((option) => {
+                        const active = streakDisplay === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            onClick={() => setStreakDisplay(option.id)}
+                            className={cn(
+                              "min-h-11 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              active
+                                ? "bg-background text-foreground shadow-sm"
+                                : "text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {STREAK_DISPLAYS.find((o) => o.id === streakDisplay)?.hint} Applies when you
+                      save.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="settings-week-start">Week starts on</Label>
+                    <select
+                      id="settings-week-start"
+                      value={weekStartDay}
+                      onChange={(e) => setWeekStartDay(Number(e.target.value))}
+                      className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={streakDisplay !== "weekly"}
+                    >
+                      {WEEK_START_DAYS.map((day) => (
+                        <option key={day.value} value={day.value}>
+                          {day.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      The day the weekly view's calendar week begins.
                     </p>
                   </div>
                 </section>

@@ -143,6 +143,22 @@ const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
     column: "fasting_reminder_time",
     definition: "TEXT NOT NULL DEFAULT '20:00'",
   },
+  // Per-user streak display preference and the calendar week it draws from.
+  // The CHECK constraints schema.sql carries cannot come along (see below); the
+  // PATCH /api/profile validation is what enforces them on a migrated DB.
+  {
+    table: "users",
+    column: "streak_display",
+    definition: "TEXT NOT NULL DEFAULT 'weekly'",
+  },
+  {
+    table: "users",
+    column: "week_start_day",
+    definition: "INTEGER NOT NULL DEFAULT 1",
+  },
+  // Backfilled from created_at for everyone already in a room — see
+  // backfillRoomJoinedAt().
+  { table: "users", column: "room_joined_at", definition: "TEXT" },
   // The admin-vs-participant registration branch (PRD §2) parks its answers in
   // pending_registrations until finalize.
   { table: "pending_registrations", column: "role", definition: "TEXT" },
@@ -156,11 +172,12 @@ const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
 /**
  * Add any missing column from ADDED_COLUMNS. Returns the ones actually added.
  *
- * ALTER TABLE ADD COLUMN cannot express the CHECK constraint schema.sql puts on
- * pending_registrations.role — SQLite has no ADD CONSTRAINT. A migrated DB
- * therefore enforces the admin/participant pairing in the application layer
- * only, which is where the registration flow validates it anyway; a fresh DB
- * gets the CHECK from schema.sql.
+ * ALTER TABLE ADD COLUMN cannot express the CHECK constraints schema.sql puts on
+ * pending_registrations.role, users.streak_display and users.week_start_day —
+ * SQLite has no ADD CONSTRAINT. A migrated DB therefore enforces those in the
+ * application layer only, which is where the registration flow and
+ * PATCH /api/profile validate them anyway; a fresh DB gets the CHECKs from
+ * schema.sql.
  */
 export function addMissingColumns(): string[] {
   const added: string[] = [];
@@ -191,9 +208,37 @@ try {
 // No-op right after a reset; creates the tables on a brand-new DB file.
 db.exec(schema);
 
+/**
+ * Give every current room member a room_joined_at. Members who predate the
+ * column have no record of when they joined, so their registration date is the
+ * closest honest answer — and for the common case (registered straight into the
+ * room they are still in) it is the exact one. Only ever fills NULLs, so a real
+ * join timestamp is never overwritten, and a user between rooms keeps NULL.
+ *
+ * Idempotent: a no-op once every member has one.
+ */
+export function backfillRoomJoinedAt(): number {
+  if (!tableExists("users")) return 0;
+  if (!columnNames("users").includes("room_joined_at")) return 0;
+  const result = db
+    .prepare(
+      `UPDATE users SET room_joined_at = created_at
+       WHERE room_joined_at IS NULL AND current_room_id IS NOT NULL`
+    )
+    .run();
+  return result.changes;
+}
+
 // Then top up any column that a DB created by an earlier multi-room deploy is
 // missing. Runs after db.exec(schema) so the tables it patches always exist.
 const addedColumns = addMissingColumns();
 if (addedColumns.length > 0) {
   console.warn(`db migration: added missing columns: ${addedColumns.join(", ")}`);
+}
+
+const backfilledJoins = backfillRoomJoinedAt();
+if (backfilledJoins > 0) {
+  console.warn(
+    `db migration: backfilled users.room_joined_at from created_at for ${backfilledJoins} member(s).`
+  );
 }

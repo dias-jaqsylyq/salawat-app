@@ -7,6 +7,15 @@ export const HABIT_CATEGORIES: readonly HabitCategory[] = ["IQ", "SQ", "PQ", "EQ
 export type UserRole = "admin" | "participant";
 
 /**
+ * How the Progress screen draws streaks: 'current' = one number per habit,
+ * 'weekly' = a seven-cell calendar-week row per habit. Purely a display
+ * preference — switching it recomputes and caches nothing.
+ */
+export type StreakDisplay = "current" | "weekly";
+
+export const STREAK_DISPLAYS: readonly StreakDisplay[] = ["current", "weekly"] as const;
+
+/**
  * One independent competition. Rooms are isolated by room_id inside this one
  * database — never separate bot instances (MULTI ROOM PRD §0).
  */
@@ -60,9 +69,20 @@ export interface User {
   fasting_reminder_time: string;
   /**
    * IANA name detected client-side in the Mini App. NULL until the user opens
-   * it at least once — reminders fall back to config.timezone until then.
+   * it at least once — everything that needs this user's "today" falls back to
+   * config.timezone until then (see getUserTimezone).
    */
   timezone: string | null;
+  /** Display-only: which shape the Progress screen draws streaks in. */
+  streak_display: StreakDisplay;
+  /** First day of the weekly view's calendar week, 0 = Sunday … 6 = Saturday. */
+  week_start_day: number;
+  /**
+   * When this user joined the room they are in now (UTC text, like created_at),
+   * or NULL between rooms. The weekly view greys out this week's days that
+   * predate it rather than showing them as missed.
+   */
+  room_joined_at: string | null;
   /** From Telegram initData.user — admin export only, never public API. */
   telegram_username: string | null;
   telegram_first_name: string | null;

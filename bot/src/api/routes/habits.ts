@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
-import { HABIT_LOG_RATE_LIMIT_PER_MINUTE, MAX_HABIT_VALUE, config } from "../../config.js";
+import { HABIT_LOG_RATE_LIMIT_PER_MINUTE, MAX_HABIT_VALUE } from "../../config.js";
 import { deleteHabitLog, listHabits, upsertHabitLog } from "../../db/repository.js";
-import { formatDateParts, getTodayInTimezone } from "../../utils/challenge.js";
+import { getUserTodayKey } from "../../utils/challenge.js";
 import { parseIdParam } from "../params.js";
 import { allowRequest } from "../rateLimit.js";
 import { getRoomHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope.js";
@@ -35,9 +35,10 @@ export function listHabitsRoute(req: Request, res: Response): void {
  * POST /api/habits/:id/log — upsert today's value for a habit of the caller's
  * own room. A habit of any other room 404s exactly like a non-existent one.
  *
- * Always writes today's TIMEZONE-local log_date, so a log is only ever
- * editable the same day it was made (PIVOT_PLAN §3) — there is no way to
- * target a past day through this endpoint.
+ * Always writes *the caller's own* today as log_date — their personal timezone,
+ * falling back to TIMEZONE until the Mini App has detected one. A log is
+ * therefore only ever editable the same day they made it (PIVOT_PLAN §3), and
+ * there is no way to target a past day through this endpoint.
  */
 export function logHabitRoute(req: Request, res: Response): void {
   const habitId = parseIdParam(req.params.id);
@@ -88,7 +89,7 @@ export function logHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const today = formatDateParts(getTodayInTimezone(config.timezone));
+  const today = getUserTodayKey(caller.user);
   const log = upsertHabitLog(caller.user.id, habit.id, value, today);
 
   res.json({
@@ -127,7 +128,7 @@ export function deleteHabitLogRoute(req: Request, res: Response): void {
     return;
   }
 
-  const today = formatDateParts(getTodayInTimezone(config.timezone));
+  const today = getUserTodayKey(caller.user);
   deleteHabitLog(caller.user.id, habit.id, today);
 
   res.json({ success: true, habitId: habit.id, logged: false });

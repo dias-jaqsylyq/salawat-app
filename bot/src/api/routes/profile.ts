@@ -10,13 +10,31 @@ import { allowRequest } from "../rateLimit.js";
 import { getUserByTelegramId, isNicknameTaken, updateUserProfile } from "../../db/repository.js";
 import { nicknameMatchesRealName, parseRealName } from "../realName.js";
 import { resolveCallerRoom, roomResponse } from "../roomScope.js";
-import type { Room, User } from "../../types.js";
+import { STREAK_DISPLAYS, type Room, type StreakDisplay, type User } from "../../types.js";
+
+/** Fallback when a stored fasting time is missing or corrupt — the schema default. */
+const DEFAULT_FASTING_REMINDER_TIME = "20:00";
 
 function effectiveReminderTime(user: User): string {
   if (user.reminder_time && isValidReminderTime(user.reminder_time)) {
     return formatReminderHhMm(parseReminderTime(user.reminder_time));
   }
   return formatReminderHhMm(config.reminderTime);
+}
+
+function effectiveFastingReminderTime(user: User): string {
+  if (user.fasting_reminder_time && isValidReminderTime(user.fasting_reminder_time)) {
+    return formatReminderHhMm(parseReminderTime(user.fasting_reminder_time));
+  }
+  return DEFAULT_FASTING_REMINDER_TIME;
+}
+
+function isStreakDisplay(value: unknown): value is StreakDisplay {
+  return typeof value === "string" && STREAK_DISPLAYS.includes(value as StreakDisplay);
+}
+
+function isWeekStartDay(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 6;
 }
 
 function profileResponse(user: User, room: Room | null) {
@@ -30,7 +48,14 @@ function profileResponse(user: User, room: Room | null) {
     realName: user.real_name ?? null,
     reminderEnabled: user.reminder_enabled === 1,
     reminderTime: effectiveReminderTime(user),
+    // Opt-in and identical for every room and every member, admins included:
+    // the fasting nudge is a bot-wide function, not a room setting.
+    fastingReminderEnabled: user.fasting_reminder_enabled === 1,
+    fastingReminderTime: effectiveFastingReminderTime(user),
     timezone: user.timezone ?? null,
+    // Display-only preferences for the Progress screen's streak section.
+    streakDisplay: user.streak_display,
+    weekStartDay: user.week_start_day,
     // The room name Settings shows (PRD §3a); null while between rooms.
     room: room ? roomResponse(room) : null,
   };
@@ -59,10 +84,27 @@ export function patchProfileRoute(req: Request, res: Response) {
   const hasNickname = Object.prototype.hasOwnProperty.call(body, "nickname");
   const hasReminderEnabled = Object.prototype.hasOwnProperty.call(body, "reminderEnabled");
   const hasReminderTime = Object.prototype.hasOwnProperty.call(body, "reminderTime");
+  const hasFastingReminderEnabled = Object.prototype.hasOwnProperty.call(
+    body,
+    "fastingReminderEnabled"
+  );
+  const hasFastingReminderTime = Object.prototype.hasOwnProperty.call(body, "fastingReminderTime");
   const hasRealName = Object.prototype.hasOwnProperty.call(body, "realName");
   const hasTimezone = Object.prototype.hasOwnProperty.call(body, "timezone");
+  const hasStreakDisplay = Object.prototype.hasOwnProperty.call(body, "streakDisplay");
+  const hasWeekStartDay = Object.prototype.hasOwnProperty.call(body, "weekStartDay");
 
-  if (!hasNickname && !hasReminderEnabled && !hasReminderTime && !hasRealName && !hasTimezone) {
+  if (
+    !hasNickname &&
+    !hasReminderEnabled &&
+    !hasReminderTime &&
+    !hasFastingReminderEnabled &&
+    !hasFastingReminderTime &&
+    !hasRealName &&
+    !hasTimezone &&
+    !hasStreakDisplay &&
+    !hasWeekStartDay
+  ) {
     res.status(400).json({ success: false, error: "invalid_body" });
     return;
   }
@@ -123,6 +165,30 @@ export function patchProfileRoute(req: Request, res: Response) {
     }
   }
 
+  let fastingReminderEnabled: boolean | undefined;
+  if (hasFastingReminderEnabled) {
+    if (typeof body.fastingReminderEnabled !== "boolean") {
+      res.status(400).json({ success: false, error: "invalid_fasting_reminder_enabled" });
+      return;
+    }
+    fastingReminderEnabled = body.fastingReminderEnabled;
+  }
+
+  // No null here, unlike reminderTime: there is no global default fasting time
+  // to fall back to, so the column always holds a concrete HH:mm.
+  let fastingReminderTime: string | undefined;
+  if (hasFastingReminderTime) {
+    if (
+      typeof body.fastingReminderTime === "string" &&
+      isValidReminderTime(body.fastingReminderTime)
+    ) {
+      fastingReminderTime = formatReminderHhMm(parseReminderTime(body.fastingReminderTime));
+    } else {
+      res.status(400).json({ success: false, error: "invalid_fasting_reminder_time" });
+      return;
+    }
+  }
+
   let realName: string | undefined;
   if (hasRealName) {
     const parsedRealName = parseRealName(body.realName);
@@ -145,6 +211,27 @@ export function patchProfileRoute(req: Request, res: Response) {
     }
   }
 
+  // Validated here rather than left to the column's CHECK: a database migrated
+  // from an earlier deploy got these columns through ALTER TABLE ADD COLUMN,
+  // which cannot carry a CHECK (see db/client.ts) — this is the only guard there.
+  let streakDisplay: StreakDisplay | undefined;
+  if (hasStreakDisplay) {
+    if (!isStreakDisplay(body.streakDisplay)) {
+      res.status(400).json({ success: false, error: "invalid_streak_display" });
+      return;
+    }
+    streakDisplay = body.streakDisplay;
+  }
+
+  let weekStartDay: number | undefined;
+  if (hasWeekStartDay) {
+    if (!isWeekStartDay(body.weekStartDay)) {
+      res.status(400).json({ success: false, error: "invalid_week_start_day" });
+      return;
+    }
+    weekStartDay = body.weekStartDay;
+  }
+
   const effectiveNickname = nickname ?? user.nickname;
   const effectiveRealName = realName ?? user.real_name;
   if (effectiveRealName && nicknameMatchesRealName(effectiveNickname, effectiveRealName)) {
@@ -156,8 +243,12 @@ export function patchProfileRoute(req: Request, res: Response) {
     nickname,
     reminderEnabled,
     reminderTime: reminderTime ?? undefined,
+    fastingReminderEnabled,
+    fastingReminderTime,
     realName,
     timezone,
+    streakDisplay,
+    weekStartDay,
   });
 
   res.json(profileResponse(updated, room));

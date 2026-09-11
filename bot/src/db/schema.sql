@@ -58,9 +58,24 @@ CREATE TABLE IF NOT EXISTS users (
   fasting_reminder_time TEXT NOT NULL DEFAULT '20:00',
   -- IANA name (e.g. "Asia/Hong_Kong"), detected client-side in the Mini App
   -- (Intl.DateTimeFormat().resolvedOptions().timeZone). NULL until the user
-  -- opens the Mini App at least once — reminders fall back to config.timezone.
-  -- Per-user and unaffected by room membership (PRD §3a).
+  -- opens the Mini App at least once — everything that needs "today" for this
+  -- user falls back to config.timezone until then. Per-user and unaffected by
+  -- room membership (PRD §3a).
   timezone TEXT,
+  -- Which shape the Progress screen draws streaks in: 'current' = one number
+  -- per habit, 'weekly' = a seven-cell calendar-week row per habit. Purely a
+  -- display preference — nothing is recomputed or cached when it changes.
+  streak_display TEXT NOT NULL DEFAULT 'weekly'
+    CHECK (streak_display IN ('current','weekly')),
+  -- First day of the calendar week the weekly view draws, 0 = Sunday … 6 =
+  -- Saturday. Default 1 (Monday).
+  week_start_day INTEGER NOT NULL DEFAULT 1
+    CHECK (week_start_day BETWEEN 0 AND 6),
+  -- When this user joined the room they are in now (UTC, like created_at), or
+  -- NULL while they are between rooms. Rewritten on every join, so the weekly
+  -- view can grey out the days of this week that predate their membership
+  -- instead of showing them as missed.
+  room_joined_at TEXT,
   telegram_username TEXT,
   telegram_first_name TEXT,
   telegram_last_name TEXT,

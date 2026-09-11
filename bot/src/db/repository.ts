@@ -12,6 +12,7 @@ import type {
   PendingRegistration,
   RegistrationStep,
   Room,
+  StreakDisplay,
   TelegramProfile,
   User,
   UserRole,
@@ -362,6 +363,11 @@ export function kickUserFromRoom(userId: number, roomId: number): KickUserFromRo
  * transfer, and a returning user comes back as a plain participant (PRD §3a).
  * Their habit_logs are left intact — history stays queryable, and nothing needs
  * deleting on a voluntary leave (PRD §1).
+ *
+ * room_joined_at tracks membership in step: stamped on a real move into a room,
+ * cleared on the way out, and deliberately *not* refreshed when the call names
+ * the room the user is already in — re-running a no-op move must not look like
+ * a fresh join to the weekly view.
  */
 export function setUserCurrentRoom(userId: number, roomId: number | null): void {
   const move = db.transaction(() => {
@@ -374,7 +380,20 @@ export function setUserCurrentRoom(userId: number, roomId: number | null): void 
     if (current.current_room_id !== null && current.current_room_id !== roomId) {
       removeRoomAdmin(current.current_room_id, userId);
     }
-    db.prepare("UPDATE users SET current_room_id = ? WHERE id = ?").run(roomId, userId);
+    if (roomId === null) {
+      db.prepare(
+        "UPDATE users SET current_room_id = NULL, room_joined_at = NULL WHERE id = ?"
+      ).run(userId);
+    } else if (current.current_room_id === roomId) {
+      db.prepare(
+        `UPDATE users SET current_room_id = ?, room_joined_at = COALESCE(room_joined_at, datetime('now'))
+         WHERE id = ?`
+      ).run(roomId, userId);
+    } else {
+      db.prepare(
+        "UPDATE users SET current_room_id = ?, room_joined_at = datetime('now') WHERE id = ?"
+      ).run(roomId, userId);
+    }
   });
   move();
 }
@@ -458,16 +477,25 @@ export function createUser(
       `INSERT INTO users (
          telegram_id, nickname,
          role, current_room_id,
+         room_joined_at,
          telegram_username, telegram_first_name, telegram_last_name,
          real_name,
          reminder_enabled, reminder_time,
          fasting_reminder_enabled, fasting_reminder_time
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       ) VALUES (
+         ?, ?, ?, ?,
+         CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,
+         ?, ?, ?, ?, ?, ?, ?, ?
+       )`
     )
     .run(
       telegramId,
       nickname,
       role,
+      currentRoomId,
+      // A participant joins their room the moment the row is created; an admin's
+      // row is born roomless and gets stamped by setUserCurrentRoom once the
+      // room it owns exists. Same clock as created_at, deliberately.
       currentRoomId,
       profile.telegramUsername,
       profile.telegramFirstName,
@@ -723,13 +751,31 @@ export function getUsersWithRemindersEnabled(roomId?: number): User[] {
     .all(roomId) as User[];
 }
 
+/**
+ * Users who opted into the Sunday/Wednesday fasting nudge. Room-scoped the same
+ * way as the daily reminder even though the message itself is room-agnostic: a
+ * user between rooms gets no reminder DMs at all (PRD §3a).
+ */
+export function getUsersWithFastingRemindersEnabled(): User[] {
+  return db
+    .prepare(
+      "SELECT * FROM users WHERE fasting_reminder_enabled = 1 AND current_room_id IS NOT NULL"
+    )
+    .all() as User[];
+}
+
 export interface UserProfileUpdate {
   nickname?: string;
   reminderEnabled?: boolean;
   reminderTime?: string;
+  fastingReminderEnabled?: boolean;
+  fastingReminderTime?: string;
   realName?: string;
   /** undefined = leave unchanged; null = reset to unset (fall back to config.timezone). */
   timezone?: string | null;
+  streakDisplay?: StreakDisplay;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekStartDay?: number;
 }
 
 export function updateUserProfile(telegramId: number, update: UserProfileUpdate): User {
@@ -742,14 +788,35 @@ export function updateUserProfile(telegramId: number, update: UserProfileUpdate)
   const reminderEnabled =
     update.reminderEnabled !== undefined ? (update.reminderEnabled ? 1 : 0) : user.reminder_enabled;
   const reminderTime = update.reminderTime ?? user.reminder_time;
+  const fastingReminderEnabled =
+    update.fastingReminderEnabled !== undefined
+      ? (update.fastingReminderEnabled ? 1 : 0)
+      : user.fasting_reminder_enabled;
+  const fastingReminderTime = update.fastingReminderTime ?? user.fasting_reminder_time;
   const realName = update.realName !== undefined ? update.realName : user.real_name;
   const timezone = update.timezone !== undefined ? update.timezone : user.timezone;
+  const streakDisplay = update.streakDisplay ?? user.streak_display;
+  const weekStartDay = update.weekStartDay ?? user.week_start_day;
 
   db.prepare(
     `UPDATE users
-     SET nickname = ?, reminder_enabled = ?, reminder_time = ?, real_name = ?, timezone = ?
+     SET nickname = ?, reminder_enabled = ?, reminder_time = ?,
+         fasting_reminder_enabled = ?, fasting_reminder_time = ?,
+         real_name = ?, timezone = ?,
+         streak_display = ?, week_start_day = ?
      WHERE telegram_id = ?`
-  ).run(nickname, reminderEnabled, reminderTime, realName, timezone, telegramId);
+  ).run(
+    nickname,
+    reminderEnabled,
+    reminderTime,
+    fastingReminderEnabled,
+    fastingReminderTime,
+    realName,
+    timezone,
+    streakDisplay,
+    weekStartDay,
+    telegramId
+  );
 
   return getUserByTelegramId(telegramId) ?? (() => {
     throw new Error(`Failed to reload user ${telegramId} after profile update`);
@@ -927,6 +994,52 @@ export function getUserTotalPoints(userId: number, roomId?: number): number {
           .get(userId, roomId)
   ) as { total: number };
   return row.total;
+}
+
+/**
+ * Points this user earned in one room on one calendar day.
+ *
+ * The date is the caller's *own* day key (getUserTodayKey), the same one every
+ * write lands on — so this shifts the moment they change timezone, with nothing
+ * stored or cached to invalidate.
+ */
+export function getUserPointsForDate(userId: number, roomId: number, date: string): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(points_earned), 0) AS total
+       FROM habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date = ?`
+    )
+    .get(userId, roomId, date) as { total: number };
+  return row.total;
+}
+
+/**
+ * Which days in [fromDate, toDate] this user has a log row on, per habit —
+ * presence only, since the weekly view draws a lit or unlit cell and never a
+ * count. One query for the whole grid; habits with no logs in the window are
+ * simply absent from the map.
+ */
+export function getHabitLogDatesInRange(
+  userId: number,
+  roomId: number,
+  fromDate: string,
+  toDate: string
+): Map<number, Set<string>> {
+  const rows = db
+    .prepare(
+      `SELECT habit_id, log_date FROM habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date >= ? AND log_date <= ?`
+    )
+    .all(userId, roomId, fromDate, toDate) as { habit_id: number; log_date: string }[];
+
+  const byHabit = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const dates = byHabit.get(row.habit_id) ?? new Set<string>();
+    dates.add(row.log_date);
+    byHabit.set(row.habit_id, dates);
+  }
+  return byHabit;
 }
 
 /**

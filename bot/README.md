@@ -18,14 +18,16 @@ One bot serves many independent **rooms** (competitions). Rooms are isolated by 
   - Format (`utils/roomPassword.ts`): 6–64 characters from `A-Za-z0-9_-`, either admin-typed or generated. The charset is Telegram's start-payload limit — anything outside it would produce a share deep link that silently drops the password.
   - `owner_user_id` is historical record-keeping ("who created this") and grants no power — co-admins are fully equal and may demote the owner.
 - **`room_admins`** (`room_id`, `user_id`) — the room's owner and every co-admin, flat and equal. This **replaces the old global `admins` table**. Status is per room, so it is dropped the moment a user leaves for another room, and last-admin protection is a `COUNT(*)` over one `room_id`.
-- **`users`** — gain `role` (`admin` | `participant`, chosen once at registration) and `current_room_id` (at most one room at a time; `NULL` between leaving one room and joining the next, which also pauses their reminders). Nickname uniqueness is **per room**, not global. `fasting_reminder_enabled` / `fasting_reminder_time` hold the separate, opt-in (default off) Sunday/Wednesday fasting nudge collected at signup — the cron that acts on them is not built yet.
+- **`users`** — gain `role` (`admin` | `participant`, chosen once at registration) and `current_room_id` (at most one room at a time; `NULL` between leaving one room and joining the next, which also pauses their reminders). Nickname uniqueness is **per room**, not global. `fasting_reminder_enabled` / `fasting_reminder_time` hold the separate, opt-in (default off) Sunday/Wednesday fasting nudge; `timezone` holds the IANA zone the Mini App detects. `streak_display` (`current` | `weekly`, default `weekly`) and `week_start_day` (`0` = Sunday … `6` = Saturday, default `1`) are display-only preferences for the Progress screen. `room_joined_at` records when the user entered the room they are in now (`NULL` between rooms), so the weekly view can grey out days that predate their membership instead of scoring them as missed.
 - **`pending_registrations`** — holds a signup in progress, including which branch it is on: `role`, plus `room_name`/`categories_enabled` (admin branch) or `room_id` (participant branch, resolved from the password up front).
 - **`habits`** — gain `room_id` and `category` (`IQ` / `SQ` / `PQ` / `EQ`, nullable). A habit in a room with `categories_enabled = 1` always carries a category and one in a room without categories never does — enforced in the application layer, not by the column. Turning categories off **keeps** the stored values; turning them back on asks the admin to re-confirm rather than silently reusing them.
 - **`habit_logs`** — gain `room_id`, denormalized from the habit at write time, so leaderboard/progress queries are a filter rather than a join and a member's old logs stay attached to the room they were earned in after they move.
 
+**Every "today" is the user's own.** `log_date`, the day Progress and the weekly grid draw, the day a streak walks back from, and the day the reminders ask about are all resolved through `getUserTimezone`/`getUserTodayKey` (`utils/challenge.ts`): the user's detected `timezone`, falling back to `TIMEZONE` until the Mini App has reported one, and falling back again if a stored zone stops being valid. Nothing is stored per-day beyond `log_date` itself, so changing timezone moves that user's "today" on the next request with nothing to recompute or invalidate — and moves nobody else's. Points already written keep the `log_date` they were written under; a zone change shifts the window, it does not relabel history.
+
 **Destructive migration.** On boot, a DB file from before the multi-room pivot (detected by a leftover `admins` table or a `habits` table with no `room_id`) is **wiped**: every app table is dropped and recreated from `schema.sql`, with no data migrated. A timestamped snapshot of the old file is written next to it as `salawat.pre-multiroom-<utc>.db` first. The check is idempotent and never touches an already-migrated database.
 
-**Additive migration.** A database created by an earlier multi-room deploy is then topped up in place: any column in `client.ts`'s `ADDED_COLUMNS` that the file is missing is added with `ALTER TABLE ADD COLUMN`. Nothing is dropped and no row is rewritten, so this is safe on a volume that already holds live rooms. Also idempotent, and a no-op on a fresh DB (which gets the columns from `schema.sql`). SQLite cannot add a `CHECK` constraint to an existing table, so on a migrated file the `pending_registrations.role` check lives only in the application layer.
+**Additive migration.** A database created by an earlier multi-room deploy is then topped up in place: any column in `client.ts`'s `ADDED_COLUMNS` that the file is missing is added with `ALTER TABLE ADD COLUMN`. Nothing is dropped and no row is rewritten, so this is safe on a volume that already holds live rooms. Also idempotent, and a no-op on a fresh DB (which gets the columns from `schema.sql`). SQLite cannot add a `CHECK` constraint to an existing table, so on a migrated file the `pending_registrations.role`, `users.streak_display` and `users.week_start_day` checks live only in the application layer (`PATCH /api/profile` validates the latter two). One backfill runs alongside: `backfillRoomJoinedAt()` fills a `NULL` `room_joined_at` from `created_at` for members who predate the column — closest honest answer, exact for anyone who registered straight into the room they are still in. It only ever fills `NULL`s, so a real join timestamp is never overwritten, and a user between rooms keeps `NULL`.
 
 ## Requirements
 - Node.js 20+
@@ -105,7 +107,7 @@ Unauthenticated:
 
 **POST /api/habits/:id/log** — body `{ value?: number }`, upserts today's log
 - `quantity`: `value` is an integer `0`…`10000`. `binary`: omit `value` or send `1`
-- Always writes today's `TIMEZONE`-local `log_date`, so a log is only editable the same day — there is no way to reach a past day through this endpoint
+- Always writes **the caller's own** today as `log_date` (their `timezone`, falling back to `TIMEZONE`), so a log is only editable the same day *they* made it — there is no way to reach a past day through this endpoint
 - Not cumulative: a second call the same day overwrites `value`/`points_earned` rather than adding
 - Points are computed from the habit's current weight and **frozen** on the row (`computePoints`), so a later weight change is never retroactive
 - Rate limit: 30 requests/minute/user
@@ -119,12 +121,23 @@ Unauthenticated:
 
 **GET /api/progress**
 → `200 { registered: false }` if not registered
-→ `200 { registered: true, nickname, room, totalPoints, today, streaks, needsRealName }`
+→ `200 { registered: true, nickname, room, totalPoints, todayPoints, today, todayDate, streaks, streakDisplay, weekStartDay, needsRealName }`
 - `room`: `{ id, name, categoriesEnabled }` — the name the Mini App shows in its header and the room's category mode; `null` for a caller between rooms
 - `totalPoints`: all-time sum of `points_earned` **earned in this room**. A member who moved here from another room keeps their old logs but does not carry their old points in
+- `todayPoints`: the same sum narrowed to `todayDate` — the caller's Today's Total. Summed from the stored `points_earned`, so a later weight change is not retroactive here either, and a habit deactivated since still counts: the points were earned while it was active. **Personal screen only** — the leaderboard has no equivalent, and no group/Jamaat total exists anywhere
 - `today`: `[{ habitId, logged, value, points }]` for each active habit of the room
-- `streaks`: `[{ habitId, streak }]` — consecutive `TIMEZONE` days ending today with a log row for that habit (`0` if today has none). Per habit, never combined
+- `todayDate`: the `YYYY-MM-DD` the two above are measured over — the caller's own day, so it moves with their timezone
+- `streaks`: `[{ habitId, streak }]` — consecutive days ending today (in the caller's own timezone) with a log row for that habit (`0` if today has none). Per habit, never combined
+- `streakDisplay` / `weekStartDay`: the caller's display preferences, echoed so the Progress screen picks a streak shape once instead of rendering one and flipping
 - `needsRealName`: `true` when `users.real_name` is null/empty; the name itself is never returned
+
+**GET /api/progress/week** — the seven days of the caller's current calendar week, per active habit, for the weekly streak view
+→ `200 { weekStart, weekStartDay, today, days: [7 × "YYYY-MM-DD"], habits: [{ habitId, name, days: [{ date, logged, locked, future }] }] }`
+- A **calendar** week from the caller's own `week_start_day` (default Monday), not a rolling last-7-days window: the row seen on Wednesday covers the same dates it covered on Monday, with the rest of the week still ahead
+- One **flat** list, one row per **active** habit — deactivated habits are absent, and rows are never grouped by category even in a categories-enabled room
+- Cells carry **presence only**, never a count (`logged` is a lit or unlit flame; there is no "X of 7"). Two cell kinds are neither lit nor missed, so the UI can grey them out rather than score them: `locked` (the day precedes `room_joined_at` — joined mid-week) and `future` (has not happened yet in the caller's own timezone)
+- **Read-only by construction**: there is no matching write endpoint, because the weekly view is not tappable. Logging stays today-only, through `POST /api/habits/:id/log` — day-override remains out of scope
+- `{ habits: [] }` for a caller between rooms (the week itself is still returned); `403 not_registered` otherwise
 
 **GET /api/leaderboard**
 → `200 { leaderboard: [{ nickname, totalPoints, rank, isYou }] }`
@@ -134,21 +147,25 @@ Unauthenticated:
 - `{ leaderboard: [] }` for a caller between rooms
 
 **GET /api/profile**
-→ `200 { nickname, realName, reminderEnabled, reminderTime, timezone, room }`
+→ `200 { nickname, realName, reminderEnabled, reminderTime, fastingReminderEnabled, fastingReminderTime, timezone, streakDisplay, weekStartDay, room }`
 - Self-scoped, so `realName` is the caller's own; public and other-user surfaces still hide it
 - `reminderTime`: effective `HH:mm` (`users.reminder_time` if valid, else global `REMINDER_TIME`)
-- `timezone`: IANA name detected in the Mini App, or `null` (reminders then fall back to `TIMEZONE`)
+- `fastingReminderEnabled` / `fastingReminderTime`: the Sunday/Wednesday nudge, default **off** at `20:00`. Offered identically to every member of every room, admins included — it is a function of the bot, not a room setting, so there is no room-level switch for it
+- `timezone`: IANA name detected in the Mini App, or `null` (everything that needs this user's "today" then falls back to `TIMEZONE`)
+- `streakDisplay` (`current` | `weekly`, default `weekly`) and `weekStartDay` (`0` = Sunday … `6` = Saturday, default `1`): display-only preferences for the Progress screen's streak section
 - `room`: `{ id, name, categoriesEnabled }` or `null`
 → `403 not_registered`
 
-**PATCH /api/profile** — body (all optional; at least one required): `{ nickname?, reminderEnabled?, reminderTime?, realName?, timezone? }`
+**PATCH /api/profile** — body (all optional; at least one required): `{ nickname?, reminderEnabled?, reminderTime?, fastingReminderEnabled?, fastingReminderTime?, realName?, timezone?, streakDisplay?, weekStartDay? }`
 - **Nickname uniqueness is per room**, not global: the check is scoped to the caller's room, so the same nickname can exist in two rooms at once. A caller between rooms is checked globally — there is no room to collide within yet
 - Nickname and real name must differ case-insensitively (new or existing values)
 - `reminderTime`: `HH:mm` (24h), or `null` to fall back to global `REMINDER_TIME`
+- `fastingReminderTime`: `HH:mm` (24h) — **not** nullable, unlike `reminderTime`: there is no global fasting default to fall back to, so the column always holds a concrete time. One time covers both fire days; there is no separate Sunday and Wednesday setting
 - `timezone`: IANA name, or `null` to clear
+- `streakDisplay` / `weekStartDay`: purely visual. Switching changes which shape the Progress screen draws and nothing else — no streak is recomputed, no value is cached or migrated, and the underlying logs are untouched
 - Rate limit: 5 requests/minute/user
 → `200` same shape as GET
-→ `400 invalid_body | invalid_nickname | invalid_real_name | nickname_matches_real_name | invalid_reminder_enabled | invalid_reminder_time | invalid_timezone`
+→ `400 invalid_body | invalid_nickname | invalid_real_name | nickname_matches_real_name | invalid_reminder_enabled | invalid_reminder_time | invalid_fasting_reminder_enabled | invalid_fasting_reminder_time | invalid_timezone | invalid_streak_display | invalid_week_start_day`
 → `403 not_registered` · `409 nickname_taken` · `429 rate_limited`
 
 **POST /api/room/leave** — leave the room you are currently in
@@ -157,7 +174,11 @@ Unauthenticated:
 → `200 { success: true, leftRoomId }`
 → `400 no_room` · `403 not_registered` · `409 last_admin`
 
-**Reminders:** a minute cron in `TIMEZONE` DMs each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm` in **their own** timezone (`users.timezone`, falling back to `TIMEZONE`). The message lists the active habits of **their current room** they have not logged today; users with no current room are skipped entirely. Overlapping ticks are skipped while a send is in flight, and there is no catch-up if the process was down during a user's minute. The separate opt-in fasting reminder is stored at signup but its cron is not built yet.
+**Daily reminder** (`scheduler/reminder.ts`): a minute cron DMs each user whose `reminder_enabled` is on and whose effective reminder time matches the current `HH:mm` in **their own** timezone (`users.timezone`, falling back to `TIMEZONE`). The message lists the active habits of **their current room** they have not logged **on their own day** — the same day key their logs are written under, so someone pinged at 20:00 local is told about the day they can still log. Users with no current room are skipped entirely.
+
+**Fasting reminder** (`scheduler/fastingReminder.ts`): a **separate, parallel** minute cron, deliberately not folded into the daily one — different opt-in, different schedule, unrelated content, and a failure in one must not silence the other. It DMs each user with `fasting_reminder_enabled` on, on **their own** Sunday or Wednesday evening at their `fasting_reminder_time` (one time covers both days). Sunday copy frames Monday's fast, Wednesday's frames Thursday's. The text is **pure text**: a nudge about tomorrow's fast, with no habit attached, nothing logged and no app link. The hadith rotates deterministically across three (`Sahih Muslim 1162e`, `Jami' at-Tirmidhi 747`, `Sunan an-Nasa'i 2360`) from the date alone — no stored counter, stable for every tick of one day, and never the same text two fire days running. Identical for every room, since it is a function of the bot rather than a room setting; users with no current room are skipped, same as the daily reminder.
+
+Both schedulers skip overlapping ticks while a send is in flight, and neither catches up if the process was down during a user's minute.
 
 **GET /api/is-admin**
 → `200 { isAdmin: boolean }` — whether the authenticated Telegram id is an admin (owner or co-admin) **of the room they are currently in**. A user with no current room is never an admin.
@@ -263,10 +284,10 @@ The first question is **Admin (create a room)** or **Participant (join with a pa
 - **Admin finish**: the account, the room, its `room_admins` owner row and the owner's `current_room_id` are written in **one transaction** (`createAdminWithRoom`) — a partial failure can never leave an admin with no room. The room password is generated (`generateRoomPassword`), retried on the `rooms.password` UNIQUE collision, then shown to the admin with an explicit "share this with your participants" message and the matching `t.me/<bot>?start=<password>` invite link. The bot's username comes from the running bot, not configuration.
 - **Participant join**: the password is format-checked (`isValidRoomPassword`) before any DB lookup, then resolved with `getRoomByPassword` — **case-sensitive**, and a wrong password and a malformed one get the identical message, so nothing signals which guesses were close. Guesses are rate-limited per Telegram user (`ROOM_JOIN_RATE_LIMIT_PER_MINUTE`, via the same `allowRequest` helper the API uses).
 - **Nickname uniqueness is per room**: a participant is checked against their resolved room only, so the same nickname can exist in two rooms. An admin's room does not exist yet at that step and is created empty, so nothing can collide there.
-- The **fasting reminder** is a separate opt-in from the daily one (default off). Signup stores it; the scheduler that sends it is not implemented yet.
+- The **fasting reminder** is a separate opt-in from the daily one (default off), collected here and changeable later in the Mini App's Settings. `scheduler/fastingReminder.ts` is what acts on it.
 - All prompts and confirmations are sent as **HTML** with free text (nicknames, room names) escaped — Telegram's legacy Markdown parser 400s on an unmatched `_`/`*`, which would silently drop a confirmation for a nickname like `ali_2005`.
 
 `/deleteuser` and `/makeadmin` are **removed**. Both were global, single-tenant user management; they are superseded by room-scoped kick and co-admin promote/demote. No global user-management command remains.
 
 ## Notes / v1 scope
-Group-chat announcements, multi-timezone support, and manual count correction remain out of scope. Daily goals, streaks, and per-user reminder preferences are included via `/api/progress` and `/api/profile`. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Signup is in the bot; logging, progress, leaderboard, and settings live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.
+Group-chat announcements and manual count correction remain out of scope; **per-user timezones are supported** and every "today" in the app is resolved in the caller's own zone. Streaks, the two streak display shapes, and per-user reminder preferences are served by `/api/progress`, `/api/progress/week` and `/api/profile`. There is **no group/Jamaat total** anywhere — each room's leaderboard is individual points only, and nothing aggregates across rooms. Backfilling past days (`day-override`) stays out of scope: only today is loggable, and the weekly view is read-only for exactly that reason. A secret-gated CSV export (`/api/admin/export`) is available for prize time. Signup is in the bot; logging, progress, leaderboard, and settings live in the Mini App — see the [`salawat-miniapp`](https://github.com/dias-jaqsylyq/salawat-miniapp) README for that side.

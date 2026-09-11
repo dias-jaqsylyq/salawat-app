@@ -18,6 +18,7 @@ import type {
   ProfileUpdate,
   ProgressResponse,
   UnlogHabitResponse,
+  WeeklyProgressResponse,
 } from "./types.ts";
 
 const BASE_URL = import.meta.env.VITE_API_URL;
@@ -90,6 +91,16 @@ export function deleteHabitLog(initData: string, habitId: number): Promise<Unlog
 
 export function getProgress(initData: string): Promise<ProgressResponse> {
   return request(initData, "/api/progress");
+}
+
+/**
+ * GET /api/progress/week — this calendar week's cells for the weekly streak
+ * view. Fetched only while that view is showing: the two display shapes read
+ * different endpoints, so switching between them costs one request and never
+ * a recomputation.
+ */
+export function getProgressWeek(initData: string): Promise<WeeklyProgressResponse> {
+  return request(initData, "/api/progress/week");
 }
 
 export function getLeaderboard(initData: string): Promise<LeaderboardResponse> {

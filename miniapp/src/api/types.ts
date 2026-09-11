@@ -63,6 +63,41 @@ export interface HabitStreak {
   streak: number;
 }
 
+/**
+ * Which shape the Progress screen draws streaks in. A saved Settings
+ * preference, not a live toggle on Progress — and purely visual: switching it
+ * recomputes nothing and caches nothing.
+ */
+export type StreakDisplay = "current" | "weekly";
+
+/** One cell of the weekly view: a lit or unlit flame, never a count. */
+export interface WeekDay {
+  date: string;
+  logged: boolean;
+  /** Before this member joined the room — greyed out, not counted as missed. */
+  locked: boolean;
+  /** Later this week in the viewer's own timezone — likewise not a miss. */
+  future: boolean;
+}
+
+export interface WeekHabitRow {
+  habitId: number;
+  name: string;
+  /** Exactly 7, oldest → newest, aligned with WeeklyProgressResponse.days. */
+  days: WeekDay[];
+}
+
+export interface WeeklyProgressResponse {
+  weekStart: string;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekStartDay: number;
+  today: string;
+  /** The week's seven dates, for the weekday header. */
+  days: string[];
+  /** One row per active habit — flat, never grouped by category. */
+  habits: WeekHabitRow[];
+}
+
 export type ProgressResponse = { registered: false } | RegisteredProgress;
 
 export interface RegisteredProgress {
@@ -72,8 +107,15 @@ export interface RegisteredProgress {
   room: Room | null;
   /** All-time points across every habit of the current room. */
   totalPoints: number;
+  /** Points earned today — the personal screen only; no group total exists. */
+  todayPoints: number;
   today: TodayHabitEntry[];
+  /** The day todayPoints covers, in the viewer's own timezone. */
+  todayDate: string;
   streaks: HabitStreak[];
+  /** Echoed from the profile so the screen picks a streak shape once. */
+  streakDisplay: StreakDisplay;
+  weekStartDay: number;
   /** True when the user is registered but has not provided a real name yet. */
   needsRealName: boolean;
 }
@@ -94,8 +136,19 @@ export interface ProfileResponse {
   nickname: string;
   realName: string | null;
   reminderEnabled: boolean;
-  /** Effective HH:mm in server TIMEZONE. */
+  /** Effective HH:mm, fired in the user's own timezone. */
   reminderTime: string;
+  /**
+   * The Sunday/Wednesday fasting nudge, default off. Offered identically to
+   * every member of every room, admins included — a function of the bot, not a
+   * room setting.
+   */
+  fastingReminderEnabled: boolean;
+  /** HH:mm; one time covers both fire days. */
+  fastingReminderTime: string;
+  streakDisplay: StreakDisplay;
+  /** 0 = Sunday … 6 = Saturday. */
+  weekStartDay: number;
   /** IANA name (e.g. "Asia/Hong_Kong"), or null until the Mini App has set one. */
   timezone: string | null;
   /** The room Settings names, and the one "Leave room" leaves. Null between rooms. */
@@ -108,6 +161,11 @@ export interface ProfileUpdate {
   reminderEnabled?: boolean;
   /** HH:mm, or null to clear override to the global default. */
   reminderTime?: string | null;
+  fastingReminderEnabled?: boolean;
+  /** HH:mm — not nullable: there is no global fasting default to fall back to. */
+  fastingReminderTime?: string;
+  streakDisplay?: StreakDisplay;
+  weekStartDay?: number;
   /** IANA name, or null to clear back to the server default. */
   timezone?: string | null;
 }

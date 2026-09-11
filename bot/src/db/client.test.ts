@@ -11,7 +11,9 @@ process.env.BOT_TOKEN ??= "client-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH = join(dataDir, "salawat.db");
 
-const { addMissingColumns, db, resetForMultiRoom } = await import("./client.js");
+const { addMissingColumns, backfillRoomJoinedAt, db, resetForMultiRoom } = await import(
+  "./client.js"
+);
 const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
   await import("./repository.js");
 
@@ -261,6 +263,9 @@ describe("addMissingColumns", () => {
     assert.deepEqual(added, [
       "users.fasting_reminder_enabled",
       "users.fasting_reminder_time",
+      "users.streak_display",
+      "users.week_start_day",
+      "users.room_joined_at",
       "pending_registrations.role",
       "pending_registrations.room_name",
       "pending_registrations.categories_enabled",
@@ -277,6 +282,16 @@ describe("addMissingColumns", () => {
     assert.equal(user.current_room_id, 1);
     assert.equal(user.fasting_reminder_enabled, 0);
     assert.equal(user.fasting_reminder_time, "20:00");
+    assert.equal(user.streak_display, "weekly");
+    assert.equal(user.week_start_day, 1);
+    // Added as NULL — the backfill below is what fills it in.
+    assert.equal(user.room_joined_at, null);
+
+    assert.equal(backfillRoomJoinedAt(), 1);
+    const backfilled = db
+      .prepare("SELECT room_joined_at, created_at FROM users WHERE telegram_id = ?")
+      .get(500000021) as Record<string, unknown>;
+    assert.equal(backfilled.room_joined_at, backfilled.created_at);
 
     const pending = db
       .prepare("SELECT * FROM pending_registrations WHERE telegram_id = ?")
@@ -291,5 +306,20 @@ describe("addMissingColumns", () => {
 
   it("is idempotent", () => {
     assert.deepEqual(addMissingColumns(), []);
+    // Every member already has a join date, so a second pass touches nothing.
+    assert.equal(backfillRoomJoinedAt(), 0);
+  });
+
+  it("leaves a roomless user's room_joined_at null", () => {
+    db.prepare(
+      "INSERT INTO users (telegram_id, nickname, role, current_room_id) VALUES (?, ?, 'participant', NULL)"
+    ).run(500000023, "BetweenRooms");
+
+    assert.equal(backfillRoomJoinedAt(), 0);
+
+    const roomless = db
+      .prepare("SELECT room_joined_at FROM users WHERE telegram_id = ?")
+      .get(500000023) as Record<string, unknown>;
+    assert.equal(roomless.room_joined_at, null);
   });
 });

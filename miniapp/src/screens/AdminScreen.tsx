@@ -71,7 +71,9 @@ function fileSizeLabel(bytes: number): string {
 }
 
 export default function AdminScreen({ initData, onAdminStatusChanged }: Props) {
-  const [section, setSection] = useState<AdminSection>("broadcasts");
+  // Habits is the tab an admin opens on (MULTI ROOM PRD §3) — managing what the
+  // room tracks is the routine visit; broadcasts are the occasional one.
+  const [section, setSection] = useState<AdminSection>("habits");
   const [mode, setMode] = useState<AdminMode>("text");
   const [participantCount, setParticipantCount] = useState<number | null>(null);
   const [room, setRoom] = useState<AdminRoomResponse | null>(null);
