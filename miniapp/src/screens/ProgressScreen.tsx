@@ -1,12 +1,17 @@
+import { useEffect, useState } from "react";
 import { MoonStar, Settings, Users } from "lucide-react";
-import type { Habit, RegisteredProgress } from "../api/types.ts";
+import { getProgressWeek } from "../api/client.ts";
+import { messageForApiError } from "../api/errors.ts";
+import type { Habit, RegisteredProgress, WeeklyProgressResponse } from "../api/types.ts";
 import StreakBadge from "../components/StreakBadge.tsx";
+import WeeklyStreakGrid from "../components/WeeklyStreakGrid.tsx";
 import VirtueReminder from "../components/VirtueReminder.tsx";
 import { formatHijriDate } from "../lib/hijriDate.ts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface Props {
+  initData: string;
   progress: RegisteredProgress;
   habits: Habit[] | null;
   onOpenSettings: () => void;
@@ -16,9 +21,32 @@ function habitLabel(habits: Habit[] | null, habitId: number): string {
   return habits?.find((h) => h.id === habitId)?.name ?? `Habit #${habitId}`;
 }
 
-export default function ProgressScreen({ progress, habits, onOpenSettings }: Props) {
-  const { nickname, totalPoints, streaks, room } = progress;
+export default function ProgressScreen({ initData, progress, habits, onOpenSettings }: Props) {
+  const { nickname, totalPoints, todayPoints, streaks, streakDisplay, weekStartDay, room } =
+    progress;
   const hijriLabel = formatHijriDate();
+
+  const [week, setWeek] = useState<WeeklyProgressResponse | null>(null);
+  const [weekError, setWeekError] = useState<string | null>(null);
+
+  // Only the weekly shape needs the week endpoint; the current-streak shape
+  // reads the streaks GET /api/progress already returned. Switching display is
+  // therefore at most one extra request and never a recomputation of anything.
+  useEffect(() => {
+    if (streakDisplay !== "weekly") return;
+    let cancelled = false;
+    setWeekError(null);
+    void getProgressWeek(initData)
+      .then((loaded) => {
+        if (!cancelled) setWeek(loaded);
+      })
+      .catch((err) => {
+        if (!cancelled) setWeekError(messageForApiError(err, "Couldn't load this week."));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initData, streakDisplay, weekStartDay]);
 
   return (
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
@@ -54,18 +82,41 @@ export default function ProgressScreen({ progress, habits, onOpenSettings }: Pro
         </CardHeader>
 
         <CardContent className="space-y-6">
-          <div className="rounded-lg bg-secondary/40 px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              All-time total
-            </p>
-            <p className="text-xl font-semibold tabular-nums text-foreground">
-              {totalPoints.toLocaleString()}
-            </p>
+          {/*
+            Today's total lives here and only here: it is a personal figure, and
+            the leaderboard deliberately has no counterpart to it — there is no
+            group total anywhere in the app.
+          */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg bg-secondary/40 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Today
+              </p>
+              <p className="text-xl font-semibold tabular-nums text-foreground">
+                {todayPoints.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg bg-secondary/40 px-4 py-3">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                All-time
+              </p>
+              <p className="text-xl font-semibold tabular-nums text-foreground">
+                {totalPoints.toLocaleString()}
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">
             <p className="text-sm font-medium text-foreground">Streaks</p>
-            {streaks.length === 0 ? (
+            {streakDisplay === "weekly" ? (
+              weekError ? (
+                <p className="text-sm text-destructive">{weekError}</p>
+              ) : week ? (
+                <WeeklyStreakGrid week={week} />
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              )
+            ) : streaks.length === 0 ? (
               <p className="text-sm text-muted-foreground">No habits yet.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
