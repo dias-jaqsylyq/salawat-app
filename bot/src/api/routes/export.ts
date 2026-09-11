@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { config } from "../../config.js";
 import { getExportRows } from "../../db/repository.js";
+import { requireAdminSecret } from "../adminAuth.js";
 import { formatDateParts, getTodayInTimezone } from "../../utils/challenge.js";
 import { requireCallerRoom } from "../roomScope.js";
 
@@ -15,20 +16,7 @@ import { requireCallerRoom } from "../roomScope.js";
  * export (adminExportCsvRoute) is the room-scoped one.
  */
 export function exportRoute(req: Request, res: Response) {
-  const secret = config.adminExportSecret;
-  if (!secret) {
-    res.status(503).json({ success: false, error: "export_disabled" });
-    return;
-  }
-
-  const provided =
-    (typeof req.query.key === "string" ? req.query.key : undefined) ??
-    req.header("X-Admin-Key") ??
-    "";
-  if (provided !== secret) {
-    res.status(401).json({ success: false, error: "unauthorized" });
-    return;
-  }
+  if (!requireAdminSecret(req, res)) return;
 
   sendCsv(res, undefined, "habit-tracker-leaderboard");
 }

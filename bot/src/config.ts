@@ -41,10 +41,38 @@ export const MAX_HABIT_VALUE = 10_000;
 
 /** Max POST /api/habits/:id/log requests per telegram user per rolling minute. */
 export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;
-/** Max POST /api/register requests per telegram user per rolling minute. */
-export const REGISTER_RATE_LIMIT_PER_MINUTE = 5;
 /** Max PATCH /api/profile requests per telegram user per rolling minute. */
 export const PROFILE_RATE_LIMIT_PER_MINUTE = 5;
+/**
+ * Max admin mutations (habit create/edit, room settings, password regeneration,
+ * kick/promote/demote) per telegram user per rolling minute. Generous enough
+ * that an admin setting a room up in one sitting never notices it, tight enough
+ * that a runaway client cannot hammer the write paths.
+ */
+export const ADMIN_MUTATION_RATE_LIMIT_PER_MINUTE = 20;
+/**
+ * Max broadcasts per telegram user per rolling minute. Deliberately the
+ * tightest limit in the file: every broadcast fans out one Telegram API call
+ * per room member from the *bot's* account, so a loop here spends the bot's
+ * global Telegram quota, not just this process's CPU. The per-room in-flight
+ * lock in broadcastService only prevents concurrent sends, never a serial loop.
+ */
+export const BROADCAST_RATE_LIMIT_PER_MINUTE = 3;
+/**
+ * Max room-membership changes (leave) and full-room CSV exports per telegram
+ * user per rolling minute. Both are cheap to call and expensive to serve.
+ */
+export const ROOM_ACTION_RATE_LIMIT_PER_MINUTE = 10;
+/**
+ * Max requests per client IP per rolling minute against the two
+ * ADMIN_EXPORT_SECRET-gated endpoints (GET /api/admin/export,
+ * POST /api/admin/reset).
+ *
+ * These are the only endpoints with no Telegram identity behind them, so the
+ * per-user buckets above cannot apply — without this the shared secret can be
+ * brute-forced at line speed.
+ */
+export const ADMIN_SECRET_RATE_LIMIT_PER_MINUTE = 10;
 /**
  * Max room-password guesses per telegram user per rolling minute during /start
  * signup (PRD §2 — basic rate limiting, reusing the existing allowRequest
@@ -57,6 +85,32 @@ export const ROOM_JOIN_RATE_LIMIT_PER_MINUTE = 5;
 const PLACEHOLDER_MINI_APP_URL = "https://example.com/REPLACE_WITH_VERCEL_URL";
 
 export const isProduction = process.env.NODE_ENV === "production";
+
+/** initData replay window when INIT_DATA_MAX_AGE_SECONDS is unset: 1h in production. */
+const DEFAULT_INIT_DATA_MAX_AGE_SECONDS = isProduction ? 3_600 : 86_400;
+
+/**
+ * Parse INIT_DATA_MAX_AGE_SECONDS into the replay window telegramAuth enforces.
+ *
+ * Unset falls back to DEFAULT_INIT_DATA_MAX_AGE_SECONDS — 1h in production, so
+ * forgetting the variable on the host cannot silently leave a 24h replay window
+ * open, and 24h in dev where a captured initData is reused all day.
+ *
+ * A value that is present but not a positive integer throws rather than falling
+ * back: `Number("abc") || default` and `Number("0") || default` both used to
+ * resolve to the default silently, which is exactly how a deployment ends up
+ * running a window nobody chose.
+ */
+export function parseInitDataMaxAge(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_INIT_DATA_MAX_AGE_SECONDS;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid INIT_DATA_MAX_AGE_SECONDS: "${raw}" (expected a positive whole number of seconds, e.g. 3600)`
+    );
+  }
+  return parsed;
+}
 
 const corsOrigin = process.env.CORS_ORIGIN ?? "*";
 if (isProduction && (corsOrigin === "*" || corsOrigin.trim() === "")) {
@@ -85,8 +139,7 @@ export const config = {
   // t.me deep link used for the reminder's inline button (works without a real HTTPS Mini App URL).
   miniAppDeepLink: process.env.MINI_APP_DEEP_LINK ?? "https://t.me/salawat_challenge_bot/challenge",
   // Max age (seconds) a Telegram initData payload is accepted before being treated as stale/replayed.
-  // Prefer 3600 in production; default stays 24h for local/dev convenience.
-  initDataMaxAgeSeconds: Number(process.env.INIT_DATA_MAX_AGE_SECONDS) || 86_400,
+  initDataMaxAgeSeconds: parseInitDataMaxAge(process.env.INIT_DATA_MAX_AGE_SECONDS),
   /** Optional secret for GET /api/admin/export. Empty = endpoint returns 503. */
   adminExportSecret: process.env.ADMIN_EXPORT_SECRET ?? "",
   // No ADMIN_TELEGRAM_ID: with rooms there is no global admin to bootstrap —

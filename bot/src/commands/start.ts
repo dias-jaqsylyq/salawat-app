@@ -107,24 +107,84 @@ export async function helpCommand(ctx: MyContext) {
   await ctx.reply(HELP_UNREGISTERED_TEXT, { parse_mode: "HTML" });
 }
 
+/**
+ * Shown when someone sends something the bot cannot act on. Both prefaces are
+ * followed by whatever that user actually needs next — the current signup
+ * question, or the menu nudge — so a dead end always comes with a way forward.
+ */
+export const UNSUPPORTED_MESSAGE_PREFACE =
+  "I can only read text messages here — photos, files, voice notes and stickers " +
+  "aren't something I can read.";
+
+export const UNKNOWN_COMMAND_PREFACE = "I don't know that command.";
+
+/**
+ * Reply with whatever this user's next step is, optionally prefaced by why we
+ * couldn't use what they just sent.
+ *
+ * Three audiences, and every one of them gets an answer: someone mid-signup is
+ * re-asked the current question, a registered user is pointed at the menu
+ * button, and someone who has never started gets the help text.
+ */
+async function replyWithNextStep(
+  ctx: MyContext,
+  telegramId: number,
+  preface?: string
+): Promise<void> {
+  if (getUserByTelegramId(telegramId)) {
+    const menu = registeredMenuText(currentRoomName(telegramId));
+    await ctx.reply(preface ? `${preface}\n\n${menu}` : menu, { parse_mode: "HTML" });
+    return;
+  }
+
+  const pending = getPendingRegistration(telegramId);
+  if (pending) {
+    await promptCurrentStep(ctx, pending, preface);
+    return;
+  }
+
+  await ctx.reply(
+    preface ? `${preface}\n\n${HELP_UNREGISTERED_TEXT}` : HELP_UNREGISTERED_TEXT,
+    { parse_mode: "HTML" }
+  );
+}
+
 /** Text answers while a pending registration exists. */
 export async function registrationTextHandler(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
-  if (getUserByTelegramId(telegramId)) return;
-
-  const pending = getPendingRegistration(telegramId);
-  if (!pending) return;
-
-  const text = ctx.message?.text;
-  if (!text) {
-    await promptCurrentStep(ctx, pending, "Please reply with text.");
+  // Only reachable for a command no bot.command() claimed: grammy stops the
+  // middleware chain at a matched command, so /start and /help never land here.
+  const text = ctx.message?.text ?? "";
+  if (text.startsWith("/")) {
+    await replyWithNextStep(ctx, telegramId, UNKNOWN_COMMAND_PREFACE);
     return;
   }
 
-  // Ignore slash commands here — command handlers own those.
-  if (text.startsWith("/")) return;
+  const pending = getUserByTelegramId(telegramId) ? undefined : getPendingRegistration(telegramId);
+  if (!pending) {
+    // Registered, or never started: either way there is no answer to record,
+    // but staying silent leaves them typing into a void.
+    await replyWithNextStep(ctx, telegramId);
+    return;
+  }
 
   await handleRegistrationAnswer(ctx, pending, text);
+}
+
+/**
+ * Every message that is not text: photos, documents, stickers, voice and video
+ * notes, locations, contacts, polls.
+ *
+ * Registered only as a catch-all *after* the text handler, so it never competes
+ * with it. Before this existed these updates matched no handler at all, and
+ * someone who answered a signup question with a photo got complete silence with
+ * their registration still waiting on that same question.
+ */
+export async function unsupportedMessageHandler(ctx: MyContext) {
+  const telegramId = ctx.from?.id;
+  if (!telegramId) return;
+
+  await replyWithNextStep(ctx, telegramId, UNSUPPORTED_MESSAGE_PREFACE);
 }
