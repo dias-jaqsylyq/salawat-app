@@ -44,6 +44,18 @@ export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;
 /** Max PATCH /api/profile requests per telegram user per rolling minute. */
 export const PROFILE_RATE_LIMIT_PER_MINUTE = 5;
 /**
+ * Max personal-habit create/edit/delete calls per telegram user per rolling
+ * minute. Separate from the admin bucket because these are ordinary members
+ * editing their own list, not admins reconfiguring a room.
+ */
+export const PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE = 20;
+/**
+ * How many personal habits one member may keep in one room. A private list is
+ * for a handful of things somebody actually tracks; the cap is here so a
+ * runaway client cannot grow the table without bound.
+ */
+export const MAX_PERSONAL_HABITS_PER_ROOM = 20;
+/**
  * Max admin mutations (habit create/edit, room settings, password regeneration,
  * kick/promote/demote) per telegram user per rolling minute. Generous enough
  * that an admin setting a room up in one sitting never notices it, tight enough
@@ -81,6 +93,39 @@ export const ADMIN_SECRET_RATE_LIMIT_PER_MINUTE = 10;
  * room yet, so no Mini App call to compete with.
  */
 export const ROOM_JOIN_RATE_LIMIT_PER_MINUTE = 5;
+
+/**
+ * How long a reminder DM stays in the chat before the message-cleanup cron
+ * removes it. A reminder is worth nothing the morning after — the point is a
+ * nudge at 20:00, not a permanent record — and a year of them makes the chat
+ * unusable.
+ *
+ * Keep it well under Telegram's 48-hour deletion window: past that the Bot API
+ * refuses outright and the message is stuck in the chat for good.
+ */
+export const DEFAULT_REMINDER_DELETE_AFTER_MINUTES = 60;
+
+/**
+ * Same strict parsing as parseInitDataMaxAge, and for the same reason: a typo
+ * in the variable should stop the boot, not silently resolve to the default.
+ */
+export function parseReminderDeleteAfterMinutes(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_REMINDER_DELETE_AFTER_MINUTES;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(
+      `Invalid REMINDER_DELETE_AFTER_MINUTES: "${raw}" (expected a positive whole number of minutes, e.g. 60)`
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Queued deletions handled per cron tick. Bounds the burst after a long outage
+ * so the backlog is worked through in batches instead of thousands of API calls
+ * landing in one minute.
+ */
+export const MESSAGE_DELETION_BATCH_SIZE = 200;
 
 const PLACEHOLDER_MINI_APP_URL = "https://example.com/REPLACE_WITH_VERCEL_URL";
 
@@ -140,6 +185,10 @@ export const config = {
   miniAppDeepLink: process.env.MINI_APP_DEEP_LINK ?? "https://t.me/salawat_challenge_bot/challenge",
   // Max age (seconds) a Telegram initData payload is accepted before being treated as stale/replayed.
   initDataMaxAgeSeconds: parseInitDataMaxAge(process.env.INIT_DATA_MAX_AGE_SECONDS),
+  /** Minutes a reminder DM survives before the cleanup cron deletes it. */
+  reminderDeleteAfterMinutes: parseReminderDeleteAfterMinutes(
+    process.env.REMINDER_DELETE_AFTER_MINUTES
+  ),
   /** Optional secret for GET /api/admin/export. Empty = endpoint returns 503. */
   adminExportSecret: process.env.ADMIN_EXPORT_SECRET ?? "",
   // No ADMIN_TELEGRAM_ID: with rooms there is no global admin to bootstrap —

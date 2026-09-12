@@ -2,7 +2,10 @@ import cron from "node-cron";
 import type { Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
 import { broadcastUsers } from "../api/broadcastService.js";
-import { getUsersWithFastingRemindersEnabled } from "../db/repository.js";
+import {
+  enqueueMessageDeletion,
+  getUsersWithFastingRemindersEnabled,
+} from "../db/repository.js";
 import type { MyContext } from "../context.js";
 import type { DateParts, User } from "../types.js";
 import { getUserTimezone, getUserToday } from "../utils/challenge.js";
@@ -136,7 +139,13 @@ export async function sendDueFastingReminders(
 
     await broadcastUsers(dueUsers, async (user) => {
       const text = buildFastingReminderMessage(todayByUserId.get(user.id)!);
-      await bot.api.sendMessage(user.telegram_id, text);
+      const sent = await bot.api.sendMessage(user.telegram_id, text);
+      // Same short shelf life as the daily reminder — see reminder.ts.
+      enqueueMessageDeletion(
+        user.telegram_id,
+        sent.message_id,
+        config.reminderDeleteAfterMinutes
+      );
     });
   } finally {
     sending = false;

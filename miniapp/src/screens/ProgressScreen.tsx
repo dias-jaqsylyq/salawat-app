@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 import { MoonStar, Settings, Users } from "lucide-react";
 import { getProgressWeek } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { Habit, RegisteredProgress, WeeklyProgressResponse } from "../api/types.ts";
+import type {
+  Habit,
+  PersonalHabit,
+  RegisteredProgress,
+  WeeklyProgressResponse,
+} from "../api/types.ts";
 import StreakBadge from "../components/StreakBadge.tsx";
 import WeeklyStreakGrid from "../components/WeeklyStreakGrid.tsx";
 import VirtueReminder from "../components/VirtueReminder.tsx";
@@ -14,6 +19,8 @@ interface Props {
   initData: string;
   progress: RegisteredProgress;
   habits: Habit[] | null;
+  /** The viewer's own private list, for naming their streaks. */
+  personalHabits: PersonalHabit[] | null;
   onOpenSettings: () => void;
 }
 
@@ -21,9 +28,45 @@ function habitLabel(habits: Habit[] | null, habitId: number): string {
   return habits?.find((h) => h.id === habitId)?.name ?? `Habit #${habitId}`;
 }
 
-export default function ProgressScreen({ initData, progress, habits, onOpenSettings }: Props) {
-  const { nickname, totalPoints, todayPoints, streaks, streakDisplay, weekStartDay, room } =
-    progress;
+export default function ProgressScreen({
+  initData,
+  progress,
+  habits,
+  personalHabits,
+  onOpenSettings,
+}: Props) {
+  const {
+    nickname,
+    totalPoints,
+    todayPoints,
+    streaks,
+    personalStreaks,
+    streakDisplay,
+    weekStartDay,
+    room,
+  } = progress;
+
+  /**
+   * The room's habits and the viewer's own in one list, deliberately not
+   * separated: from the member's side a streak is a streak. The weekly shape
+   * already arrives merged from the server; this is the same idea for the
+   * current-streak shape. Keys carry the kind because the two id spaces
+   * overlap.
+   */
+  const allStreaks = [
+    ...streaks.map((s) => ({
+      key: `r-${s.habitId}`,
+      name: habitLabel(habits, s.habitId),
+      streak: s.streak,
+    })),
+    ...personalStreaks.map((s) => ({
+      key: `p-${s.personalHabitId}`,
+      name:
+        personalHabits?.find((h) => h.id === s.personalHabitId)?.name ??
+        `Habit #${s.personalHabitId}`,
+      streak: s.streak,
+    })),
+  ];
   const hijriLabel = formatHijriDate();
 
   const [week, setWeek] = useState<WeeklyProgressResponse | null>(null);
@@ -116,16 +159,12 @@ export default function ProgressScreen({ initData, progress, habits, onOpenSetti
               ) : (
                 <p className="text-sm text-muted-foreground">Loading…</p>
               )
-            ) : streaks.length === 0 ? (
+            ) : allStreaks.length === 0 ? (
               <p className="text-sm text-muted-foreground">No habits yet.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {streaks.map((s) => (
-                  <StreakBadge
-                    key={s.habitId}
-                    habitName={habitLabel(habits, s.habitId)}
-                    streak={s.streak}
-                  />
+                {allStreaks.map((s) => (
+                  <StreakBadge key={s.key} habitName={s.name} streak={s.streak} />
                 ))}
               </div>
             )}

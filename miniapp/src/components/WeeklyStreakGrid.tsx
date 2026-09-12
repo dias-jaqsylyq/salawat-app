@@ -96,7 +96,8 @@ function DayCell({
 
 /**
  * The weekly streak view: one row per **active** habit, flat — never grouped by
- * category, even in a room that groups the Log screen that way. Each row is the
+ * category, even in a room that groups the Log screen that way, and never split
+ * between the room's habits and the viewer's own private ones. Each row is the
  * seven days of the current calendar week (from the viewer's chosen start day),
  * each cell a lit or unlit flame with no "X of 7" counter anywhere.
  */
@@ -122,7 +123,10 @@ export default function WeeklyStreakGrid({ week }: Props) {
       </div>
 
       {week.habits.map((habit) => (
-        <div key={habit.habitId} className="space-y-1.5">
+        // Room and personal habits come from different tables, so their ids can
+        // collide — the kind has to be part of the key even though the two rows
+        // are drawn identically.
+        <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-1.5">
           <p className="truncate text-xs font-medium text-foreground/80">{habit.name}</p>
           <div className="grid grid-cols-7 gap-1.5">
             {habit.days.map((day) => (

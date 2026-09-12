@@ -1,6 +1,6 @@
 import { db } from "./client.js";
-import { formatDateParts, parseDateKey, subtractOneCalendarDay } from "../utils/dates.js";
 import { generateRoomPassword } from "../utils/roomPassword.js";
+import { streakFromLoggedDays } from "../utils/streak.js";
 import type {
   CreateUserReminders,
   ExportRow,
@@ -10,6 +10,8 @@ import type {
   HabitType,
   LeaderboardRow,
   PendingRegistration,
+  PersonalHabit,
+  PersonalHabitLog,
   RegistrationStep,
   Room,
   StreakDisplay,
@@ -361,6 +363,8 @@ export function kickUserFromRoom(userId: number, roomId: number): KickUserFromRo
  * Move a user into a room, or out of every room (roomId = null).
  * Leaving always strips co-admin status of the room being left: it does not
  * transfer, and a returning user comes back as a plain participant (PRD §3a).
+ * It also deletes the personal habits they kept in that room — those are scoped
+ * to the membership and never follow someone into the next room.
  * Their habit_logs are left intact — history stays queryable, and nothing needs
  * deleting on a voluntary leave (PRD §1).
  *
@@ -379,6 +383,13 @@ export function setUserCurrentRoom(userId: number, roomId: number | null): void 
     }
     if (current.current_room_id !== null && current.current_room_id !== roomId) {
       removeRoomAdmin(current.current_room_id, userId);
+      // Personal habits belong to the membership, not to the person: leaving,
+      // being kicked and moving rooms all pass through here, so this one delete
+      // covers every way out. Their logs go with them (ON DELETE CASCADE).
+      db.prepare("DELETE FROM personal_habits WHERE user_id = ? AND room_id = ?").run(
+        userId,
+        current.current_room_id
+      );
     }
     if (roomId === null) {
       db.prepare(
@@ -423,6 +434,8 @@ export function deleteUserCompletely(telegramId: number): DeleteUserCompletelyRe
       habitLogsDeleted = db
         .prepare("DELETE FROM habit_logs WHERE user_id = ?")
         .run(user.id).changes;
+      // Cascades to personal_habit_logs.
+      db.prepare("DELETE FROM personal_habits WHERE user_id = ?").run(user.id);
       roomAdminRowsDeleted = db
         .prepare("DELETE FROM room_admins WHERE user_id = ?")
         .run(user.id).changes;
@@ -432,6 +445,7 @@ export function deleteUserCompletely(telegramId: number): DeleteUserCompletelyRe
     const pendingDeleted =
       db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId)
         .changes > 0;
+    db.prepare("DELETE FROM registration_messages WHERE telegram_id = ?").run(telegramId);
 
     return {
       userDeleted,
@@ -689,6 +703,80 @@ export function deletePendingRegistration(telegramId: number): void {
   db.prepare("DELETE FROM pending_registrations WHERE telegram_id = ?").run(telegramId);
 }
 
+/**
+ * Remember one message of an in-progress signup — a question we asked or an
+ * answer they sent — so finalizeRegistration can sweep the whole exchange away.
+ * INSERT OR IGNORE: re-recording the same id is a no-op, never an error.
+ */
+export function recordRegistrationMessage(telegramId: number, messageId: number): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO registration_messages (telegram_id, message_id) VALUES (?, ?)"
+  ).run(telegramId, messageId);
+}
+
+/** Every message id recorded for this signup, oldest first. */
+export function listRegistrationMessageIds(telegramId: number): number[] {
+  const rows = db
+    .prepare(
+      "SELECT message_id FROM registration_messages WHERE telegram_id = ? ORDER BY message_id ASC"
+    )
+    .all(telegramId) as { message_id: number }[];
+  return rows.map((row) => row.message_id);
+}
+
+export function clearRegistrationMessages(telegramId: number): void {
+  db.prepare("DELETE FROM registration_messages WHERE telegram_id = ?").run(telegramId);
+}
+
+/**
+ * Queue a sent message for deletion `delayMinutes` from now. Same (chat,
+ * message) queued twice keeps the earlier deadline rather than erroring — a
+ * message can only be deleted once anyway.
+ */
+export function enqueueMessageDeletion(
+  chatId: number,
+  messageId: number,
+  delayMinutes: number
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO scheduled_message_deletions (chat_id, message_id, delete_at)
+     VALUES (?, ?, datetime('now', ?))`
+  ).run(chatId, messageId, `+${delayMinutes} minutes`);
+}
+
+export interface ScheduledMessageDeletion {
+  id: number;
+  chat_id: number;
+  message_id: number;
+  delete_at: string;
+}
+
+/**
+ * Rows whose deadline has passed, oldest first. Capped per call so a tick that
+ * follows a long outage works through the backlog in batches instead of firing
+ * thousands of API calls at once.
+ */
+export function listDueMessageDeletions(limit: number): ScheduledMessageDeletion[] {
+  return db
+    .prepare(
+      `SELECT id, chat_id, message_id, delete_at
+       FROM scheduled_message_deletions
+       WHERE delete_at <= datetime('now')
+       ORDER BY delete_at ASC
+       LIMIT ?`
+    )
+    .all(limit) as ScheduledMessageDeletion[];
+}
+
+/**
+ * Drop one queued deletion. Called whether or not Telegram accepted the delete:
+ * a message we can never delete (older than 48 hours, already gone) must not be
+ * retried every minute forever.
+ */
+export function deleteScheduledMessageDeletion(id: number): void {
+  db.prepare("DELETE FROM scheduled_message_deletions WHERE id = ?").run(id);
+}
+
 /** Refresh Telegram profile fields if the user is already registered; no-op otherwise. */
 export function updateTelegramProfileIfRegistered(
   telegramId: number,
@@ -839,7 +927,12 @@ export function resetAllChallengeData(): {
 } {
   const wipe = db.transaction(() => {
     const habitLogs = db.prepare("DELETE FROM habit_logs").run().changes;
+    db.prepare("DELETE FROM personal_habits").run();
     const users = db.prepare("DELETE FROM users").run().changes;
+    // Bookkeeping for messages that belonged to the users just wiped — the ids
+    // are meaningless without them.
+    db.prepare("DELETE FROM registration_messages").run();
+    db.prepare("DELETE FROM scheduled_message_deletions").run();
     return { habitLogs, users };
   });
   return wipe();
@@ -1050,15 +1143,176 @@ export function getHabitStreak(userId: number, habitId: number, asOfDate: string
   const rows = db
     .prepare("SELECT log_date FROM habit_logs WHERE user_id = ? AND habit_id = ?")
     .all(userId, habitId) as { log_date: string }[];
-  const loggedDays = new Set(rows.map((r) => r.log_date));
+  return streakFromLoggedDays(new Set(rows.map((r) => r.log_date)), asOfDate);
+}
 
-  let streak = 0;
-  let cursor = asOfDate;
-  while (loggedDays.has(cursor)) {
-    streak++;
-    cursor = formatDateParts(subtractOneCalendarDay(parseDateKey(cursor)));
+/* ------------------------------------------------------------------------- *
+ * Personal habits
+ *
+ * A member's own private list, kept entirely apart from `habits`/`habit_logs`.
+ * Nothing here computes or stores points, and nothing above reads these tables,
+ * which is what makes "invisible to the admin" and "never affects the ranking"
+ * properties of the schema rather than of every query remembering a filter.
+ * ------------------------------------------------------------------------- */
+
+export function getPersonalHabitById(id: number): PersonalHabit | undefined {
+  return db.prepare("SELECT * FROM personal_habits WHERE id = ?").get(id) as
+    | PersonalHabit
+    | undefined;
+}
+
+/** This member's personal habits in this room, oldest first. */
+export function listPersonalHabits(userId: number, roomId: number): PersonalHabit[] {
+  return db
+    .prepare("SELECT * FROM personal_habits WHERE user_id = ? AND room_id = ? ORDER BY id ASC")
+    .all(userId, roomId) as PersonalHabit[];
+}
+
+export function countPersonalHabits(userId: number, roomId: number): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS n FROM personal_habits WHERE user_id = ? AND room_id = ?")
+    .get(userId, roomId) as { n: number };
+  return row.n;
+}
+
+export function createPersonalHabit(
+  userId: number,
+  roomId: number,
+  name: string,
+  type: HabitType,
+  category: HabitCategory | null
+): PersonalHabit {
+  const result = db
+    .prepare(
+      `INSERT INTO personal_habits (user_id, room_id, name, type, category)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(userId, roomId, name, type, category);
+  return getPersonalHabitById(Number(result.lastInsertRowid))!;
+}
+
+export interface PersonalHabitUpdate {
+  name?: string;
+  type?: HabitType;
+  /** undefined leaves it alone; null clears it (categories off). */
+  category?: HabitCategory | null;
+}
+
+/**
+ * Read-modify-write, matching updateHabit. Changing the type keeps existing
+ * logs: a quantity value read as "done" under a binary habit is still the
+ * member's own record of that day, and silently deleting their history would be
+ * a worse surprise than an odd-looking number.
+ */
+export function updatePersonalHabit(id: number, update: PersonalHabitUpdate): PersonalHabit {
+  const current = getPersonalHabitById(id);
+  if (!current) throw new Error(`updatePersonalHabit: habit ${id} not found`);
+
+  db.prepare(
+    `UPDATE personal_habits
+     SET name = ?, type = ?, category = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(
+    update.name ?? current.name,
+    update.type ?? current.type,
+    update.category === undefined ? current.category : update.category,
+    id
+  );
+  return getPersonalHabitById(id)!;
+}
+
+/** Delete a personal habit; its logs go with it (ON DELETE CASCADE). */
+export function deletePersonalHabit(id: number): void {
+  db.prepare("DELETE FROM personal_habits WHERE id = ?").run(id);
+}
+
+/** Upsert the owner's local-today value. No points are computed or stored. */
+export function upsertPersonalHabitLog(
+  personalHabitId: number,
+  value: number,
+  logDate: string
+): PersonalHabitLog {
+  const habit = getPersonalHabitById(personalHabitId);
+  if (!habit) throw new Error(`upsertPersonalHabitLog: habit ${personalHabitId} not found`);
+
+  db.prepare(
+    `INSERT INTO personal_habit_logs
+       (user_id, personal_habit_id, room_id, log_date, value, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+     ON CONFLICT(user_id, personal_habit_id, log_date) DO UPDATE SET
+       value = excluded.value,
+       updated_at = excluded.updated_at`
+  ).run(habit.user_id, personalHabitId, habit.room_id, logDate, value);
+
+  return db
+    .prepare(
+      `SELECT * FROM personal_habit_logs
+       WHERE user_id = ? AND personal_habit_id = ? AND log_date = ?`
+    )
+    .get(habit.user_id, personalHabitId, logDate) as PersonalHabitLog;
+}
+
+/** Idempotent, and a hard delete for the same reason as deleteHabitLog. */
+export function deletePersonalHabitLog(
+  userId: number,
+  personalHabitId: number,
+  logDate: string
+): void {
+  db.prepare(
+    `DELETE FROM personal_habit_logs
+     WHERE user_id = ? AND personal_habit_id = ? AND log_date = ?`
+  ).run(userId, personalHabitId, logDate);
+}
+
+/** This member's personal logs for one day, keyed by personal habit id. */
+export function getUserPersonalHabitLogsForDate(
+  userId: number,
+  date: string
+): Map<number, PersonalHabitLog> {
+  const rows = db
+    .prepare("SELECT * FROM personal_habit_logs WHERE user_id = ? AND log_date = ?")
+    .all(userId, date) as PersonalHabitLog[];
+  return new Map(rows.map((row) => [row.personal_habit_id, row]));
+}
+
+/** Same shape and purpose as getHabitStreak, over the personal log table. */
+export function getPersonalHabitStreak(
+  userId: number,
+  personalHabitId: number,
+  asOfDate: string
+): number {
+  const rows = db
+    .prepare(
+      "SELECT log_date FROM personal_habit_logs WHERE user_id = ? AND personal_habit_id = ?"
+    )
+    .all(userId, personalHabitId) as { log_date: string }[];
+  return streakFromLoggedDays(new Set(rows.map((r) => r.log_date)), asOfDate);
+}
+
+/** Same shape and purpose as getHabitLogDatesInRange, for the weekly grid. */
+export function getPersonalHabitLogDatesInRange(
+  userId: number,
+  roomId: number,
+  fromDate: string,
+  toDate: string
+): Map<number, Set<string>> {
+  const rows = db
+    .prepare(
+      `SELECT personal_habit_id, log_date FROM personal_habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date >= ? AND log_date <= ?`
+    )
+    .all(userId, roomId, fromDate, toDate) as {
+    personal_habit_id: number;
+    log_date: string;
+  }[];
+
+  const byHabit = new Map<number, Set<string>>();
+  for (const row of rows) {
+    const dates = byHabit.get(row.personal_habit_id) ?? new Set<string>();
+    dates.add(row.log_date);
+    byHabit.set(row.personal_habit_id, dates);
   }
-  return streak;
+  return byHabit;
 }
 
 /**

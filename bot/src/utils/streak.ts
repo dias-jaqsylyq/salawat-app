@@ -2,8 +2,27 @@ import type { DateParts } from "../types.js";
 import {
   addOneCalendarDay,
   formatDateParts,
+  parseDateKey,
   subtractOneCalendarDay,
 } from "./dates.js";
+
+/**
+ * Consecutive logged days walking backward from asOfDate, inclusive. 0 when
+ * asOfDate itself is unlogged — a day still in progress gets no grace.
+ *
+ * Table-agnostic on purpose: the caller supplies the day set, so room habits
+ * (habit_logs) and personal habits (personal_habit_logs) share one definition
+ * of a streak rather than two that can drift apart.
+ */
+export function streakFromLoggedDays(loggedDays: Set<string>, asOfDate: string): number {
+  let streak = 0;
+  let cursor = asOfDate;
+  while (loggedDays.has(cursor)) {
+    streak += 1;
+    cursor = formatDateParts(subtractOneCalendarDay(parseDateKey(cursor)));
+  }
+  return streak;
+}
 
 export interface DayBreakdown {
   date: string;

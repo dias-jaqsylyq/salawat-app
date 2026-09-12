@@ -46,6 +46,11 @@ function routeMiddleware(): Map<string, string[]> {
 const MUST_BE_USER_LIMITED = [
   "POST /api/habits/:id/log",
   "DELETE /api/habits/:id/log",
+  "POST /api/personal-habits",
+  "PATCH /api/personal-habits/:id",
+  "DELETE /api/personal-habits/:id",
+  "POST /api/personal-habits/:id/log",
+  "DELETE /api/personal-habits/:id/log",
   "PATCH /api/profile",
   "POST /api/room/leave",
   "POST /api/admin/habits",
@@ -70,6 +75,7 @@ const UNLIMITED_BY_DESIGN = new Set([
   "GET /health",
   "POST /api/register",
   "GET /api/habits",
+  "GET /api/personal-habits",
   "GET /api/progress",
   "GET /api/progress/week",
   "GET /api/leaderboard",
@@ -88,6 +94,8 @@ const UNLIMITED_BY_DESIGN = new Set([
 const IN_HANDLER_LIMITED = new Set([
   "POST /api/habits/:id/log",
   "DELETE /api/habits/:id/log",
+  "POST /api/personal-habits/:id/log",
+  "DELETE /api/personal-habits/:id/log",
   "PATCH /api/profile",
 ]);
 

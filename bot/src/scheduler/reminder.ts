@@ -1,7 +1,14 @@
 import cron from "node-cron";
 import { InlineKeyboard, type Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
-import { getUserHabitLogsForDate, getUsersWithRemindersEnabled, listHabits } from "../db/repository.js";
+import {
+  enqueueMessageDeletion,
+  getUserHabitLogsForDate,
+  getUserPersonalHabitLogsForDate,
+  getUsersWithRemindersEnabled,
+  listHabits,
+  listPersonalHabits,
+} from "../db/repository.js";
 import { getUserTodayKey } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
 import type { User } from "../types.js";
@@ -31,17 +38,29 @@ function effectiveReminderTime(user: User): string {
 }
 
 /**
- * Names of this user's active habits with no log row for `todayKey` yet —
- * only habits of the room they are currently in. getUsersWithRemindersEnabled
+ * Names of everything this user still has to log today — the room's active
+ * habits and their own personal ones, in one list. getUsersWithRemindersEnabled
  * never returns a roomless user, so there is always a room to scope to.
+ *
+ * The personal ones are mixed in rather than listed apart: from the member's
+ * side both are "things I meant to do today", and the reminder is a private DM
+ * to them, so nothing about their private list leaks anywhere.
  */
 function unloggedHabitNames(user: User, todayKey: string): string[] {
-  const activeHabits = listHabits({
-    activeOnly: true,
-    roomId: user.current_room_id ?? undefined,
-  });
+  const roomId = user.current_room_id ?? undefined;
+  const activeHabits = listHabits({ activeOnly: true, roomId });
   const todayLogs = getUserHabitLogsForDate(user.id, todayKey);
-  return activeHabits.filter((habit) => !todayLogs.has(habit.id)).map((habit) => habit.name);
+  const names = activeHabits
+    .filter((habit) => !todayLogs.has(habit.id))
+    .map((habit) => habit.name);
+
+  if (roomId !== undefined) {
+    const personalLogs = getUserPersonalHabitLogsForDate(user.id, todayKey);
+    for (const habit of listPersonalHabits(user.id, roomId)) {
+      if (!personalLogs.has(habit.id)) names.push(habit.name);
+    }
+  }
+  return names;
 }
 
 /** DM text for a user given the active habits they haven't logged yet today. */
@@ -85,9 +104,16 @@ export async function sendDueReminders(
         // their logs are written under — so someone pinged at 20:00 local is
         // told about the day they are actually still able to log.
         const text = buildReminderMessage(unloggedHabitNames(user, getUserTodayKey(user, now)));
-        await bot.api.sendMessage(user.telegram_id, text, {
+        const sent = await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });
+        // Tonight's nudge is worthless tomorrow: queue it for deletion rather
+        // than letting a year of reminders pile up in the chat.
+        enqueueMessageDeletion(
+          user.telegram_id,
+          sent.message_id,
+          config.reminderDeleteAfterMinutes
+        );
       } catch (err) {
         console.error(`Failed to send reminder to user ${user.telegram_id} (${user.nickname}):`, err);
       }

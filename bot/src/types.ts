@@ -190,6 +190,37 @@ export interface HabitLog {
   updated_at: string;
 }
 
+/**
+ * A member's own habit, private to them and scoped to the room they are in.
+ *
+ * No points_weight: personal habits are tracking only and never reach a total,
+ * a leaderboard or an export. No is_active either — the owner deletes rather
+ * than deactivates, since there is no admin whose history needs protecting.
+ */
+export interface PersonalHabit {
+  id: number;
+  user_id: number;
+  room_id: number;
+  name: string;
+  type: HabitType;
+  /** NULL in a room with categories disabled; required when they are enabled. */
+  category: HabitCategory | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Done-or-not for one personal habit on one of the owner's local days. */
+export interface PersonalHabitLog {
+  id: number;
+  user_id: number;
+  personal_habit_id: number;
+  room_id: number;
+  log_date: string;
+  value: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** One row of the all-time, perpetual leaderboard (getLeaderboard). */
 export interface LeaderboardRow {
   user_id: number;

@@ -6,7 +6,6 @@ import {
   Megaphone,
   MessageSquareText,
   Settings2,
-  Trophy,
   Users,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -30,12 +29,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import AdminResults from "../components/AdminResults.tsx";
 import AdminHabits from "../components/AdminHabits.tsx";
 import AdminRoom from "../components/AdminRoom.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
-type AdminSection = "broadcasts" | "leaderboard" | "habits" | "room";
+/**
+ * Three tabs, all about the room rather than its people: members are managed on
+ * the Leaderboard screen everybody shares, not in a second list only admins see.
+ */
+type AdminSection = "broadcasts" | "habits" | "room";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MODES: {
@@ -50,11 +52,6 @@ const MODES: {
 
 interface Props {
   initData: string;
-  /**
-   * Called when an action here may have changed the caller's own admin status —
-   * demoting yourself is allowed (PRD §3a), and the Admin tab must then go away.
-   */
-  onAdminStatusChanged: () => void;
 }
 
 function validHttpUrl(value: string): boolean {
@@ -70,7 +67,7 @@ function fileSizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function AdminScreen({ initData, onAdminStatusChanged }: Props) {
+export default function AdminScreen({ initData }: Props) {
   // Habits is the tab an admin opens on (MULTI ROOM PRD §3) — managing what the
   // room tracks is the routine visit; broadcasts are the occasional one.
   const [section, setSection] = useState<AdminSection>("habits");
@@ -265,11 +262,10 @@ export default function AdminScreen({ initData, onAdminStatusChanged }: Props) {
       <div
         role="tablist"
         aria-label="Admin section"
-        className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/60 p-1"
       >
         {([
           { id: "broadcasts" as const, label: "Posts", icon: Megaphone },
-          { id: "leaderboard" as const, label: "Board", icon: Trophy },
           { id: "habits" as const, label: "Habits", icon: ListChecks },
           { id: "room" as const, label: "Room", icon: Settings2 },
         ]).map((item) => {
@@ -514,12 +510,6 @@ export default function AdminScreen({ initData, onAdminStatusChanged }: Props) {
         </Card>
       </form>
         </>
-      ) : section === "leaderboard" ? (
-        <AdminResults
-          initData={initData}
-          roomName={room?.name ?? null}
-          onAdminStatusChanged={onAdminStatusChanged}
-        />
       ) : section === "habits" ? (
         <AdminHabits
           initData={initData}

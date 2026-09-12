@@ -32,11 +32,19 @@ const SUNDAY_21 = new Date("2026-08-16T13:00:00.000Z");
  */
 const MIDWAY_SUNDAY_20 = new Date("2026-08-17T07:00:00.000Z");
 
+let nextSentMessageId = 7000;
+
+/**
+ * Returns a real Message: sendDueFastingReminders reads message_id off it to
+ * queue the deletion, and a stub returning undefined would throw into
+ * broadcastUsers' catch and silently count every send as a failure.
+ */
 function mockBot(sent: { chatId: number; text: string }[]) {
   return {
     api: {
       sendMessage: async (chatId: number, text: string) => {
         sent.push({ chatId, text });
+        return { message_id: nextSentMessageId++ };
       },
     },
   } as unknown as Bot<MyContext>;

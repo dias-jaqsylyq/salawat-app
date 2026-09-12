@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTelegram } from "./telegram/useTelegram.ts";
-import { getHabits, getIsAdmin, getProgress, patchProfile } from "./api/client.ts";
+import {
+  getHabits,
+  getIsAdmin,
+  getPersonalHabits,
+  getProgress,
+  patchProfile,
+} from "./api/client.ts";
 import { messageForApiError } from "./api/errors.ts";
-import type { Habit, RegisteredProgress } from "./api/types.ts";
+import type { Habit, PersonalHabit, RegisteredProgress } from "./api/types.ts";
 import IncompleteRegistrationScreen from "./screens/IncompleteRegistrationScreen.tsx";
 import NoRoomScreen from "./screens/NoRoomScreen.tsx";
 import RealNamePromptScreen from "./screens/RealNamePromptScreen.tsx";
@@ -46,6 +52,8 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   /** null = not loaded yet, distinct from a genuinely empty active-habit list. */
   const [habits, setHabits] = useState<Habit[] | null>(null);
+  /** The viewer's own private list; same null-vs-empty distinction. */
+  const [personalHabits, setPersonalHabits] = useState<PersonalHabit[] | null>(null);
 
   useSyncDarkMode();
 
@@ -92,6 +100,14 @@ export default function App() {
     }
   }, [initData]);
 
+  const loadPersonalHabits = useCallback(async () => {
+    try {
+      setPersonalHabits(await getPersonalHabits(initData));
+    } catch {
+      setPersonalHabits((prev) => prev ?? []);
+    }
+  }, [initData]);
+
   useEffect(() => {
     if (available) {
       void loadProgress();
@@ -104,7 +120,8 @@ export default function App() {
       return;
     }
     void loadHabits();
-  }, [available, loadHabits]);
+    void loadPersonalHabits();
+  }, [available, loadHabits, loadPersonalHabits]);
 
   // Admin status is room-scoped and is dropped the moment someone leaves for
   // another room (PRD §3a), so it is re-resolved whenever the current room
@@ -115,15 +132,9 @@ export default function App() {
       ? (state.progress.room?.id ?? null)
       : null;
 
-  const refreshAdminStatus = useCallback(async () => {
-    try {
-      const result = await getIsAdmin(initData);
-      setIsAdmin(result.isAdmin);
-    } catch {
-      setIsAdmin(false);
-    }
-  }, [initData]);
-
+  // Nothing in the app changes the viewer's own admin status any more — demote
+  // is not offered in the UI — so this effect is the only thing that resolves
+  // it, on mount and on every room change.
   useEffect(() => {
     if (!available || currentRoomId === null) {
       setIsAdmin(false);
@@ -177,7 +188,8 @@ export default function App() {
     if (activeTab !== "progress" && activeTab !== "log") return;
     void loadProgress();
     void loadHabits();
-  }, [activeTab, settingsOpen, state.status, loadProgress, loadHabits]);
+    void loadPersonalHabits();
+  }, [activeTab, settingsOpen, state.status, loadProgress, loadHabits, loadPersonalHabits]);
 
   if (!available) {
     return (
@@ -217,6 +229,7 @@ export default function App() {
         onRefresh={() => {
           void loadProgress();
           void loadHabits();
+          void loadPersonalHabits();
         }}
       />
     );
@@ -258,6 +271,7 @@ export default function App() {
               initData={initData}
               progress={state.progress}
               habits={habits}
+              personalHabits={personalHabits}
               onOpenSettings={openSettings}
             />
           )}
@@ -265,17 +279,20 @@ export default function App() {
             <LogHabitsScreen
               initData={initData}
               habits={habits}
+              personalHabits={personalHabits}
               progress={state.progress}
               onLogged={() => void loadProgress()}
+              onPersonalHabitsChanged={() => void loadPersonalHabits()}
             />
           )}
-          {activeTab === "leaderboard" && <LeaderboardScreen initData={initData} />}
-          {activeTab === "admin" && isAdmin && (
-            <AdminScreen
+          {activeTab === "leaderboard" && (
+            <LeaderboardScreen
               initData={initData}
-              onAdminStatusChanged={() => void refreshAdminStatus()}
+              isAdmin={isAdmin}
+              roomName={state.progress.room?.name ?? null}
             />
           )}
+          {activeTab === "admin" && isAdmin && <AdminScreen initData={initData} />}
           <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
         </div>
       )}

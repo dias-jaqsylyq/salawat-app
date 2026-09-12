@@ -9,7 +9,10 @@ export function messageForApiError(err: unknown, fallback: string): string {
   switch (err.code) {
     case "invalid_habit_id":
     case "habit_not_found":
+    case "personal_habit_not_found":
       return "That habit isn't available anymore.";
+    case "too_many_personal_habits":
+      return "You've reached the limit for your own habits — delete one first.";
     case "habit_inactive":
       return "This habit is no longer active.";
     case "invalid_value":

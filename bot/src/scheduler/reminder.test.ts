@@ -9,6 +9,7 @@ process.env.DB_PATH ??= ":memory:";
 
 const {
   createHabit,
+  createPersonalHabit,
   createRoom,
   createUser,
   setUserCurrentRoom,
@@ -17,6 +18,7 @@ const {
   updateHabit,
   updateUserProfile,
   upsertHabitLog,
+  upsertPersonalHabitLog,
 } = await import("../db/repository.js");
 const { db } = await import("../db/client.js");
 const { formatDateParts, getTodayInTimezone } = await import("../utils/challenge.js");
@@ -29,9 +31,22 @@ const AT_21 = new Date("2026-08-16T13:00:00.000Z");
 /** 20:00 in America/New_York (EDT, UTC-4 in August). */
 const AT_20_NY = new Date("2026-08-17T00:00:00.000Z");
 
+let nextSentMessageId = 5000;
+
+/**
+ * sendMessage has to hand back a real Message: sendDueReminders reads
+ * message_id off it to queue the deletion, and a stub returning undefined would
+ * throw into the per-user catch and quietly turn every send into a failure.
+ */
 function mockBot(sendMessage: (chatId: number, text: string) => Promise<void>) {
   return {
-    api: { sendMessage },
+    api: {
+      sendMessage: async (chatId: number, text: string, opts?: unknown) => {
+        await sendMessage(chatId, text);
+        void opts;
+        return { message_id: nextSentMessageId++ };
+      },
+    },
   } as unknown as Bot<MyContext>;
 }
 
@@ -61,6 +76,46 @@ function uniqueHabitName(label: string): string {
 }
 
 const todayKey = formatDateParts(getTodayInTimezone("Asia/Hong_Kong", AT_20));
+
+/** The deletion the cleanup cron would find queued for this chat, if any. */
+function queuedDeletion(telegramId: number): { message_id: number; delete_at: string } | undefined {
+  return db
+    .prepare(
+      "SELECT message_id, delete_at FROM scheduled_message_deletions WHERE chat_id = ?"
+    )
+    .get(telegramId) as { message_id: number; delete_at: string } | undefined;
+}
+
+describe("sendDueReminders — auto-deletion", () => {
+  it("queues the reminder it just sent for deletion an hour out", async () => {
+    const telegramId = makeUser(true, "20:00");
+    await sendDueReminders(mockBot(async () => {}), AT_20);
+
+    const queued = queuedDeletion(telegramId);
+    assert.ok(queued, "the reminder should be queued for deletion");
+    assert.ok(queued.message_id > 0, "the queued row names the message that was sent");
+
+    // An hour from now, give or take the second the row was written in.
+    const dueIn = db
+      .prepare(
+        "SELECT CAST((julianday(?) - julianday('now')) * 24 * 60 AS INTEGER) AS minutes"
+      )
+      .get(queued.delete_at) as { minutes: number };
+    assert.ok(
+      dueIn.minutes >= 59 && dueIn.minutes <= 60,
+      `expected ~60 minutes out, got ${dueIn.minutes}`
+    );
+  });
+
+  it("queues nothing when the DM failed", async () => {
+    const telegramId = makeUser(true, "20:00");
+    const bot = mockBot(async () => {
+      throw new Error("blocked");
+    });
+    await sendDueReminders(bot, AT_20);
+    assert.equal(queuedDeletion(telegramId), undefined);
+  });
+});
 
 describe("sendDueReminders — scheduling", () => {
   it("only messages users whose reminders are enabled and whose time matches", async () => {
@@ -192,6 +247,37 @@ describe("sendDueReminders — message content", () => {
     assert.ok(!captured.includes(logged.name));
   });
 
+  it("lists the user's own personal habits in the same breath as the room's", async () => {
+    const telegramId = makeUser(true, "20:00");
+    const user = getUserByTelegramId(telegramId)!;
+    const roomHabit = makeHabit("Room habit");
+    const unloggedPersonal = createPersonalHabit(
+      user.id,
+      room.id,
+      uniqueHabitName("My unlogged habit"),
+      "binary",
+      null
+    );
+    const loggedPersonal = createPersonalHabit(
+      user.id,
+      room.id,
+      uniqueHabitName("My logged habit"),
+      "binary",
+      null
+    );
+    upsertPersonalHabitLog(loggedPersonal.id, 1, todayKey);
+
+    let captured = "";
+    const bot = mockBot(async (_id, text) => {
+      captured = text;
+    });
+    await sendDueReminders(bot, AT_20);
+
+    assert.ok(captured.includes(roomHabit.name));
+    assert.ok(captured.includes(unloggedPersonal.name));
+    assert.ok(!captured.includes(loggedPersonal.name));
+  });
+
   it("never lists a deactivated habit as unlogged", async () => {
     const telegramId = makeUser(true, "20:00");
     const habit = makeHabit("Retired habit");
@@ -209,6 +295,8 @@ describe("sendDueReminders — message content", () => {
   it("sends the all-caught-up message once every active habit is logged today", async () => {
     const telegramId = makeUser(true, "20:00");
     const user = getUserByTelegramId(telegramId)!;
+    // A fresh user has no personal habits, so the room's habits are all there
+    // is left to log.
     for (const habit of listHabits({ activeOnly: true, roomId: room.id })) {
       upsertHabitLog(user.id, habit.id, 1, todayKey);
     }

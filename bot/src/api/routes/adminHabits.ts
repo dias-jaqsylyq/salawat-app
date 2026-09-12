@@ -1,10 +1,14 @@
 import type { Request, Response } from "express";
 import { createHabit, listHabits, updateHabit } from "../../db/repository.js";
-import { HABIT_CATEGORIES, type Habit, type HabitCategory, type HabitType } from "../../types.js";
+import type { Habit, HabitType } from "../../types.js";
+import {
+  categoryForCreate,
+  checkCategory,
+  isValidHabitName,
+} from "../habitValidation.js";
 import { parseIdParam } from "../params.js";
 import { getRoomHabit, requireCallerRoom } from "../roomScope.js";
 
-const NAME_MAX_LENGTH = 100;
 const MAX_POINTS_WEIGHT = 1_000_000;
 
 function habitResponse(habit: Habit) {
@@ -22,47 +26,6 @@ function habitResponse(habit: Habit) {
 
 function isValidPointsWeight(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= MAX_POINTS_WEIGHT;
-}
-
-function isHabitCategory(value: unknown): value is HabitCategory {
-  return typeof value === "string" && (HABIT_CATEGORIES as readonly string[]).includes(value);
-}
-
-/**
- * The application-layer half of the category invariant (PRD §1): a habit in a
- * categories-enabled room always carries one of IQ/SQ/PQ/EQ, and a habit in a
- * categories-disabled room never carries one. The column itself only checks the
- * value is one of the four.
- *
- * `raw` is the request's category value; `provided` distinguishes "field
- * omitted" from "explicit null", which only PATCH cares about.
- */
-type CategoryCheck =
-  | { ok: true; category: HabitCategory | null | undefined }
-  | { ok: false; error: string };
-
-function checkCategory(
-  raw: unknown,
-  provided: boolean,
-  categoriesEnabled: boolean
-): CategoryCheck {
-  if (!categoriesEnabled) {
-    // Omitted, or explicitly cleared, are both fine; anything else is not.
-    if (!provided || raw === null || raw === undefined) {
-      return { ok: true, category: provided ? null : undefined };
-    }
-    return { ok: false, error: "category_not_allowed" };
-  }
-  if (!provided || raw === undefined) {
-    return { ok: true, category: undefined };
-  }
-  if (raw === null) {
-    return { ok: false, error: "category_required" };
-  }
-  if (!isHabitCategory(raw)) {
-    return { ok: false, error: "invalid_category" };
-  }
-  return { ok: true, category: raw };
 }
 
 /** GET /api/admin/habits — every habit of the caller's room, including inactive ones. */
@@ -84,7 +47,7 @@ export function createHabitRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
   if (!caller) return;
 
-  if (typeof body.name !== "string" || body.name.trim().length === 0 || body.name.trim().length > NAME_MAX_LENGTH) {
+  if (!isValidHabitName(body.name)) {
     res.status(400).json({ success: false, error: "invalid_name" });
     return;
   }
@@ -107,9 +70,8 @@ export function createHabitRoute(req: Request, res: Response): void {
     res.status(400).json({ success: false, error: checked.error });
     return;
   }
-  // On create there is nothing to leave unchanged: a categories-enabled room
-  // needs the value now, a categories-disabled one stores null.
-  if (categoriesEnabled && (checked.category === undefined || checked.category === null)) {
+  const category = categoryForCreate(checked, categoriesEnabled);
+  if (category === undefined) {
     res.status(400).json({ success: false, error: "category_required" });
     return;
   }
@@ -119,7 +81,7 @@ export function createHabitRoute(req: Request, res: Response): void {
     body.name.trim(),
     type as HabitType,
     body.pointsWeight,
-    categoriesEnabled ? (checked.category as HabitCategory) : null
+    category
   );
   res.status(201).json(habitResponse(habit));
 }
@@ -161,7 +123,7 @@ export function patchHabitRoute(req: Request, res: Response): void {
 
   let name: string | undefined;
   if (hasName) {
-    if (typeof body.name !== "string" || body.name.trim().length === 0 || body.name.trim().length > NAME_MAX_LENGTH) {
+    if (!isValidHabitName(body.name)) {
       res.status(400).json({ success: false, error: "invalid_name" });
       return;
     }

@@ -5,6 +5,7 @@ import {
   ADMIN_MUTATION_RATE_LIMIT_PER_MINUTE,
   ADMIN_SECRET_RATE_LIMIT_PER_MINUTE,
   BROADCAST_RATE_LIMIT_PER_MINUTE,
+  PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE,
   ROOM_ACTION_RATE_LIMIT_PER_MINUTE,
   config,
 } from "../config.js";
@@ -14,6 +15,14 @@ import { telegramAuth } from "./authMiddleware.js";
 import { rateLimited, rateLimitedByIp } from "./rateLimit.js";
 import { registerRoute } from "./routes/register.js";
 import { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } from "./routes/habits.js";
+import {
+  createPersonalHabitRoute,
+  deletePersonalHabitLogRoute,
+  deletePersonalHabitRoute,
+  listPersonalHabitsRoute,
+  logPersonalHabitRoute,
+  patchPersonalHabitRoute,
+} from "./routes/personalHabits.js";
 import { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } from "./routes/adminHabits.js";
 import { progressRoute } from "./routes/progress.js";
 import { progressWeekRoute } from "./routes/progressWeek.js";
@@ -88,6 +97,30 @@ export function createApiServer(bot: Bot<MyContext>) {
   app.get("/api/habits", telegramAuth, listHabitsRoute);
   app.post("/api/habits/:id/log", telegramAuth, logHabitRoute);
   app.delete("/api/habits/:id/log", telegramAuth, deleteHabitLogRoute);
+  // Personal habits: telegramAuth only, no requireAdmin. These belong to the
+  // member, and there is deliberately no admin-facing counterpart — an admin has
+  // no route that can read or touch someone else's personal list.
+  app.get("/api/personal-habits", telegramAuth, listPersonalHabitsRoute);
+  app.post(
+    "/api/personal-habits",
+    telegramAuth,
+    rateLimited(PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE),
+    createPersonalHabitRoute
+  );
+  app.patch(
+    "/api/personal-habits/:id",
+    telegramAuth,
+    rateLimited(PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE),
+    patchPersonalHabitRoute
+  );
+  app.delete(
+    "/api/personal-habits/:id",
+    telegramAuth,
+    rateLimited(PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE),
+    deletePersonalHabitRoute
+  );
+  app.post("/api/personal-habits/:id/log", telegramAuth, logPersonalHabitRoute);
+  app.delete("/api/personal-habits/:id/log", telegramAuth, deletePersonalHabitLogRoute);
   app.get("/api/progress", telegramAuth, progressRoute);
   app.get("/api/progress/week", telegramAuth, progressWeekRoute);
   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);

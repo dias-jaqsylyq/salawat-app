@@ -124,6 +124,58 @@ CREATE INDEX IF NOT EXISTS idx_habit_logs_room_id ON habit_logs(room_id);
 CREATE INDEX IF NOT EXISTS idx_habit_logs_log_date ON habit_logs(log_date);
 
 /**
+ * A member's own private habits, for personal tracking inside the room they are
+ * in. Deliberately NOT rows in `habits` with an owner column: these carry no
+ * points at all, and every scoring and admin query — leaderboardQuery,
+ * getUserTotalPoints, getUserPointsForDate, getExportRows, listHabits — would
+ * otherwise need a filter it could silently be missing, which is how an admin
+ * ends up seeing a private habit or a personal log ends up in the ranking. A
+ * separate table makes both properties structural.
+ *
+ * Room-scoped: they are deleted the moment their owner leaves or is kicked
+ * (setUserCurrentRoom), so a personal list never follows someone into a new
+ * room.
+ */
+CREATE TABLE IF NOT EXISTS personal_habits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+  -- Same rule as habits.category and enforced in the same place (the
+  -- application layer): required while the room has categories_enabled = 1,
+  -- rejected while it does not.
+  category TEXT CHECK (category IS NULL OR category IN ('IQ','SQ','PQ','EQ')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_personal_habits_user_room
+  ON personal_habits(user_id, room_id);
+
+/**
+ * Done-or-not for one personal habit on one of the owner's local days. No
+ * points_earned column and no equivalent of computePoints: a personal habit is
+ * tracking, never scoring, so there is nothing here for any total to sum.
+ *
+ * ON DELETE CASCADE throughout, unlike habit_logs: a member deleting their own
+ * habit means it and its history are gone, which is the whole point of
+ * self-service.
+ */
+CREATE TABLE IF NOT EXISTS personal_habit_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  personal_habit_id INTEGER NOT NULL REFERENCES personal_habits(id) ON DELETE CASCADE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  log_date TEXT NOT NULL,              -- the owner's local day, 'YYYY-MM-DD'
+  value INTEGER NOT NULL,              -- quantity: entered number; binary: 1
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (user_id, personal_habit_id, log_date)
+);
+CREATE INDEX IF NOT EXISTS idx_personal_habit_logs_lookup
+  ON personal_habit_logs(user_id, room_id, log_date);
+
+/**
  * In-progress /start signup — survives Railway redeploys; deleted on finalize.
  * Holds the answers of both registration branches (PRD §2): the admin one fills
  * room_name/categories_enabled and creates its room at the end, the participant
@@ -150,6 +202,42 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
   fasting_reminder_time TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+/**
+ * Every message exchanged while a signup is in progress — the bot's questions
+ * and the user's answers alike — so the whole conversation can be swept away
+ * once the account exists, leaving only the final confirmation visible.
+ *
+ * Keyed by telegram_id rather than hung off pending_registrations on purpose:
+ * startPendingRegistrationForRoom drops and recreates that row, which would
+ * take the accumulated ids with it and strand the messages of an abandoned
+ * first attempt.
+ */
+CREATE TABLE IF NOT EXISTS registration_messages (
+  telegram_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (telegram_id, message_id)
+);
+
+/**
+ * Messages to delete later, checked once a minute by the message-cleanup cron.
+ * A row in the database rather than an in-process timer: a reminder sent at
+ * 20:00 has to still disappear at 21:00 across a redeploy, and a setTimeout
+ * does not survive one.
+ */
+CREATE TABLE IF NOT EXISTS scheduled_message_deletions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  message_id INTEGER NOT NULL,
+  -- UTC, same 'YYYY-MM-DD HH:MM:SS' shape as datetime('now'), so the due check
+  -- is a plain string comparison.
+  delete_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (chat_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_message_deletions_delete_at
+  ON scheduled_message_deletions(delete_at);
 
 -- Retired with the move to multi-room (PRD §1, §3a): the global `admins` table
 -- (replaced by room_admins) and `pending_admin_actions`, which only ever backed
