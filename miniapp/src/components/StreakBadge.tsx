@@ -4,18 +4,29 @@ import { cn } from "@/lib/utils";
 interface Props {
   habitName: string;
   streak: number;
+  /**
+   * What `streak` counts. A weekly habit's run is measured in weeks, and the
+   * badge has to say which — a bare 3 beside a daily habit's 3 would otherwise
+   * read as three days and badly undersell three weeks.
+   */
+  unit?: "days" | "weeks";
 }
 
 type Tier = "unlit" | "lit" | "hot";
 
-function streakTier(streak: number): Tier {
+/**
+ * Seven days is a week of daily practice; four weeks is roughly a month of
+ * weekly practice. Different numbers, same "this has become a habit" moment —
+ * so the hot tier is reached at a comparable point rather than the same digit.
+ */
+function streakTier(streak: number, unit: "days" | "weeks"): Tier {
   if (streak <= 0) return "unlit";
-  if (streak >= 7) return "hot";
+  if (streak >= (unit === "weeks" ? 4 : 7)) return "hot";
   return "lit";
 }
 
-export default function StreakBadge({ habitName, streak }: Props) {
-  const tier = streakTier(streak);
+export default function StreakBadge({ habitName, streak, unit = "days" }: Props) {
+  const tier = streakTier(streak, unit);
 
   return (
     <div
@@ -38,7 +49,7 @@ export default function StreakBadge({ habitName, streak }: Props) {
       />
       <span className="text-2xl font-extrabold tabular-nums text-foreground">{streak}</span>
       <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {streak === 1 ? "day" : "days"}
+        {streak === 1 ? unit.slice(0, -1) : unit}
       </span>
       <span className="mt-1 line-clamp-2 text-xs font-medium text-foreground/80">{habitName}</span>
     </div>

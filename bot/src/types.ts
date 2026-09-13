@@ -154,13 +154,30 @@ export interface PendingRegistration {
   updated_at: string;
 }
 
-export type HabitType = "quantity" | "binary";
+/**
+ * The unit of time one completion of a habit scores for. Every habit is
+ * done-or-not (the old 'quantity' type is retired); this is the only axis a
+ * habit varies on now.
+ *
+ * 'weekly' scores points_weight once per Monday-Sunday week however many days
+ * of that week are marked — see the carrier-row rule on habit_logs.points_earned.
+ */
+export type HabitPeriod = "daily" | "weekly";
+
+export const HABIT_PERIODS: readonly HabitPeriod[] = ["daily", "weekly"] as const;
 
 export interface Habit {
   id: number;
   room_id: number;
   name: string;
-  type: HabitType;
+  /**
+   * The admin's free-text goal line ("min 30 min"), or NULL. Shown to members
+   * beside the name; deliberately inert everywhere else — no points, no streak,
+   * no leaderboard reads it.
+   */
+  description: string | null;
+  /** Fixed at creation: PATCH /api/admin/habits refuses to change it. */
+  period: HabitPeriod;
   points_weight: number;
   /**
    * NULL in a room with categories disabled. Preserved (not cleared) when a room
@@ -182,9 +199,14 @@ export interface HabitLog {
   room_id: number;
   /** TIMEZONE-local day, 'YYYY-MM-DD'. */
   log_date: string;
-  /** quantity: entered number; binary: 1. */
+  /** Always 1 — presence of the row is what every read actually keys off. */
   value: number;
-  /** Frozen at log time via computePoints — never recomputed on read. */
+  /**
+   * Frozen at log time via computePoints — never recomputed on read.
+   *
+   * For a weekly habit exactly one row per (user, habit, week) carries the
+   * weight and the rest carry 0, so the week is worth points_weight once.
+   */
   points_earned: number;
   created_at: string;
   updated_at: string;
@@ -195,14 +217,15 @@ export interface HabitLog {
  *
  * No points_weight: personal habits are tracking only and never reach a total,
  * a leaderboard or an export. No is_active either — the owner deletes rather
- * than deactivates, since there is no admin whose history needs protecting.
+ * than deactivates, since there is no admin whose history needs protecting. No
+ * period or description either: a personal habit is always a daily done-or-not,
+ * and there is no admin to write a goal line for it.
  */
 export interface PersonalHabit {
   id: number;
   user_id: number;
   room_id: number;
   name: string;
-  type: HabitType;
   /** NULL in a room with categories disabled; required when they are enabled. */
   category: HabitCategory | null;
   created_at: string;
@@ -230,6 +253,14 @@ export interface LeaderboardRow {
   /** Sum of points_earned across all habits, all time. */
   total: number;
 }
+
+/**
+ * One row of the weekly leaderboard: the same shape as LeaderboardRow, but
+ * `total` covers one Monday-Sunday week instead of all time. Members who earned
+ * nothing that week are still present, with a total of 0 — the board is the
+ * room's roster in rank order, not just the people who scored.
+ */
+export type WeeklyLeaderboardRow = LeaderboardRow;
 
 /** One row of the admin CSV export (getExportRows) — same as LeaderboardRow plus raw Telegram identity fields. */
 export interface ExportRow extends LeaderboardRow {

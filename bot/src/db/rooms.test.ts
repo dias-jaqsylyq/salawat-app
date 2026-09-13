@@ -121,7 +121,7 @@ describe("getRoomByPassword", () => {
 describe("room categories", () => {
   it("toggles on and off while preserving each habit's stored category", () => {
     const { room } = makeRoom("Category room", "category-room-pass", true);
-    const habit = createHabit(room.id, "Qur'an pages", "quantity", 2, "IQ");
+    const habit = createHabit(room.id, "Qur'an pages", 2, "IQ");
     assert.equal(habit.category, "IQ");
 
     setRoomCategoriesEnabled(room.id, false);
@@ -137,7 +137,7 @@ describe("room categories", () => {
 
   it("stores a habit with no category in a room that has categories off", () => {
     const { room } = makeRoom("Flat room", "flat-room-pass");
-    const habit = createHabit(room.id, "Fasted today", "binary", 5);
+    const habit = createHabit(room.id, "Fasted today", 5);
     assert.equal(habit.category, null);
 
     assert.equal(updateHabit(habit.id, { category: "SQ" }).category, "SQ");
@@ -148,7 +148,7 @@ describe("room categories", () => {
     const { room } = makeRoom("Strict room", "strict-room-pass", true);
 
     assert.throws(
-      () => createHabit(room.id, "Bad category", "binary", 1, "XQ" as never),
+      () => createHabit(room.id, "Bad category", 1, "XQ" as never),
       /CHECK constraint failed/
     );
   });
@@ -158,8 +158,8 @@ describe("room-scoped habits and logs", () => {
   it("lists only the room's own habits", () => {
     const a = makeRoom("Room A", "room-a-pass");
     const b = makeRoom("Room B", "room-b-pass");
-    const habitA = createHabit(a.room.id, "A habit", "binary", 1);
-    const habitB = createHabit(b.room.id, "B habit", "binary", 1);
+    const habitA = createHabit(a.room.id, "A habit", 1);
+    const habitB = createHabit(b.room.id, "B habit", 1);
 
     assert.deepEqual(listHabits({ roomId: a.room.id }).map((h) => h.id), [habitA.id]);
     assert.deepEqual(listHabits({ roomId: b.room.id }).map((h) => h.id), [habitB.id]);
@@ -167,13 +167,13 @@ describe("room-scoped habits and logs", () => {
 
   it("stamps each log with its habit's room", () => {
     const { room, owner } = makeRoom("Stamping room", "stamping-room-pass");
-    const habit = createHabit(room.id, "Dhikr", "quantity", 3);
+    const habit = createHabit(room.id, "Dhikr", 3);
 
-    const log = upsertHabitLog(owner.id, habit.id, 10, "2026-08-01");
+    const log = upsertHabitLog(owner.id, habit.id, 1, "2026-08-01");
 
     assert.equal(log.room_id, room.id);
-    assert.equal(log.points_earned, 30);
-    assert.equal(getUserTotalPoints(owner.id, room.id), 30);
+    assert.equal(log.points_earned, 3);
+    assert.equal(getUserTotalPoints(owner.id, room.id), 3);
   });
 
   it("keeps a moved member's old logs attached to the room they were earned in", () => {
@@ -182,7 +182,7 @@ describe("room-scoped habits and logs", () => {
     const member = makeUser("mover");
     setUserCurrentRoom(member.id, from.room.id);
 
-    const oldHabit = createHabit(from.room.id, "Old habit", "binary", 10);
+    const oldHabit = createHabit(from.room.id, "Old habit", 10);
     upsertHabitLog(member.id, oldHabit.id, 1, "2026-08-01");
 
     setUserCurrentRoom(member.id, to.room.id);
@@ -200,8 +200,8 @@ describe("room-scoped leaderboard", () => {
     const home = makeRoom("Home room", "home-room-pass");
     const other = makeRoom("Other room", "other-room-pass");
 
-    const homeHabit = createHabit(home.room.id, "Home habit", "binary", 10);
-    const otherHabit = createHabit(other.room.id, "Other habit", "binary", 50);
+    const homeHabit = createHabit(home.room.id, "Home habit", 10);
+    const otherHabit = createHabit(other.room.id, "Other habit", 50);
 
     const stayer = makeUser("stayer");
     setUserCurrentRoom(stayer.id, home.room.id);
@@ -365,15 +365,15 @@ describe("leaveCurrentRoom", () => {
     const coAdmin = makeUser();
     setUserCurrentRoom(coAdmin.id, room.id);
     addRoomAdmin(room.id, coAdmin.id);
-    const habit = createHabit(room.id, "Leave habit", "quantity", 3);
-    upsertHabitLog(coAdmin.id, habit.id, 4, "2026-09-10");
+    const habit = createHabit(room.id, "Leave habit", 3);
+    upsertHabitLog(coAdmin.id, habit.id, 1, "2026-09-10");
 
     const result = leaveCurrentRoom(coAdmin.id);
     assert.deepEqual(result, { left: true, lastAdmin: false, roomId: room.id });
     assert.equal(getUserByTelegramId(coAdmin.telegram_id)?.current_room_id, null);
     assert.equal(isRoomAdmin(coAdmin.id, room.id), false);
     // A voluntary leave deletes nothing (PRD §1).
-    assert.equal(getUserTotalPoints(coAdmin.id, room.id), 12);
+    assert.equal(getUserTotalPoints(coAdmin.id, room.id), 3);
 
     assert.deepEqual(leaveCurrentRoom(owner.id), {
       left: false,
@@ -394,13 +394,13 @@ describe("kickUserFromRoom", () => {
     const second = makeRoom("Other kick room", "other-kick-room-pass");
     const wanderer = makeUser();
 
-    const firstHabit = createHabit(first.room.id, "First habit", "quantity", 2);
+    const firstHabit = createHabit(first.room.id, "First habit", 2);
     setUserCurrentRoom(wanderer.id, first.room.id);
-    upsertHabitLog(wanderer.id, firstHabit.id, 5, "2026-09-10");
+    upsertHabitLog(wanderer.id, firstHabit.id, 1, "2026-09-10");
 
-    const secondHabit = createHabit(second.room.id, "Second habit", "quantity", 3);
+    const secondHabit = createHabit(second.room.id, "Second habit", 3);
     setUserCurrentRoom(wanderer.id, second.room.id);
-    upsertHabitLog(wanderer.id, secondHabit.id, 5, "2026-09-10");
+    upsertHabitLog(wanderer.id, secondHabit.id, 1, "2026-09-10");
 
     const result = kickUserFromRoom(wanderer.id, second.room.id);
     assert.equal(result.kicked, true);
@@ -408,7 +408,7 @@ describe("kickUserFromRoom", () => {
     assert.equal(getUserByTelegramId(wanderer.telegram_id)?.current_room_id, null);
     assert.equal(getUserTotalPoints(wanderer.id, second.room.id), 0);
     // The room they were kicked from is the only one that loses anything.
-    assert.equal(getUserTotalPoints(wanderer.id, first.room.id), 10);
+    assert.equal(getUserTotalPoints(wanderer.id, first.room.id), 2);
 
     assert.deepEqual(kickUserFromRoom(second.owner.id, second.room.id), {
       kicked: false,
@@ -434,9 +434,9 @@ describe("kickUserFromRoom", () => {
 /** Everything a room owns, so a delete has something real to cascade through. */
 function furnishRoom(name: string, password: string) {
   const { room, owner } = makeRoom(name, password);
-  const habit = createHabit(room.id, `${name} habit`, "quantity", 2);
-  upsertHabitLog(owner.id, habit.id, 5, "2026-09-01");
-  const personal = createPersonalHabit(owner.id, room.id, `${name} personal`, "binary", null);
+  const habit = createHabit(room.id, `${name} habit`,  2);
+  upsertHabitLog(owner.id, habit.id, 1, "2026-09-01");
+  const personal = createPersonalHabit(owner.id, room.id, `${name} personal`,  null);
   upsertPersonalHabitLog(personal.id, 1, "2026-09-01");
   return { room, owner, habit, personal };
 }
@@ -588,13 +588,13 @@ describe("switchRoomWithKick", () => {
     const elsewhere = makeRoom("Third room", "third-room-pass");
     const mover = makeUser("mover-switch");
 
-    const oldHabit = createHabit(from.room.id, "Old habit", "quantity", 2);
-    const otherHabit = createHabit(elsewhere.room.id, "Other habit", "quantity", 3);
+    const oldHabit = createHabit(from.room.id, "Old habit", 2);
+    const otherHabit = createHabit(elsewhere.room.id, "Other habit", 3);
     setUserCurrentRoom(mover.id, elsewhere.room.id);
-    upsertHabitLog(mover.id, otherHabit.id, 5, "2026-09-01");
+    upsertHabitLog(mover.id, otherHabit.id, 1, "2026-09-01");
     setUserCurrentRoom(mover.id, from.room.id);
-    upsertHabitLog(mover.id, oldHabit.id, 5, "2026-09-01");
-    createPersonalHabit(mover.id, from.room.id, "Old personal", "binary", null);
+    upsertHabitLog(mover.id, oldHabit.id, 1, "2026-09-01");
+    createPersonalHabit(mover.id, from.room.id, "Old personal", null);
 
     const result = switchRoomWithKick(mover.id, to.room.id);
 
@@ -608,7 +608,7 @@ describe("switchRoomWithKick", () => {
     assert.equal(getUserTotalPoints(mover.id, from.room.id), 0);
     assert.equal(listPersonalHabits(mover.id, from.room.id).length, 0);
     // A room they passed through earlier is none of this switch's business.
-    assert.equal(getUserTotalPoints(mover.id, elsewhere.room.id), 15);
+    assert.equal(getUserTotalPoints(mover.id, elsewhere.room.id), 3);
   });
 
   it("drops co-admin status in the room being left", () => {
@@ -631,8 +631,8 @@ describe("switchRoomWithKick", () => {
     const to = makeRoom("Tempting room", "tempting-room-pass");
     const member = makeUser("left-behind");
     setUserCurrentRoom(member.id, from.room.id);
-    const habit = createHabit(from.room.id, "Kept habit", "quantity", 2);
-    upsertHabitLog(from.owner.id, habit.id, 5, "2026-09-01");
+    const habit = createHabit(from.room.id, "Kept habit", 2);
+    upsertHabitLog(from.owner.id, habit.id, 1, "2026-09-01");
 
     const result = switchRoomWithKick(from.owner.id, to.room.id);
 
@@ -640,7 +640,7 @@ describe("switchRoomWithKick", () => {
     assert.equal(result.switched, false);
     assert.equal(result.habitLogsDeleted, 0);
     assert.equal(getUserByTelegramId(from.owner.telegram_id)?.current_room_id, from.room.id);
-    assert.equal(getUserTotalPoints(from.owner.id, from.room.id), 10);
+    assert.equal(getUserTotalPoints(from.owner.id, from.room.id), 2);
     assert.equal(isRoomAdmin(from.owner.id, from.room.id), true);
     assert.equal(isLastAdminWithMembers(from.owner.id, from.room.id), true);
 

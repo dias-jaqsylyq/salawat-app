@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -11,9 +11,8 @@ process.env.BOT_TOKEN ??= "client-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH = join(dataDir, "salawat.db");
 
-const { addMissingColumns, backfillRoomJoinedAt, db, resetForMultiRoom } = await import(
-  "./client.js"
-);
+const { addMissingColumns, backfillRoomJoinedAt, db, dropQuantityHabits, resetForMultiRoom } =
+  await import("./client.js");
 const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
   await import("./repository.js");
 
@@ -175,7 +174,7 @@ describe("resetForMultiRoom", () => {
     const owner = createUser(500000002, "NewOwner");
     const room = createRoom("Fresh room", "fresh-room-pass", owner.id);
     setUserCurrentRoom(owner.id, room.id);
-    const habit = createHabit(room.id, "Qur'an pages", "quantity", 2, "IQ");
+    const habit = createHabit(room.id, "Qur'an pages",  2, "IQ");
 
     assert.equal(habit.room_id, room.id);
     assert.equal(habit.category, "IQ");
@@ -321,5 +320,138 @@ describe("addMissingColumns", () => {
       .prepare("SELECT room_joined_at FROM users WHERE telegram_id = ?")
       .get(500000023) as Record<string, unknown>;
     assert.equal(roomless.room_joined_at, null);
+  });
+});
+
+/**
+ * A multi-room DB from before habits went binary-only: `habits` and
+ * `personal_habits` still carry `type`, with a mix of quantity and binary rows
+ * and logs hanging off both. What a live Railway volume looks like the moment
+ * dropQuantityHabits() first runs against it.
+ */
+function seedQuantityEraDatabase(): void {
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    DROP TABLE IF EXISTS personal_habit_logs;
+    DROP TABLE IF EXISTS personal_habits;
+    DROP TABLE IF EXISTS habit_logs;
+    DROP TABLE IF EXISTS habits;
+    DROP TABLE IF EXISTS room_admins;
+    DROP TABLE IF EXISTS pending_registrations;
+    DROP TABLE IF EXISTS users;
+    DROP TABLE IF EXISTS rooms;
+  `);
+  db.exec(schemaSql());
+  db.exec(`
+    DROP TABLE habits;
+    DROP TABLE personal_habits;
+    CREATE TABLE habits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+      points_weight INTEGER NOT NULL,
+      category TEXT CHECK (category IS NULL OR category IN ('IQ','SQ','PQ','EQ')),
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE personal_habits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+      category TEXT CHECK (category IS NULL OR category IN ('IQ','SQ','PQ','EQ')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT INTO rooms (id, name, password) VALUES (1, 'Quantity room', 'quantity-room-pass');
+    INSERT INTO users (id, telegram_id, nickname, current_room_id)
+      VALUES (1, 500000031, 'QuantityMember', 1);
+
+    INSERT INTO habits (id, room_id, name, type, points_weight, category)
+      VALUES (1, 1, 'Pages read', 'quantity', 2, 'IQ'),
+             (2, 1, 'Fasted', 'binary', 10, 'SQ');
+    INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+      VALUES (1, 1, 1, '2026-09-14', 7, 14),
+             (1, 2, 1, '2026-09-14', 1, 10);
+
+    INSERT INTO personal_habits (id, user_id, room_id, name, type)
+      VALUES (1, 1, 1, 'Private pages', 'quantity'),
+             (2, 1, 1, 'Private walk', 'binary');
+    INSERT INTO personal_habit_logs (user_id, personal_habit_id, room_id, log_date, value)
+      VALUES (1, 1, 1, '2026-09-14', 7),
+             (1, 2, 1, '2026-09-14', 1);
+  `);
+  db.pragma("foreign_keys = ON");
+}
+
+function schemaSql(): string {
+  return readFileSync(join(import.meta.dirname, "schema.sql"), "utf8");
+}
+
+function quantitySnapshotFiles(): string[] {
+  return readdirSync(dataDir).filter((f) => f.startsWith("salawat.pre-binary-only-"));
+}
+
+describe("dropQuantityHabits", () => {
+  it("deletes quantity habits and their logs, keeps binary ones, and drops the column", () => {
+    seedQuantityEraDatabase();
+    assert.ok(columnNames("habits").includes("type"));
+    assert.ok(!columnNames("habits").includes("period"));
+
+    assert.equal(dropQuantityHabits(), true);
+
+    // `type` is gone from both tables; `period` and `description` have arrived.
+    assert.ok(!columnNames("habits").includes("type"));
+    assert.ok(columnNames("habits").includes("period"));
+    assert.ok(columnNames("habits").includes("description"));
+    assert.ok(!columnNames("personal_habits").includes("type"));
+
+    // The quantity habit and its log are gone; the binary one is untouched,
+    // points and category included, and defaults to the daily cadence.
+    const habits = db.prepare("SELECT * FROM habits ORDER BY id").all() as Record<string, unknown>[];
+    assert.equal(habits.length, 1);
+    assert.equal(habits[0]!.name, "Fasted");
+    assert.equal(habits[0]!.points_weight, 10);
+    assert.equal(habits[0]!.category, "SQ");
+    assert.equal(habits[0]!.period, "daily");
+    assert.equal(habits[0]!.description, null);
+
+    const logs = db.prepare("SELECT habit_id FROM habit_logs").all() as { habit_id: number }[];
+    assert.deepEqual(logs, [{ habit_id: 2 }]);
+
+    const personal = db
+      .prepare("SELECT id, name FROM personal_habits")
+      .all() as { id: number; name: string }[];
+    assert.deepEqual(personal, [{ id: 2, name: "Private walk" }]);
+    const personalLogs = db
+      .prepare("SELECT personal_habit_id FROM personal_habit_logs")
+      .all() as { personal_habit_id: number }[];
+    assert.deepEqual(personalLogs, [{ personal_habit_id: 2 }]);
+
+    // The rebuild leaves the file consistent and puts the indexes back.
+    assert.deepEqual(db.pragma("foreign_key_check"), []);
+    assert.equal(db.pragma("foreign_keys", { simple: true }), 1);
+    const indexes = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'habits'")
+        .all() as { name: string }[]
+    ).map((i) => i.name);
+    assert.ok(indexes.includes("idx_habits_room_id"));
+
+    // And the data it destroyed is on disk first.
+    assert.equal(quantitySnapshotFiles().length, 1);
+  });
+
+  it("is a no-op the second time, and on a database that never had the column", () => {
+    // Straight after the run above, `type` is gone — so this must do nothing.
+    assert.equal(dropQuantityHabits(), false);
+    assert.equal(quantitySnapshotFiles().length, 1);
+    // Still intact: a second run must not touch the rows it left alone.
+    const habits = db.prepare("SELECT name FROM habits").all() as { name: string }[];
+    assert.deepEqual(habits, [{ name: "Fasted" }]);
   });
 });

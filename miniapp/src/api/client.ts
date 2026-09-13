@@ -9,8 +9,9 @@ import type {
   DeletePersonalHabitResponse,
   Habit,
   HabitCategory,
-  HabitType,
+  HabitPeriod,
   KickParticipantResponse,
+  LeaderboardPeriod,
   LeaderboardResponse,
   LeaveRoomResponse,
   LogHabitResponse,
@@ -101,7 +102,7 @@ export function getPersonalHabits(initData: string): Promise<PersonalHabit[]> {
 
 export function createPersonalHabit(
   initData: string,
-  payload: { name: string; type: HabitType; category?: HabitCategory | null }
+  payload: { name: string; category?: HabitCategory | null }
 ): Promise<PersonalHabit> {
   return request(initData, "/api/personal-habits", {
     method: "POST",
@@ -112,7 +113,7 @@ export function createPersonalHabit(
 export function updatePersonalHabit(
   initData: string,
   personalHabitId: number,
-  payload: { name?: string; type?: HabitType; category?: HabitCategory | null }
+  payload: { name?: string; category?: HabitCategory | null }
 ): Promise<PersonalHabit> {
   return request(initData, `/api/personal-habits/${personalHabitId}`, {
     method: "PATCH",
@@ -160,6 +161,10 @@ export function getProgressWeek(initData: string): Promise<WeeklyProgressRespons
   return request(initData, "/api/progress/week");
 }
 
+/**
+ * The member-facing board: this week only, and everyone's name and place but
+ * only the caller's own points. There is no member-facing all-time board.
+ */
 export function getLeaderboard(initData: string): Promise<LeaderboardResponse> {
   return request(initData, "/api/leaderboard");
 }
@@ -200,7 +205,15 @@ export function getAdminHabits(initData: string): Promise<AdminHabit[]> {
 /** `category` is required in a categories-enabled room and rejected in one without. */
 export function createHabit(
   initData: string,
-  habit: { name: string; type: HabitType; pointsWeight: number; category?: HabitCategory }
+  habit: {
+    name: string;
+    pointsWeight: number;
+    category?: HabitCategory;
+    /** Omitted means daily — the server's default too. */
+    period?: HabitPeriod;
+    /** The free-text goal line; omitted or empty means the habit has none. */
+    description?: string | null;
+  }
 ): Promise<AdminHabit> {
   return request(initData, "/api/admin/habits", {
     method: "POST",
@@ -211,7 +224,14 @@ export function createHabit(
 export function patchHabit(
   initData: string,
   id: number,
-  patch: { name?: string; pointsWeight?: number; isActive?: boolean; category?: HabitCategory }
+  patch: {
+    name?: string;
+    pointsWeight?: number;
+    isActive?: boolean;
+    category?: HabitCategory;
+    /** null clears the goal line. `period` is create-only and rejected here. */
+    description?: string | null;
+  }
 ): Promise<AdminHabit> {
   return request(initData, `/api/admin/habits/${id}`, {
     method: "PATCH",
@@ -284,8 +304,15 @@ export function kickParticipant(
   });
 }
 
-export function getAdminLeaderboard(initData: string): Promise<AdminLeaderboardResponse> {
-  return request(initData, "/api/admin/leaderboard");
+/**
+ * Admins see real points in both periods. The server defaults to all-time when
+ * `period` is omitted, so passing it is what makes the weekly view happen.
+ */
+export function getAdminLeaderboard(
+  initData: string,
+  period: LeaderboardPeriod = "all-time"
+): Promise<AdminLeaderboardResponse> {
+  return request(initData, `/api/admin/leaderboard?period=${period}`);
 }
 
 export async function downloadAdminExport(initData: string): Promise<Blob> {

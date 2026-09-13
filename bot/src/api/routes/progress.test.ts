@@ -81,9 +81,9 @@ describe("GET /api/progress — today's total", () => {
   it("sums only today's points, in this room, for this user", () => {
     const room = makeRoom();
     const other = makeRoom();
-    const salawat = createHabit(room.id, "Salawat", "quantity", 2);
-    const fajr = createHabit(room.id, "Fajr in jamaat", "binary", 15);
-    const elsewhere = createHabit(other.id, "Someone else's habit", "binary", 99);
+    const salawat = createHabit(room.id, "Salawat", 2);
+    const fajr = createHabit(room.id, "Fajr in jamaat", 15);
+    const elsewhere = createHabit(other.id, "Someone else's habit", 99);
 
     const { telegramId, userId } = makeMember(room.id, "Asia/Hong_Kong");
     const today = todayIn("Asia/Hong_Kong");
@@ -91,21 +91,21 @@ describe("GET /api/progress — today's total", () => {
       addCalendarDays(getTodayInTimezone("Asia/Hong_Kong"), -1)
     );
 
-    upsertHabitLog(userId, salawat.id, 10, today); // 10 * 2 = 20
+    upsertHabitLog(userId, salawat.id, 1, today); // flat 2
     upsertHabitLog(userId, fajr.id, 1, today); // flat 15
-    upsertHabitLog(userId, salawat.id, 100, yesterday); // yesterday: excluded
+    upsertHabitLog(userId, salawat.id, 1, yesterday); // yesterday: excluded (2)
     upsertHabitLog(userId, elsewhere.id, 1, today); // another room: excluded
 
     const { body } = callProgress(telegramId);
-    assert.equal(body.todayPoints, 35);
+    assert.equal(body.todayPoints, 17);
     assert.equal(body.todayDate, today);
     // All-time is still room-scoped but spans every day.
-    assert.equal(body.totalPoints, 35 + 200);
+    assert.equal(body.totalPoints, 17 + 2);
   });
 
   it("counts points earned today against a habit deactivated since", () => {
     const room = makeRoom();
-    const habit = createHabit(room.id, "Retired habit", "binary", 7);
+    const habit = createHabit(room.id, "Retired habit", 7);
     const { telegramId, userId } = makeMember(room.id, "Asia/Hong_Kong");
 
     upsertHabitLog(userId, habit.id, 1, todayIn("Asia/Hong_Kong"));
@@ -120,18 +120,18 @@ describe("GET /api/progress — today's total", () => {
 
   it("moves to the user's own day the moment their timezone changes", () => {
     const room = makeRoom();
-    const habit = createHabit(room.id, "Timezone habit", "quantity", 3);
+    const habit = createHabit(room.id, "Timezone habit", 3);
     const { telegramId, userId } = makeMember(room.id, FAR_EAST);
 
     const eastDay = todayIn(FAR_EAST);
     const westDay = todayIn(FAR_WEST);
     assert.notEqual(eastDay, westDay);
 
-    upsertHabitLog(userId, habit.id, 4, eastDay); // 12 points, on the eastern day
+    upsertHabitLog(userId, habit.id, 1, eastDay); // 3 points, on the eastern day
 
     const east = callProgress(telegramId);
     assert.equal(east.body.todayDate, eastDay);
-    assert.equal(east.body.todayPoints, 12);
+    assert.equal(east.body.todayPoints, 3);
 
     updateUserProfile(telegramId, { timezone: FAR_WEST });
 
@@ -139,7 +139,7 @@ describe("GET /api/progress — today's total", () => {
     assert.equal(west.body.todayDate, westDay);
     // Same rows, different "today" — nothing was recomputed or migrated.
     assert.equal(west.body.todayPoints, 0);
-    assert.equal(west.body.totalPoints, 12);
+    assert.equal(west.body.totalPoints, 3);
   });
 
   it("falls back to the server timezone for a user who has never opened the app", () => {
@@ -175,25 +175,29 @@ describe("GET /api/progress — today's total", () => {
 });
 
 describe("GET /api/progress/week", () => {
-  it("returns the seven days of the calendar week from the chosen start day", () => {
+  it("returns Monday to Sunday, whatever the viewer's old week-start preference says", () => {
     const room = makeRoom();
-    createHabit(room.id, "Weekly habit", "binary", 5);
+    createHabit(room.id, "Daily habit", 5);
     const { telegramId } = makeMember(room.id, "Asia/Hong_Kong");
 
+    // The room's week is the one that counts now: a weekly habit scores in it
+    // and the weekly leaderboard resets on it, so the grid cannot be drawing a
+    // different one per viewer. week_start_day no longer moves any boundary.
     for (const weekStartDay of [0, 1, 6]) {
       updateUserProfile(telegramId, { weekStartDay });
       const { body } = callWeek(telegramId);
 
       assert.equal(body.days.length, 7);
       assert.equal(body.weekStart, body.days[0]);
-      assert.equal(body.weekStartDay, weekStartDay);
+      assert.equal(body.weekEnd, body.days[6]);
+      assert.equal(body.weekStartDay, 1);
       assert.equal(
         weekdayOfDate({
           year: Number(body.weekStart.slice(0, 4)),
           month: Number(body.weekStart.slice(5, 7)),
           day: Number(body.weekStart.slice(8, 10)),
         }),
-        weekStartDay
+        1
       );
       // Consecutive days, with today among them.
       for (let i = 1; i < 7; i++) {
@@ -206,12 +210,12 @@ describe("GET /api/progress/week", () => {
 
   it("marks logged days lit, future days future, and nothing else", () => {
     const room = makeRoom();
-    const habit = createHabit(room.id, "Tracked habit", "quantity", 4);
+    const habit = createHabit(room.id, "Tracked habit", 4);
     const { telegramId, userId } = makeMember(room.id, "Asia/Hong_Kong");
     updateUserProfile(telegramId, { weekStartDay: 1 });
 
     const week = callWeek(telegramId).body;
-    upsertHabitLog(userId, habit.id, 3, week.today);
+    upsertHabitLog(userId, habit.id, 1, week.today);
 
     const { body } = callWeek(telegramId);
     assert.equal(body.habits.length, 1);
@@ -230,7 +234,7 @@ describe("GET /api/progress/week", () => {
 
   it("greys out the days of this week before the member joined", () => {
     const room = makeRoom();
-    createHabit(room.id, "Joined midweek", "binary", 5);
+    createHabit(room.id, "Joined midweek", 5);
     const { telegramId, userId } = makeMember(room.id, "Asia/Hong_Kong");
     updateUserProfile(telegramId, { weekStartDay: 1 });
 
@@ -253,8 +257,8 @@ describe("GET /api/progress/week", () => {
 
   it("hides deactivated habits and answers empty between rooms", () => {
     const room = makeRoom();
-    const active = createHabit(room.id, "Still active", "binary", 5);
-    const retired = createHabit(room.id, "Deactivated", "binary", 5);
+    const active = createHabit(room.id, "Still active", 5);
+    const retired = createHabit(room.id, "Deactivated", 5);
     deactivateHabit(retired.id);
     const { telegramId, userId } = makeMember(room.id, "Asia/Hong_Kong");
 

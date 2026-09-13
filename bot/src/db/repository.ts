@@ -1,13 +1,14 @@
 import { db } from "./client.js";
 import { generateRoomPassword } from "../utils/roomPassword.js";
-import { streakFromLoggedDays } from "../utils/streak.js";
+import { streakFromLoggedDays, streakFromLoggedWeeks } from "../utils/streak.js";
+import { weekBoundsOfDateKey } from "../utils/dates.js";
 import type {
   CreateUserReminders,
   ExportRow,
   Habit,
   HabitCategory,
   HabitLog,
-  HabitType,
+  HabitPeriod,
   LeaderboardRow,
   PendingRegistration,
   PersonalHabit,
@@ -18,6 +19,7 @@ import type {
   TelegramProfile,
   User,
   UserRole,
+  WeeklyLeaderboardRow,
 } from "../types.js";
 
 export function getUserByTelegramId(telegramId: number): User | undefined {
@@ -1207,16 +1209,44 @@ export function resetAllChallengeData(): {
 }
 
 /**
- * quantity → value * points_weight; binary → flat points_weight (value is always 1).
- * Called once at write time in upsertHabitLog and frozen into habit_logs.points_earned —
- * never recompute from habits.points_weight when reading, so weight changes aren't retroactive.
+ * What one log row is worth: the habit's flat points_weight, unless a weekly
+ * habit has already banked this week somewhere else, in which case 0.
+ *
+ * Called once at write time in upsertHabitLog and frozen into
+ * habit_logs.points_earned — never recompute from habits.points_weight when
+ * reading, so weight changes aren't retroactive.
+ *
+ * `weekAlreadyBanked` is what makes "at most once a week" true: a daily habit
+ * always passes false, and for a weekly one upsertHabitLog passes true only
+ * when some *other* day of the same week already carries the weight.
  */
 export function computePoints(
-  habit: { type: HabitType; points_weight: number },
-  value: number
+  habit: { period: HabitPeriod; points_weight: number },
+  weekAlreadyBanked = false
 ): number {
-  if (habit.type === "quantity") return value * habit.points_weight;
+  if (habit.period === "weekly" && weekAlreadyBanked) return 0;
   return habit.points_weight;
+}
+
+/**
+ * The row of this habit's week that currently carries the points, if any.
+ * At most one exists — that is the invariant upsertHabitLog and deleteHabitLog
+ * maintain between them.
+ */
+function weekCarrierRow(
+  userId: number,
+  habitId: number,
+  logDate: string
+): HabitLog | undefined {
+  const { weekStart, weekEnd } = weekBoundsOfDateKey(logDate);
+  return db
+    .prepare(
+      `SELECT * FROM habit_logs
+       WHERE user_id = ? AND habit_id = ? AND log_date BETWEEN ? AND ?
+         AND points_earned > 0
+       LIMIT 1`
+    )
+    .get(userId, habitId, weekStart, weekEnd) as HabitLog | undefined;
 }
 
 export function getHabitById(id: number): Habit | undefined {
@@ -1232,24 +1262,35 @@ export function getHabitById(id: number): Habit | undefined {
 export function createHabit(
   roomId: number,
   name: string,
-  type: HabitType,
   pointsWeight: number,
-  category: HabitCategory | null = null
+  category: HabitCategory | null = null,
+  period: HabitPeriod = "daily",
+  description: string | null = null
 ): Habit {
   const result = db
     .prepare(
-      `INSERT INTO habits (room_id, name, type, points_weight, category) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO habits (room_id, name, description, period, points_weight, category)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(roomId, name, type, pointsWeight, category);
+    .run(roomId, name, description, period, pointsWeight, category);
   return getHabitById(Number(result.lastInsertRowid)) ?? (() => {
     throw new Error(`Failed to load habit just created (rowid ${result.lastInsertRowid})`);
   })();
 }
 
+/**
+ * No `period` here on purpose, and none accepted by PATCH /api/admin/habits:
+ * points_earned rows are frozen under whichever rule was in force when they
+ * were written, so flipping daily→weekly would leave a week holding seven
+ * daily awards that the new rule says should have been one. Changing the
+ * cadence means deactivating the habit and creating its replacement.
+ */
 export function updateHabit(
   id: number,
   patch: Partial<{
     name: string;
+    /** null clears the goal line; undefined leaves it alone. */
+    description: string | null;
     pointsWeight: number;
     isActive: boolean;
     /** null clears the category (a room that turned categories off). */
@@ -1262,15 +1303,17 @@ export function updateHabit(
   }
 
   const name = patch.name ?? current.name;
+  const description = patch.description !== undefined ? patch.description : current.description;
   const pointsWeight = patch.pointsWeight ?? current.points_weight;
   const isActive = patch.isActive !== undefined ? (patch.isActive ? 1 : 0) : current.is_active;
   const category = patch.category !== undefined ? patch.category : current.category;
 
   db.prepare(
     `UPDATE habits
-     SET name = ?, points_weight = ?, is_active = ?, category = ?, updated_at = datetime('now')
+     SET name = ?, description = ?, points_weight = ?, is_active = ?, category = ?,
+         updated_at = datetime('now')
      WHERE id = ?`
-  ).run(name, pointsWeight, isActive, category, id);
+  ).run(name, description, pointsWeight, isActive, category, id);
 
   return getHabitById(id) ?? (() => {
     throw new Error(`Failed to reload habit ${id} after update`);
@@ -1294,11 +1337,19 @@ export function deactivateHabit(id: number): Habit {
 }
 
 /**
- * Upsert a user's log for a habit on a given TIMEZONE-local day (YYYY-MM-DD).
- * Not cumulative: a second call for the same (user, habit, logDate) overwrites
- * value/points_earned rather than adding to them. Points are computed fresh from
- * the habit's current weight/type at the moment of this call and then frozen —
- * a later habits.points_weight change never touches an already-written row.
+ * Mark a habit done on one TIMEZONE-local day (YYYY-MM-DD).
+ *
+ * Not cumulative: a second call for the same (user, habit, logDate) rewrites the
+ * row rather than adding to it. Points are computed fresh from the habit's
+ * current weight at the moment of this call and then frozen — a later
+ * habits.points_weight change never touches an already-written row.
+ *
+ * A weekly habit keeps one extra promise: across the Monday-Sunday week
+ * containing logDate, exactly one row carries the weight and every other row
+ * carries 0. Marking Monday banks the points; marking Wednesday as well writes
+ * a second row worth nothing, because the week is already paid for. The whole
+ * check-and-write runs in one transaction, so two taps racing each other cannot
+ * both decide the week is unbanked and award it twice.
  */
 export function upsertHabitLog(
   userId: number,
@@ -1310,34 +1361,78 @@ export function upsertHabitLog(
   if (!habit) {
     throw new Error(`upsertHabitLog: habit ${habitId} not found`);
   }
-  const pointsEarned = computePoints(habit, value);
 
-  db.prepare(
-    `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-     ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
-       value = excluded.value,
-       points_earned = excluded.points_earned,
-       updated_at = excluded.updated_at`
-  ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned);
+  const write = db.transaction(() => {
+    const carrier = habit.period === "weekly" ? weekCarrierRow(userId, habitId, logDate) : undefined;
+    // Re-marking the day that already carries the week keeps it carrying: only
+    // some *other* day holding the points makes this row worth 0.
+    const weekAlreadyBanked = carrier !== undefined && carrier.log_date !== logDate;
+    const pointsEarned = computePoints(habit, weekAlreadyBanked);
 
-  return db
-    .prepare(
-      "SELECT * FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?"
-    )
-    .get(userId, habitId, logDate) as HabitLog;
+    db.prepare(
+      `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+       ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
+         value = excluded.value,
+         points_earned = excluded.points_earned,
+         updated_at = excluded.updated_at`
+    ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned);
+
+    return db
+      .prepare(
+        "SELECT * FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?"
+      )
+      .get(userId, habitId, logDate) as HabitLog;
+  });
+
+  return write();
 }
 
 /**
- * Delete this user's TIMEZONE-local-today log for a habit, if any. Idempotent —
- * a no-op when no such row exists. Deleting (rather than zeroing value/points_earned
- * in place) is what makes the day disappear from getHabitStreak and
+ * Delete this user's log for a habit on one day, if any. Idempotent — a no-op
+ * when no such row exists. Deleting (rather than zeroing value/points_earned in
+ * place) is what makes the day disappear from getHabitStreak and
  * getUserHabitLogsForDate, both of which key off row presence, not value.
+ *
+ * For a weekly habit, deleting the row that carries the week hands the points to
+ * the earliest day of that week still marked, instead of letting them evaporate:
+ * a member who marked Monday and Wednesday and then unmarks Monday has still
+ * done the habit this week, and their leaderboard total must not move. The week
+ * only loses its points when its last marked day goes.
+ *
+ * The handover passes on the *deleted row's* points_earned rather than the
+ * habit's current weight, so an admin's later weight change stays non-retroactive
+ * here as everywhere else.
  */
 export function deleteHabitLog(userId: number, habitId: number, logDate: string): void {
-  db.prepare(
-    "DELETE FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?"
-  ).run(userId, habitId, logDate);
+  const remove = db.transaction(() => {
+    const row = db
+      .prepare("SELECT * FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?")
+      .get(userId, habitId, logDate) as HabitLog | undefined;
+    if (!row) return;
+
+    db.prepare("DELETE FROM habit_logs WHERE id = ?").run(row.id);
+    if (row.points_earned <= 0) return;
+
+    const habit = getHabitById(habitId);
+    if (habit?.period !== "weekly") return;
+
+    const { weekStart, weekEnd } = weekBoundsOfDateKey(logDate);
+    const successor = db
+      .prepare(
+        `SELECT id FROM habit_logs
+         WHERE user_id = ? AND habit_id = ? AND log_date BETWEEN ? AND ?
+         ORDER BY log_date ASC, id ASC
+         LIMIT 1`
+      )
+      .get(userId, habitId, weekStart, weekEnd) as { id: number } | undefined;
+    if (!successor) return;
+
+    db.prepare(
+      "UPDATE habit_logs SET points_earned = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(row.points_earned, successor.id);
+  });
+  remove();
 }
 
 export function getUserTotalPoints(userId: number, roomId?: number): number {
@@ -1414,6 +1509,63 @@ export function getHabitStreak(userId: number, habitId: number, asOfDate: string
   return streakFromLoggedDays(new Set(rows.map((r) => r.log_date)), asOfDate);
 }
 
+/**
+ * Consecutive weeks a weekly habit was marked in, as of the week starting at
+ * `currentWeekStart`. Counted in *weeks*, not days — the client labels it
+ * "weeks" so it can never be read as a day count.
+ *
+ * Every marked day collapses to the Monday of its week before counting, so
+ * marking three days of one week is still one week of streak.
+ */
+export function getWeeklyHabitStreak(
+  userId: number,
+  habitId: number,
+  currentWeekStart: string
+): number {
+  const rows = db
+    .prepare("SELECT log_date FROM habit_logs WHERE user_id = ? AND habit_id = ?")
+    .all(userId, habitId) as { log_date: string }[];
+  const metWeeks = new Set(rows.map((r) => weekBoundsOfDateKey(r.log_date).weekStart));
+  return streakFromLoggedWeeks(metWeeks, currentWeekStart);
+}
+
+/**
+ * How many days of one week this habit is marked on. The number the weekly
+ * streak view puts on a weekly habit's badge: normally 0 or 1, more when the
+ * member marked it on several days, and never a points figure — only the first
+ * of those days is actually worth anything (see upsertHabitLog).
+ */
+export function getWeeklyHabitLogCount(
+  userId: number,
+  habitId: number,
+  weekStart: string,
+  weekEnd: string
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM habit_logs
+       WHERE user_id = ? AND habit_id = ? AND log_date BETWEEN ? AND ?`
+    )
+    .get(userId, habitId, weekStart, weekEnd) as { n: number };
+  return row.n;
+}
+
+/** Which habits of this room the user has a log for anywhere in [weekStart, weekEnd]. */
+export function getHabitIdsLoggedInWeek(
+  userId: number,
+  roomId: number,
+  weekStart: string,
+  weekEnd: string
+): Set<number> {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT habit_id FROM habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date BETWEEN ? AND ?`
+    )
+    .all(userId, roomId, weekStart, weekEnd) as { habit_id: number }[];
+  return new Set(rows.map((r) => r.habit_id));
+}
+
 /* ------------------------------------------------------------------------- *
  * Personal habits
  *
@@ -1447,30 +1599,26 @@ export function createPersonalHabit(
   userId: number,
   roomId: number,
   name: string,
-  type: HabitType,
   category: HabitCategory | null
 ): PersonalHabit {
   const result = db
     .prepare(
-      `INSERT INTO personal_habits (user_id, room_id, name, type, category)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO personal_habits (user_id, room_id, name, category)
+       VALUES (?, ?, ?, ?)`
     )
-    .run(userId, roomId, name, type, category);
+    .run(userId, roomId, name, category);
   return getPersonalHabitById(Number(result.lastInsertRowid))!;
 }
 
 export interface PersonalHabitUpdate {
   name?: string;
-  type?: HabitType;
   /** undefined leaves it alone; null clears it (categories off). */
   category?: HabitCategory | null;
 }
 
 /**
- * Read-modify-write, matching updateHabit. Changing the type keeps existing
- * logs: a quantity value read as "done" under a binary habit is still the
- * member's own record of that day, and silently deleting their history would be
- * a worse surprise than an odd-looking number.
+ * Read-modify-write, matching updateHabit. There is no period to change: a
+ * personal habit is always a daily done-or-not.
  */
 export function updatePersonalHabit(id: number, update: PersonalHabitUpdate): PersonalHabit {
   const current = getPersonalHabitById(id);
@@ -1478,11 +1626,10 @@ export function updatePersonalHabit(id: number, update: PersonalHabitUpdate): Pe
 
   db.prepare(
     `UPDATE personal_habits
-     SET name = ?, type = ?, category = ?, updated_at = datetime('now')
+     SET name = ?, category = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(
     update.name ?? current.name,
-    update.type ?? current.type,
     update.category === undefined ? current.category : update.category,
     id
   );
@@ -1591,34 +1738,46 @@ export function getPersonalHabitLogDatesInRange(
  * from another room keeps their old logs (PRD §1) but does not carry the points
  * into this leaderboard.
  */
-function leaderboardQuery(extraColumns: string, roomId: number | undefined): unknown[] {
+function leaderboardQuery(
+  extraColumns: string,
+  roomId: number | undefined,
+  /** Inclusive YYYY-MM-DD window on log_date, or undefined for all time. */
+  window?: { from: string; to: string }
+): unknown[] {
   const columns = `u.id AS user_id,
               u.telegram_id AS telegram_id,
               u.nickname AS nickname,
               u.real_name AS real_name,${extraColumns}
               COALESCE(SUM(hl.points_earned), 0) AS total`;
 
+  // The date window belongs in the JOIN's ON clause, never in WHERE: in WHERE it
+  // would turn the LEFT JOIN into an inner one and drop every member who scored
+  // nothing this week — and the whole point of the weekly board is that it shows
+  // the room's full roster in rank order, zeroes included.
+  const windowOn = window ? " AND hl.log_date BETWEEN ? AND ?" : "";
+  const windowParams = window ? [window.from, window.to] : [];
+
   if (roomId === undefined) {
     return db
       .prepare(
         `SELECT ${columns}
          FROM users u
-         LEFT JOIN habit_logs hl ON hl.user_id = u.id
+         LEFT JOIN habit_logs hl ON hl.user_id = u.id${windowOn}
          GROUP BY u.id
          ORDER BY total DESC, u.nickname ASC`
       )
-      .all();
+      .all(...windowParams);
   }
   return db
     .prepare(
       `SELECT ${columns}
        FROM users u
-       LEFT JOIN habit_logs hl ON hl.user_id = u.id AND hl.room_id = ?
+       LEFT JOIN habit_logs hl ON hl.user_id = u.id AND hl.room_id = ?${windowOn}
        WHERE u.current_room_id = ?
        GROUP BY u.id
        ORDER BY total DESC, u.nickname ASC`
     )
-    .all(roomId, roomId);
+    .all(roomId, ...windowParams, roomId);
 }
 
 /**
@@ -1628,6 +1787,26 @@ function leaderboardQuery(extraColumns: string, roomId: number | undefined): unk
  */
 export function getLeaderboard(roomId?: number): LeaderboardRow[] {
   return leaderboardQuery("", roomId) as LeaderboardRow[];
+}
+
+/**
+ * The same board over one Monday-Sunday week: every current member of the room
+ * in rank order, with the points they earned inside [weekStart, weekEnd] — daily
+ * and weekly habits together, since a weekly habit's points sit on the single
+ * log_date that banked them.
+ *
+ * There is nothing to reset on Monday and nothing cached to invalidate: moving
+ * the window is the reset.
+ */
+export function getWeeklyLeaderboard(
+  roomId: number,
+  weekStart: string,
+  weekEnd: string
+): WeeklyLeaderboardRow[] {
+  return leaderboardQuery("", roomId, {
+    from: weekStart,
+    to: weekEnd,
+  }) as WeeklyLeaderboardRow[];
 }
 
 /** Same ranking as getLeaderboard, plus raw Telegram identity fields, for the admin CSV export. */

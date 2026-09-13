@@ -47,3 +47,34 @@ export function startOfWeek(parts: DateParts, weekStartDay: number): DateParts {
   const daysIntoWeek = (weekdayOfDate(parts) - weekStartDay + 7) % 7;
   return addCalendarDays(parts, -daysIntoWeek);
 }
+
+/**
+ * The day every calendar week in this app starts on: Monday. One constant, not
+ * a per-user preference — a weekly habit scores once per week and the weekly
+ * leaderboard resets once per week, so two members of the same room have to
+ * agree on where that week begins even when they live in different countries.
+ *
+ * (users.week_start_day predates this and no longer moves any week boundary.)
+ */
+export const WEEK_START_DAY = 1;
+
+/** Inclusive first and last day of the Monday-Sunday week containing `parts`. */
+export function weekBounds(parts: DateParts): { weekStart: string; weekEnd: string } {
+  const start = startOfWeek(parts, WEEK_START_DAY);
+  return { weekStart: formatDateParts(start), weekEnd: formatDateParts(addCalendarDays(start, 6)) };
+}
+
+/**
+ * weekBounds for a stored YYYY-MM-DD key — which bucket a habit_logs.log_date
+ * falls in. Pure calendar arithmetic on the string: a log's week never depends
+ * on a timezone, only on the date it was written under. Timezones enter exactly
+ * once, in getCurrentWeekBounds, to decide which week is *now*.
+ */
+export function weekBoundsOfDateKey(dateKey: string): { weekStart: string; weekEnd: string } {
+  return weekBounds(parseDateKey(dateKey));
+}
+
+/** The Monday of the week `weeks` weeks before the one starting at `weekStart`. */
+export function shiftWeekStart(weekStart: string, weeks: number): string {
+  return formatDateParts(addCalendarDays(parseDateKey(weekStart), weeks * 7));
+}

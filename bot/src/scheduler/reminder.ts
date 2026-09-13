@@ -3,13 +3,14 @@ import { InlineKeyboard, type Bot } from "grammy";
 import { config, formatReminderHhMm, isValidReminderTime } from "../config.js";
 import {
   enqueueMessageDeletion,
+  getHabitIdsLoggedInWeek,
   getUserHabitLogsForDate,
   getUserPersonalHabitLogsForDate,
   getUsersWithRemindersEnabled,
   listHabits,
   listPersonalHabits,
 } from "../db/repository.js";
-import { getUserTodayKey } from "../utils/challenge.js";
+import { getCurrentWeekBounds, getUserTodayKey } from "../utils/challenge.js";
 import type { MyContext } from "../context.js";
 import type { User } from "../types.js";
 
@@ -37,42 +38,76 @@ function effectiveReminderTime(user: User): string {
   return formatReminderHhMm(config.reminderTime);
 }
 
+export interface UnloggedHabits {
+  /** Daily room habits and the member's own, with no log for today. */
+  today: string[];
+  /** Weekly room habits with no log anywhere in the current week. */
+  thisWeek: string[];
+}
+
 /**
- * Names of everything this user still has to log today — the room's active
- * habits and their own personal ones, in one list. getUsersWithRemindersEnabled
- * never returns a roomless user, so there is always a room to scope to.
+ * What this user still has to log, split by the deadline they are actually up
+ * against. getUsersWithRemindersEnabled never returns a roomless user, so there
+ * is always a room to scope to.
  *
- * The personal ones are mixed in rather than listed apart: from the member's
- * side both are "things I meant to do today", and the reminder is a private DM
- * to them, so nothing about their private list leaks anywhere.
+ * The two lists exist because the two nudges mean different things: a daily
+ * habit missed tonight is gone at midnight, while a weekly one is merely not
+ * done *yet* and may have days left. Telling a member on Tuesday that they
+ * "still have to log" their weekly khatm in the same breath as tonight's Fajr
+ * would make the urgent line cry wolf.
+ *
+ * Personal habits are mixed into `today` rather than listed apart: from the
+ * member's side they are "things I meant to do today" like any other, and the
+ * reminder is a private DM, so nothing about their private list leaks anywhere.
+ * They are always daily, so they never reach `thisWeek`.
  */
-function unloggedHabitNames(user: User, todayKey: string): string[] {
+function unloggedHabits(user: User, todayKey: string, now: Date): UnloggedHabits {
   const roomId = user.current_room_id ?? undefined;
   const activeHabits = listHabits({ activeOnly: true, roomId });
   const todayLogs = getUserHabitLogsForDate(user.id, todayKey);
-  const names = activeHabits
-    .filter((habit) => !todayLogs.has(habit.id))
+
+  const today = activeHabits
+    .filter((habit) => habit.period !== "weekly" && !todayLogs.has(habit.id))
     .map((habit) => habit.name);
 
+  let thisWeek: string[] = [];
   if (roomId !== undefined) {
+    const { weekStart, weekEnd } = getCurrentWeekBounds(now);
+    const loggedThisWeek = getHabitIdsLoggedInWeek(user.id, roomId, weekStart, weekEnd);
+    thisWeek = activeHabits
+      .filter((habit) => habit.period === "weekly" && !loggedThisWeek.has(habit.id))
+      .map((habit) => habit.name);
+
     const personalLogs = getUserPersonalHabitLogsForDate(user.id, todayKey);
     for (const habit of listPersonalHabits(user.id, roomId)) {
-      if (!personalLogs.has(habit.id)) names.push(habit.name);
+      if (!personalLogs.has(habit.id)) today.push(habit.name);
     }
   }
-  return names;
+
+  return { today, thisWeek };
 }
 
-/** DM text for a user given the active habits they haven't logged yet today. */
-export function buildReminderMessage(unloggedHabitNames: string[]): string {
-  if (unloggedHabitNames.length === 0) {
+/** DM text for a user given what they have not logged yet. */
+export function buildReminderMessage(unlogged: UnloggedHabits): string {
+  const { today, thisWeek } = unlogged;
+  if (today.length === 0 && thisWeek.length === 0) {
     return "✅ You're all caught up on today's habits. Great job!";
   }
-  return [
-    "🌙 Don't forget to log today's habits!",
-    "",
-    `Still to log: ${unloggedHabitNames.join(", ")}`,
-  ].join("\n");
+
+  const lines: string[] = [];
+  if (today.length > 0) {
+    lines.push("🌙 Don't forget to log today's habits!", "", `Still to log: ${today.join(", ")}`);
+  } else {
+    // Everything due today is done — lead with that rather than opening on a
+    // scolding line the member has already earned their way out of.
+    lines.push("✅ Today's habits are all logged.");
+  }
+
+  if (thisWeek.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`Still open this week: ${thisWeek.join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 export async function sendDueReminders(
@@ -103,7 +138,7 @@ export async function sendDueReminders(
         // "Still unlogged today" is asked in the user's own day, the same one
         // their logs are written under — so someone pinged at 20:00 local is
         // told about the day they are actually still able to log.
-        const text = buildReminderMessage(unloggedHabitNames(user, getUserTodayKey(user, now)));
+        const text = buildReminderMessage(unloggedHabits(user, getUserTodayKey(user, now), now));
         const sent = await bot.api.sendMessage(user.telegram_id, text, {
           reply_markup: REMINDER_KEYBOARD,
         });

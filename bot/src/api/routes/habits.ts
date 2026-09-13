@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { HABIT_LOG_RATE_LIMIT_PER_MINUTE, MAX_HABIT_VALUE } from "../../config.js";
+import { HABIT_LOG_RATE_LIMIT_PER_MINUTE } from "../../config.js";
 import { deleteHabitLog, listHabits, upsertHabitLog } from "../../db/repository.js";
 import { getUserTodayKey } from "../../utils/challenge.js";
 import { parseIdParam } from "../params.js";
@@ -12,7 +12,9 @@ import { getRoomHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope
  * nothing to log against right now (PRD §3a).
  *
  * `category` is echoed as stored — the client decides whether to group by it,
- * from the room's own categoriesEnabled (GET /api/progress).
+ * from the room's own categoriesEnabled (GET /api/progress). `period` says
+ * whether a habit scores once a day or once a week; weekly habits are listed
+ * among the daily ones, in the same categories, and are not a separate section.
  */
 export function listHabitsRoute(req: Request, res: Response): void {
   const caller = resolveCallerRoom(req);
@@ -24,7 +26,8 @@ export function listHabitsRoute(req: Request, res: Response): void {
   const habits = listHabits({ activeOnly: true, roomId: caller.roomId }).map((habit) => ({
     id: habit.id,
     name: habit.name,
-    type: habit.type,
+    description: habit.description,
+    period: habit.period,
     pointsWeight: habit.points_weight,
     category: habit.category,
   }));
@@ -60,29 +63,15 @@ export function logHabitRoute(req: Request, res: Response): void {
     return;
   }
 
+  // Every habit is done-or-not, so the only value a log can carry is 1. The
+  // field is still accepted (and still validated) so a Mini App build that
+  // predates the change keeps working by posting `{value: 1}`.
   const body = req.body ?? {};
-  let value: number;
-  if (habit.type === "binary") {
-    if (body.value === undefined || body.value === null) {
-      value = 1;
-    } else if (body.value === 1) {
-      value = 1;
-    } else {
-      res.status(400).json({ success: false, error: "invalid_value" });
-      return;
-    }
-  } else {
-    if (
-      typeof body.value !== "number" ||
-      !Number.isInteger(body.value) ||
-      body.value < 0 ||
-      body.value > MAX_HABIT_VALUE
-    ) {
-      res.status(400).json({ success: false, error: "invalid_value" });
-      return;
-    }
-    value = body.value;
+  if (body.value !== undefined && body.value !== null && body.value !== 1) {
+    res.status(400).json({ success: false, error: "invalid_value" });
+    return;
   }
+  const value = 1;
 
   if (!allowRequest(req.telegramId, HABIT_LOG_RATE_LIMIT_PER_MINUTE)) {
     res.status(429).json({ success: false, error: "rate_limited" });

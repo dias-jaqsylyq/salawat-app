@@ -1,9 +1,10 @@
 import type { Request, Response } from "express";
 import { createHabit, listHabits, updateHabit } from "../../db/repository.js";
-import type { Habit, HabitType } from "../../types.js";
+import type { Habit, HabitPeriod } from "../../types.js";
 import {
   categoryForCreate,
   checkCategory,
+  checkDescription,
   isValidHabitName,
 } from "../habitValidation.js";
 import { parseIdParam } from "../params.js";
@@ -15,7 +16,8 @@ function habitResponse(habit: Habit) {
   return {
     id: habit.id,
     name: habit.name,
-    type: habit.type,
+    description: habit.description,
+    period: habit.period,
     pointsWeight: habit.points_weight,
     category: habit.category,
     isActive: habit.is_active === 1,
@@ -38,8 +40,9 @@ export function listAdminHabitsRoute(req: Request, res: Response): void {
 
 /**
  * POST /api/admin/habits — create a habit in the caller's own room.
- * Body: `{name, type, pointsWeight, category?}`, where `category` is required
- * when the room has categories enabled and rejected when it does not.
+ * Body: `{name, pointsWeight, category?, period?, description?}`, where
+ * `category` is required when the room has categories enabled and rejected when
+ * it does not, and `period` defaults to "daily".
  */
 export function createHabitRoute(req: Request, res: Response): void {
   const body = req.body ?? {};
@@ -52,14 +55,25 @@ export function createHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const type: unknown = body.type;
-  if (type !== "quantity" && type !== "binary") {
-    res.status(400).json({ success: false, error: "invalid_type" });
+  if (!isValidPointsWeight(body.pointsWeight)) {
+    res.status(400).json({ success: false, error: "invalid_points_weight" });
     return;
   }
 
-  if (!isValidPointsWeight(body.pointsWeight)) {
-    res.status(400).json({ success: false, error: "invalid_points_weight" });
+  // Omitted means daily: a room that never thinks about cadence keeps the
+  // behaviour it already had.
+  const rawPeriod: unknown = body.period ?? "daily";
+  if (rawPeriod !== "daily" && rawPeriod !== "weekly") {
+    res.status(400).json({ success: false, error: "invalid_period" });
+    return;
+  }
+
+  const describedCheck = checkDescription(
+    body.description,
+    Object.prototype.hasOwnProperty.call(body, "description")
+  );
+  if (!describedCheck.ok) {
+    res.status(400).json({ success: false, error: describedCheck.error });
     return;
   }
 
@@ -79,18 +93,25 @@ export function createHabitRoute(req: Request, res: Response): void {
   const habit = createHabit(
     caller.roomId,
     body.name.trim(),
-    type as HabitType,
     body.pointsWeight,
-    category
+    category,
+    rawPeriod as HabitPeriod,
+    describedCheck.description ?? null
   );
   res.status(201).json(habitResponse(habit));
 }
 
 /**
  * PATCH /api/admin/habits/:id — edit a habit of the caller's own room. Body:
- * `{name?, pointsWeight?, isActive?, category?}`. A habit belonging to another
- * room 404s: being an admin of your room is never authority over someone
- * else's (PRD §3a).
+ * `{name?, description?, pointsWeight?, isActive?, category?}`. A habit
+ * belonging to another room 404s: being an admin of your room is never
+ * authority over someone else's (PRD §3a).
+ *
+ * `period` is deliberately not editable. Points are frozen into each log row
+ * under whichever rule was in force when it was written, so turning a daily
+ * habit weekly halfway through would leave past weeks holding seven awards the
+ * new rule says should have been one. Changing cadence means deactivating the
+ * habit and creating its replacement — the same rule the retired `type` had.
  *
  * Non-destructive and reversible (unlike POST /api/admin/reset), so no
  * YES-confirm needed.
@@ -112,12 +133,19 @@ export function patchHabitRoute(req: Request, res: Response): void {
 
   const body = req.body ?? {};
   const hasName = Object.prototype.hasOwnProperty.call(body, "name");
+  const hasDescription = Object.prototype.hasOwnProperty.call(body, "description");
   const hasPointsWeight = Object.prototype.hasOwnProperty.call(body, "pointsWeight");
   const hasIsActive = Object.prototype.hasOwnProperty.call(body, "isActive");
   const hasCategory = Object.prototype.hasOwnProperty.call(body, "category");
 
-  if (!hasName && !hasPointsWeight && !hasIsActive && !hasCategory) {
+  if (!hasName && !hasDescription && !hasPointsWeight && !hasIsActive && !hasCategory) {
     res.status(400).json({ success: false, error: "invalid_body" });
+    return;
+  }
+
+  const describedCheck = checkDescription(body.description, hasDescription);
+  if (!describedCheck.ok) {
+    res.status(400).json({ success: false, error: describedCheck.error });
     return;
   }
 
@@ -158,6 +186,12 @@ export function patchHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const habit = updateHabit(id, { name, pointsWeight, isActive, category: checked.category });
+  const habit = updateHabit(id, {
+    name,
+    description: describedCheck.description,
+    pointsWeight,
+    isActive,
+    category: checked.category,
+  });
   res.json(habitResponse(habit));
 }

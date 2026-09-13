@@ -1,4 +1,13 @@
-export type HabitType = "quantity" | "binary";
+/**
+ * How often one completion of a habit is worth points. Every habit is
+ * done-or-not — the old "quantity" type, with its number box, is retired — so
+ * this is the only axis a habit varies on. Mirrors HabitPeriod in salawat-bot.
+ *
+ * "weekly" scores once per Monday-Sunday week however many days of that week
+ * the member marks; the extra marks are real (the weekly view counts them) and
+ * simply worth nothing.
+ */
+export type HabitPeriod = "daily" | "weekly";
 
 /**
  * Room-scoped habit category. Only meaningful while the room has categories
@@ -21,7 +30,12 @@ export interface Room {
 export interface Habit {
   id: number;
   name: string;
-  type: HabitType;
+  /**
+   * The admin's free-text goal line ("min 30 min"), or null. Shown to members
+   * beside the name and nothing more: it scores nothing and gates nothing.
+   */
+  description: string | null;
+  period: HabitPeriod;
   pointsWeight: number;
   /**
    * Echoed as stored: null in a categories-disabled room, and also null for a
@@ -43,7 +57,7 @@ export interface Habit {
 export interface PersonalHabit {
   id: number;
   name: string;
-  type: HabitType;
+  /** No period and no description: a personal habit is always a daily yes/no. */
   category: HabitCategory | null;
   createdAt: string;
   updatedAt: string;
@@ -78,6 +92,8 @@ export interface TodayPersonalHabitEntry {
 export interface PersonalHabitStreak {
   personalHabitId: number;
   streak: number;
+  /** Always "days": personal habits are daily-only. */
+  unit: "days";
 }
 
 export interface AdminHabit extends Habit {
@@ -110,6 +126,18 @@ export interface TodayHabitEntry {
 export interface HabitStreak {
   habitId: number;
   streak: number;
+  /**
+   * What `streak` counts. A weekly habit's run is measured in weeks, and the
+   * badge has to say so — a bare 3 next to a daily habit's 3 would read as
+   * three days.
+   */
+  unit: "days" | "weeks";
+  /**
+   * Weekly habits only: how many days of the current week it is marked on.
+   * Normally 0 or 1, more when the member marked it on several days — of which
+   * only the first was worth any points.
+   */
+  weekCount?: number;
 }
 
 /**
@@ -142,18 +170,39 @@ export interface WeekHabitRow {
   days: WeekDay[];
 }
 
+/**
+ * A weekly habit in the weekly view. Deliberately not a WeekHabitRow: a week is
+ * one unit for these, so seven cells would invite reading six unlit days as six
+ * misses. One badge for the whole week instead.
+ */
+export interface WeeklyHabitSummary {
+  habitId: number;
+  name: string;
+  description: string | null;
+  /** Days of this week it is marked on — usually 0 or 1, sometimes more. */
+  count: number;
+  met: boolean;
+  /** Consecutive weeks met, counted in weeks. */
+  streakWeeks: number;
+}
+
 export interface WeeklyProgressResponse {
+  /** Monday of the current week; the whole room shares one week. */
   weekStart: string;
-  /** 0 = Sunday … 6 = Saturday. */
+  /** Sunday of the same week. */
+  weekEnd: string;
+  /** Always 1 (Monday) — kept so older parsing keeps working. */
   weekStartDay: number;
   today: string;
   /** The week's seven dates, for the weekday header. */
   days: string[];
   /**
-   * One row per active room habit followed by one per personal habit — flat,
-   * never grouped by category and never split by kind.
+   * One row per active *daily* room habit followed by one per personal habit —
+   * flat, never grouped by category and never split by kind.
    */
   habits: WeekHabitRow[];
+  /** The room's weekly habits, one badge each rather than a row of seven. */
+  weeklyHabits: WeeklyHabitSummary[];
 }
 
 export type ProgressResponse = { registered: false } | RegisteredProgress;
@@ -176,21 +225,40 @@ export interface RegisteredProgress {
   personalStreaks: PersonalHabitStreak[];
   /** Echoed from the profile so the screen picks a streak shape once. */
   streakDisplay: StreakDisplay;
+  /** Always 1 (Monday) — no longer a per-viewer preference. */
   weekStartDay: number;
+  /** The current Monday-Sunday week: what weekly habits and the board score in. */
+  weekStart: string;
+  weekEnd: string;
   /** True when the user is registered but has not provided a real name yet. */
   needsRealName: boolean;
 }
 
+/**
+ * One row of the member-facing weekly board.
+ *
+ * `points` is present on the viewer's own row and **absent** on everyone
+ * else's — not zero, not null. A member sees the whole room in rank order and
+ * only their own figure, so a missing key is the shape the server actually
+ * sends and the one this type has to admit.
+ */
 export interface LeaderboardEntry {
   nickname: string;
-  totalPoints: number;
   rank: number;
   /** Server-computed: true when this row is the authenticated viewer. */
   isYou: boolean;
+  /** Only ever set when `isYou`. */
+  points?: number;
 }
+
+/** Which window a board covers. Members only ever get "weekly". */
+export type LeaderboardPeriod = "weekly" | "all-time";
 
 export interface LeaderboardResponse {
   leaderboard: LeaderboardEntry[];
+  /** The Monday-Sunday week this board covers, for the header. */
+  weekStart: string;
+  weekEnd: string;
 }
 
 /**
@@ -203,11 +271,17 @@ export interface LeaderboardResponse {
  * optional here precisely because a participant's rows never have them — the
  * server does not send a member's real name to their room-mates.
  */
+/**
+ * The union of what the two boards return, as the screen renders them.
+ *
+ * `points` is optional because a member may not see other people's, and the
+ * admin-only fields are optional because a member never receives them at all.
+ */
 export interface LeaderboardMember {
   rank: number;
   nickname: string;
-  totalPoints: number;
   isYou: boolean;
+  points?: number;
   realName?: string | null;
   telegramId?: number;
   isRoomAdmin?: boolean;
@@ -289,6 +363,10 @@ export interface AdminLeaderboardEntry {
 
 export interface AdminLeaderboardResponse {
   leaderboard: AdminLeaderboardEntry[];
+  period: LeaderboardPeriod;
+  /** The current week, echoed in both periods so the header never has to guess. */
+  weekStart: string;
+  weekEnd: string;
 }
 
 /** Response of promote/demote — the target's admin status after the change. */

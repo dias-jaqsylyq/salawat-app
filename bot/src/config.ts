@@ -36,8 +36,6 @@ export function isValidReminderTime(value: string): boolean {
   }
 }
 
-/** Per-log quantity-habit value ceiling (friend-group sanity cap). */
-export const MAX_HABIT_VALUE = 10_000;
 
 /** Max POST /api/habits/:id/log requests per telegram user per rolling minute. */
 export const HABIT_LOG_RATE_LIMIT_PER_MINUTE = 30;

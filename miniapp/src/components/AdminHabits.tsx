@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
-import type { AdminHabit, HabitCategory, HabitType } from "../api/types.ts";
+import type { AdminHabit, HabitCategory, HabitPeriod } from "../api/types.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
-import HabitTypePicker from "./HabitTypePicker.tsx";
+import HabitPeriodPicker from "./HabitPeriodPicker.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,42 @@ interface Props {
 /** Must stay in sync with salawat-bot adminHabits.ts. */
 const NAME_MAX_LENGTH = 100;
 const MAX_POINTS_WEIGHT = 1_000_000;
+
+/** Mirrors DESCRIPTION_MAX_LENGTH in salawat-bot. */
+const DESCRIPTION_MAX_LENGTH = 200;
+
+/**
+ * The optional goal line. Deliberately not validated beyond its length: it is a
+ * note to the member, so anything an admin wants to write in it is correct.
+ */
+function GoalLineField({
+  id,
+  value,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={id}>Goal (optional)</Label>
+      <Input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        maxLength={DESCRIPTION_MAX_LENGTH}
+        disabled={disabled}
+        placeholder="e.g. min 30 min"
+      />
+      <p className="text-xs text-muted-foreground">
+        Shown to members next to the habit. It's a note, not a rule — points don't depend on it.
+      </p>
+    </div>
+  );
+}
 
 function validateHabitForm(name: string, pointsWeight: string): string | null {
   const trimmed = name.trim();
@@ -49,6 +85,7 @@ interface EditRowProps {
 
 function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }: EditRowProps) {
   const [name, setName] = useState(habit.name);
+  const [description, setDescription] = useState(habit.description ?? "");
   const [pointsWeight, setPointsWeight] = useState(String(habit.pointsWeight));
   const [category, setCategory] = useState<HabitCategory | null>(habit.category);
   const [saving, setSaving] = useState(false);
@@ -69,6 +106,9 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
     try {
       const updated = await patchHabit(initData, habit.id, {
         name: name.trim(),
+        // Empty means "no goal line" — sent as null so clearing the box
+        // actually clears it rather than leaving the old text in place.
+        description: description.trim() === "" ? null : description.trim(),
         pointsWeight: Number(pointsWeight),
         // Omitted when the room has categories off — the API rejects a category
         // it isn't using.
@@ -94,6 +134,12 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
           disabled={saving}
         />
       </div>
+      <GoalLineField
+        id={`habit-description-${habit.id}`}
+        value={description}
+        disabled={saving}
+        onChange={setDescription}
+      />
       <div className="space-y-2">
         <Label htmlFor={`habit-weight-${habit.id}`}>Points</Label>
         <Input
@@ -114,6 +160,13 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
           onChange={setCategory}
         />
       )}
+      {/* Shown, not offered: the points already frozen into past logs were
+          scored under this cadence, so switching it now would make old weeks
+          mean something they never meant. Deactivate and recreate instead. */}
+      <p className="text-xs text-muted-foreground">
+        Scores {habit.period === "weekly" ? "once a week" : "every day"}. To change that,
+        deactivate this habit and create a new one.
+      </p>
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex gap-2">
         <Button type="button" size="sm" onClick={() => void handleSave()} disabled={saving}>
@@ -185,16 +238,25 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
             >
               {habit.name}
             </span>
-            <Badge variant="outline" className="shrink-0">
-              {habit.type}
-            </Badge>
+            {habit.period === "weekly" && (
+              <Badge variant="outline" className="shrink-0">
+                weekly
+              </Badge>
+            )}
             {categoriesEnabled && habit.category && (
               <Badge variant="outline" className="shrink-0">
                 {habit.category}
               </Badge>
             )}
           </span>
-          <span className="text-xs text-muted-foreground">{habit.pointsWeight} pts</span>
+          <span className="text-xs text-muted-foreground">
+            {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
+          </span>
+          {habit.description && (
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+              {habit.description}
+            </span>
+          )}
           {/* Categories were turned on after this habit was made — the server
               keeps the old value hidden until the admin re-confirms it (PRD §0). */}
           {categoriesEnabled && !habit.category && (
@@ -226,7 +288,8 @@ function CreateHabitForm({
   onCreated: (habit: AdminHabit) => void;
 }) {
   const [name, setName] = useState("");
-  const [type, setType] = useState<HabitType>("quantity");
+  const [description, setDescription] = useState("");
+  const [period, setPeriod] = useState<HabitPeriod>("daily");
   const [pointsWeight, setPointsWeight] = useState("");
   const [category, setCategory] = useState<HabitCategory | null>(null);
   const [creating, setCreating] = useState(false);
@@ -249,13 +312,15 @@ function CreateHabitForm({
     try {
       const habit = await createHabit(initData, {
         name: name.trim(),
-        type,
+        description: description.trim() === "" ? null : description.trim(),
+        period,
         pointsWeight: Number(pointsWeight),
         ...(categoriesEnabled && category !== null ? { category } : {}),
       });
       onCreated(habit);
       setName("");
-      setType("quantity");
+      setDescription("");
+      setPeriod("daily");
       setPointsWeight("");
       setCategory(null);
     } catch (err) {
@@ -283,11 +348,18 @@ function CreateHabitForm({
               onChange={(e) => setName(e.target.value)}
               maxLength={NAME_MAX_LENGTH}
               disabled={creating}
-              placeholder="e.g. Salawat count"
+              placeholder="e.g. Salawat"
             />
           </div>
 
-          <HabitTypePicker value={type} disabled={creating} onChange={setType} />
+          <GoalLineField
+            id="new-habit-description"
+            value={description}
+            disabled={creating}
+            onChange={setDescription}
+          />
+
+          <HabitPeriodPicker value={period} disabled={creating} onChange={setPeriod} />
 
           <div className="space-y-2">
             <Label htmlFor="new-habit-weight">Points</Label>

@@ -7,10 +7,12 @@ import {
   getUserPersonalHabitLogsForDate,
   getUserPointsForDate,
   getUserTotalPoints,
+  getWeeklyHabitLogCount,
+  getWeeklyHabitStreak,
   listHabits,
   listPersonalHabits,
 } from "../../db/repository.js";
-import { getUserTodayKey } from "../../utils/challenge.js";
+import { getCurrentWeekBounds, getUserTodayKey } from "../../utils/challenge.js";
 import { userNeedsRealName } from "../realName.js";
 import { resolveCallerRoom, roomResponse } from "../roomScope.js";
 
@@ -33,6 +35,14 @@ import { resolveCallerRoom, roomResponse } from "../roomScope.js";
  * reads to decide which streak shape to draw. They are echoed here rather than
  * fetched separately so the screen never renders one shape and then flips.
  *
+ * `todayPoints` includes a weekly habit's points on the day they were banked:
+ * a weekly habit pays once per week, on whichever day first marked it, so it
+ * shows up in that day's total and contributes 0 to every other day of the week.
+ *
+ * `weekStart`/`weekEnd` are the current Monday-Sunday week in TIMEZONE — the
+ * window weekly habits and the weekly leaderboard both score against, echoed
+ * here so the client can label it without a second request.
+ *
  * `personalToday`/`personalStreaks` cover the caller's own private habits. They
  * are separate arrays because they key off a different id space, and they carry
  * no points field at all — a personal habit is tracking, never scoring, so it
@@ -46,6 +56,7 @@ export function progressRoute(req: Request, res: Response): void {
   }
 
   const todayKey = getUserTodayKey(user);
+  const { weekStart, weekEnd } = getCurrentWeekBounds();
   const caller = resolveCallerRoom(req);
   if (!caller) {
     res.json({
@@ -56,6 +67,8 @@ export function progressRoute(req: Request, res: Response): void {
       todayPoints: 0,
       today: [],
       todayDate: todayKey,
+      weekStart,
+      weekEnd,
       streaks: [],
       personalToday: [],
       personalStreaks: [],
@@ -81,10 +94,25 @@ export function progressRoute(req: Request, res: Response): void {
 
   // Streaks need no room filter of their own: a habit belongs to exactly one
   // room, so walking one habit's logs never crosses a room boundary.
-  const streaks = activeHabits.map((habit) => ({
-    habitId: habit.id,
-    streak: getHabitStreak(user.id, habit.id, todayKey),
-  }));
+  //
+  // A weekly habit's streak is counted in *weeks*, so it carries `unit` and the
+  // client labels it "weeks" — a bare 3 next to a daily habit's 3 would read as
+  // three days. `weekCount` is how many days of the current week it is marked
+  // on, which is what the weekly view puts on its badge.
+  const streaks = activeHabits.map((habit) =>
+    habit.period === "weekly"
+      ? {
+          habitId: habit.id,
+          streak: getWeeklyHabitStreak(user.id, habit.id, weekStart),
+          unit: "weeks" as const,
+          weekCount: getWeeklyHabitLogCount(user.id, habit.id, weekStart, weekEnd),
+        }
+      : {
+          habitId: habit.id,
+          streak: getHabitStreak(user.id, habit.id, todayKey),
+          unit: "days" as const,
+        }
+  );
 
   const personalHabits = listPersonalHabits(user.id, caller.roomId);
   const personalLogs = getUserPersonalHabitLogsForDate(user.id, todayKey);
@@ -99,6 +127,9 @@ export function progressRoute(req: Request, res: Response): void {
   const personalStreaks = personalHabits.map((habit) => ({
     personalHabitId: habit.id,
     streak: getPersonalHabitStreak(user.id, habit.id, todayKey),
+    // Personal habits are daily-only, so this never varies — sent anyway so the
+    // client has one shape to render rather than two.
+    unit: "days" as const,
   }));
 
   res.json({
@@ -113,6 +144,8 @@ export function progressRoute(req: Request, res: Response): void {
     todayPoints: getUserPointsForDate(user.id, caller.roomId, todayKey),
     today,
     todayDate: todayKey,
+    weekStart,
+    weekEnd,
     streaks,
     personalToday,
     personalStreaks,

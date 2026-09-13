@@ -120,7 +120,7 @@ function makeRoom(memberCount = 1) {
   const room = createRoom(`Participants room ${suffix}`, `participants-pass-${suffix}`, owner.id);
   setUserCurrentRoom(owner.id, room.id);
 
-  const habit = createHabit(room.id, `Habit ${suffix}`, "quantity", 2);
+  const habit = createHabit(room.id, `Habit ${suffix}`,  2);
   const members = Array.from({ length: memberCount }, (_, i) => {
     const member = createUser(nextTelegramId++, `participants-member-${suffix}-${i}`);
     setUserCurrentRoom(member.id, room.id);
@@ -214,8 +214,8 @@ describe("DELETE /api/admin/participants/:telegramId", () => {
   it("deletes the member's data for this room and tells them", async () => {
     const { room, owner, habit, members } = makeRoom();
     const member = members[0]!;
-    upsertHabitLog(member.id, habit.id, 10, TODAY);
-    assert.equal(getUserTotalPoints(member.id, room.id), 20);
+    upsertHabitLog(member.id, habit.id, 1, TODAY);
+    assert.equal(getUserTotalPoints(member.id, room.id), 2);
     sentMessages.length = 0;
 
     const { status, body } = await callKick(owner.telegram_id, member.telegram_id);
@@ -235,14 +235,14 @@ describe("DELETE /api/admin/participants/:telegramId", () => {
     const first = makeRoom();
     const second = makeRoom();
     const wanderer = first.members[0]!;
-    upsertHabitLog(wanderer.id, first.habit.id, 5, TODAY);
+    upsertHabitLog(wanderer.id, first.habit.id, 1, TODAY);
 
     setUserCurrentRoom(wanderer.id, second.room.id);
-    upsertHabitLog(wanderer.id, second.habit.id, 3, TODAY);
+    upsertHabitLog(wanderer.id, second.habit.id, 1, TODAY);
 
     await callKick(second.owner.telegram_id, wanderer.telegram_id);
     assert.equal(getUserTotalPoints(wanderer.id, second.room.id), 0);
-    assert.equal(getUserTotalPoints(wanderer.id, first.room.id), 10);
+    assert.equal(getUserTotalPoints(wanderer.id, first.room.id), 2);
   });
 
   it("still completes when the DM cannot be delivered", async () => {
@@ -309,14 +309,14 @@ describe("POST /api/room/leave", () => {
   it("detaches membership but keeps the logs (PRD §1)", async () => {
     const { room, habit, members } = makeRoom();
     const member = members[0]!;
-    upsertHabitLog(member.id, habit.id, 4, TODAY);
+    upsertHabitLog(member.id, habit.id, 1, TODAY);
 
     const { status, body } = await callLeave(member.telegram_id);
     assert.equal(status, 200);
     assert.equal(body.leftRoomId, room.id);
     assert.equal(getUserByTelegramId(member.telegram_id)?.current_room_id, null);
     // Unlike a kick, a voluntary leave deletes nothing.
-    assert.equal(getUserTotalPoints(member.id, room.id), 8);
+    assert.equal(getUserTotalPoints(member.id, room.id), 2);
     // The app has nothing to show them now, so the button that opens it goes.
     assert.equal(lastMenuButton(member.telegram_id), "commands");
   });

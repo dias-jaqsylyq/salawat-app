@@ -99,34 +99,36 @@ describe("personal habits — CRUD", () => {
 
     assert.deepEqual(list(telegramId).body, []);
 
-    const created = create(telegramId, { name: "  Read 10 pages  ", type: "quantity" });
+    const created = create(telegramId, { name: "  Read 10 pages  " });
     assert.equal(created.status, 201);
     assert.equal(created.body.name, "Read 10 pages");
-    assert.equal(created.body.type, "quantity");
     assert.equal(created.body.category, null);
     // Nothing about points is exposed, because there is nothing to expose.
     assert.equal("pointsWeight" in created.body, false);
+    // And no period or type either: a personal habit is always a daily yes/no.
+    assert.equal("period" in created.body, false);
+    assert.equal("type" in created.body, false);
 
     assert.equal(list(telegramId).body.length, 1);
 
-    const edited = patch(telegramId, created.body.id, { name: "Read 20 pages", type: "binary" });
+    const edited = patch(telegramId, created.body.id, { name: "Read 20 pages" });
     assert.equal(edited.status, 200);
     assert.equal(edited.body.name, "Read 20 pages");
-    assert.equal(edited.body.type, "binary");
 
     assert.equal(remove(telegramId, created.body.id).status, 200);
     assert.deepEqual(list(telegramId).body, []);
   });
 
-  it("rejects an empty name, an unknown type and an empty patch", () => {
+  it("rejects an empty name and an empty patch", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
 
-    assert.equal(create(telegramId, { name: "   ", type: "binary" }).body.error, "invalid_name");
-    assert.equal(create(telegramId, { name: "x", type: "weekly" }).body.error, "invalid_type");
+    assert.equal(create(telegramId, { name: "   " }).body.error, "invalid_name");
 
-    const created = create(telegramId, { name: "Walk", type: "binary" });
+    const created = create(telegramId, { name: "Walk" });
     assert.equal(patch(telegramId, created.body.id, {}).body.error, "invalid_body");
+    // `type` is retired, so a stale client sending only it patches nothing.
+    assert.equal(patch(telegramId, created.body.id, { type: "binary" }).body.error, "invalid_body");
   });
 
   it("caps how many one member may keep in a room", () => {
@@ -136,7 +138,7 @@ describe("personal habits — CRUD", () => {
     for (let i = 0; i < MAX_PERSONAL_HABITS_PER_ROOM; i++) {
       assert.equal(create(telegramId, { name: `Habit ${i}`, type: "binary" }).status, 201);
     }
-    const overflow = create(telegramId, { name: "One too many", type: "binary" });
+    const overflow = create(telegramId, { name: "One too many" });
     assert.equal(overflow.status, 400);
     assert.equal(overflow.body.error, "too_many_personal_habits");
   });
@@ -148,7 +150,7 @@ describe("personal habits — ownership", () => {
     const mine = makeMember(room.id);
     const theirs = makeMember(room.id);
 
-    const created = create(theirs, { name: "Private", type: "binary" });
+    const created = create(theirs, { name: "Private" });
     const id = created.body.id;
 
     // Same room, different owner.
@@ -167,8 +169,8 @@ describe("personal habits — ownership", () => {
   it("is invisible to the room's admin", () => {
     const { room, ownerTelegramId } = makeRoom();
     const member = makeMember(room.id);
-    createHabit(room.id, "Room habit", "binary", 5);
-    create(member, { name: "Totally private", type: "binary" });
+    createHabit(room.id, "Room habit",  5);
+    create(member, { name: "Totally private" });
 
     const adminView = call(listAdminHabitsRoute, { telegramId: ownerTelegramId });
     assert.deepEqual(
@@ -184,15 +186,15 @@ describe("personal habits — categories", () => {
     const telegramId = makeMember(room.id);
 
     assert.equal(
-      create(telegramId, { name: "Dhikr", type: "binary" }).body.error,
+      create(telegramId, { name: "Dhikr" }).body.error,
       "category_required"
     );
     assert.equal(
-      create(telegramId, { name: "Dhikr", type: "binary", category: "XX" }).body.error,
+      create(telegramId, { name: "Dhikr", category: "XX" }).body.error,
       "invalid_category"
     );
 
-    const created = create(telegramId, { name: "Dhikr", type: "binary", category: "SQ" });
+    const created = create(telegramId, { name: "Dhikr", category: "SQ" });
     assert.equal(created.status, 201);
     assert.equal(created.body.category, "SQ");
   });
@@ -202,7 +204,7 @@ describe("personal habits — categories", () => {
     const telegramId = makeMember(room.id);
 
     assert.equal(
-      create(telegramId, { name: "Dhikr", type: "binary", category: "SQ" }).body.error,
+      create(telegramId, { name: "Dhikr", category: "SQ" }).body.error,
       "category_not_allowed"
     );
   });
@@ -210,7 +212,7 @@ describe("personal habits — categories", () => {
   it("follows the room when the setting is flipped", () => {
     const { room } = makeRoom(true);
     const telegramId = makeMember(room.id);
-    const created = create(telegramId, { name: "Dhikr", type: "binary", category: "SQ" });
+    const created = create(telegramId, { name: "Dhikr", category: "SQ" });
 
     setRoomCategoriesEnabled(room.id, false);
     // The stored value survives the flip, same as a room habit (PRD §0).
@@ -227,7 +229,7 @@ describe("personal habits — logging", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
     const user = getUserByTelegramId(telegramId)!;
-    const created = create(telegramId, { name: "Walk", type: "binary" });
+    const created = create(telegramId, { name: "Walk" });
 
     const logged = log(telegramId, created.body.id);
     assert.equal(logged.status, 200);
@@ -239,23 +241,23 @@ describe("personal habits — logging", () => {
     assert.equal(unlog(telegramId, created.body.id).body.logged, false);
   });
 
-  it("validates a quantity value the same way room habits do", () => {
+  it("rejects a value other than 1, the same way room habits do", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
-    const created = create(telegramId, { name: "Pages", type: "quantity" });
+    const created = create(telegramId, { name: "Pages" });
 
-    assert.equal(log(telegramId, created.body.id, {}).body.error, "invalid_value");
     assert.equal(log(telegramId, created.body.id, { value: -1 }).body.error, "invalid_value");
     assert.equal(log(telegramId, created.body.id, { value: 1.5 }).body.error, "invalid_value");
-    assert.equal(log(telegramId, created.body.id, { value: 12 }).body.value, 12);
-    // Upsert, not accumulate.
-    assert.equal(log(telegramId, created.body.id, { value: 3 }).body.value, 3);
+    assert.equal(log(telegramId, created.body.id, { value: 12 }).body.error, "invalid_value");
+    // Omitted and an explicit 1 both mean "done".
+    assert.equal(log(telegramId, created.body.id, {}).body.value, 1);
+    assert.equal(log(telegramId, created.body.id, { value: 1 }).body.value, 1);
   });
 
   it("takes a personal habit's logs with it when the habit is deleted", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
-    const created = create(telegramId, { name: "Walk", type: "binary" });
+    const created = create(telegramId, { name: "Walk" });
     log(telegramId, created.body.id);
 
     remove(telegramId, created.body.id);
@@ -270,14 +272,14 @@ describe("personal habits — progress", () => {
   it("reports today and the streak without moving any point total", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
-    const created = create(telegramId, { name: "Walk", type: "binary" });
+    const created = create(telegramId, { name: "Walk" });
 
     const before = call(progressRoute, { telegramId }).body;
     assert.deepEqual(before.personalToday, [
       { personalHabitId: created.body.id, logged: false, value: 0 },
     ]);
     assert.deepEqual(before.personalStreaks, [
-      { personalHabitId: created.body.id, streak: 0 },
+      { personalHabitId: created.body.id, streak: 0, unit: "days" },
     ]);
 
     log(telegramId, created.body.id);
@@ -297,8 +299,8 @@ describe("personal habits — progress", () => {
   it("appears in the weekly grid alongside the room's habits, flagged but not separated", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
-    createHabit(room.id, "Room habit", "binary", 5);
-    create(telegramId, { name: "My habit", type: "binary" });
+    createHabit(room.id, "Room habit",  5);
+    create(telegramId, { name: "My habit" });
 
     const week = call(progressWeekRoute, { telegramId }).body;
     assert.deepEqual(
@@ -317,7 +319,7 @@ describe("personal habits — room membership", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
     const user = getUserByTelegramId(telegramId)!;
-    const created = create(telegramId, { name: "Walk", type: "binary" });
+    const created = create(telegramId, { name: "Walk" });
     log(telegramId, created.body.id);
 
     assert.equal(leaveCurrentRoom(user.id).left, true);
@@ -332,7 +334,7 @@ describe("personal habits — room membership", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
     const user = getUserByTelegramId(telegramId)!;
-    create(telegramId, { name: "Walk", type: "binary" });
+    create(telegramId, { name: "Walk" });
 
     assert.equal(kickUserFromRoom(user.id, room.id).kicked, true);
     assert.deepEqual(listPersonalHabits(user.id, room.id), []);
@@ -342,13 +344,13 @@ describe("personal habits — room membership", () => {
     const { room } = makeRoom();
     const telegramId = makeMember(room.id);
     const user = getUserByTelegramId(telegramId)!;
-    create(telegramId, { name: "Walk", type: "binary" });
+    create(telegramId, { name: "Walk" });
     setUserCurrentRoom(user.id, null);
 
     const result = list(telegramId);
     assert.equal(result.status, 200);
     assert.deepEqual(result.body, []);
     // And writes say so plainly rather than 500ing.
-    assert.equal(create(telegramId, { name: "x", type: "binary" }).body.error, "no_room");
+    assert.equal(create(telegramId, { name: "x" }).body.error, "no_room");
   });
 });

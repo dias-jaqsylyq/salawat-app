@@ -292,7 +292,9 @@ export default function App() {
               roomName={state.progress.room?.name ?? null}
             />
           )}
-          {activeTab === "admin" && isAdmin && <AdminScreen initData={initData} />}
+          {activeTab === "admin" && isAdmin && (
+            <AdminScreen initData={initData} roomName={state.progress.room?.name ?? null} />
+          )}
           <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
         </div>
       )}

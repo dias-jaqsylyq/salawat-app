@@ -26,8 +26,12 @@ const room = (() => {
 const ROOMLESS_TELEGRAM_ID = 940000002;
 createUser(ROOMLESS_TELEGRAM_ID, "admin-habits-roomless");
 
-function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
-  return createHabit(room.id, name, type, pointsWeight);
+function makeHabit(
+  name: string,
+  pointsWeight: number,
+  period: "daily" | "weekly" = "daily"
+) {
+  return createHabit(room.id, name, pointsWeight, null, period);
 }
 
 function capture(): { res: Response; status: () => number; body: () => any } {
@@ -76,8 +80,8 @@ function callPatch(
 
 describe("GET /api/admin/habits", () => {
   it("lists all habits, including inactive ones", () => {
-    const active = makeHabit("Admin-visible active", "quantity", 1);
-    const inactive = makeHabit("Admin-visible inactive", "binary", 1);
+    const active = makeHabit("Admin-visible active", 1);
+    const inactive = makeHabit("Admin-visible inactive", 1);
     callPatch(inactive.id, { isActive: false });
 
     const { body } = callList();
@@ -89,16 +93,15 @@ describe("GET /api/admin/habits", () => {
 
 describe("POST /api/admin/habits", () => {
   it("creates a habit and returns it", () => {
-    const { status, body } = callCreate({ name: "New habit", type: "quantity", pointsWeight: 4 });
+    const { status, body } = callCreate({ name: "New habit", pointsWeight: 4 });
     assert.equal(status, 201);
     assert.equal(body.name, "New habit");
-    assert.equal(body.type, "quantity");
     assert.equal(body.pointsWeight, 4);
     assert.equal(body.isActive, true);
   });
 
   it("puts the habit in the calling admin's room", () => {
-    const { status, body } = callCreate({ name: "Room-scoped", type: "binary", pointsWeight: 1 });
+    const { status, body } = callCreate({ name: "Room-scoped", pointsWeight: 1 });
     assert.equal(status, 201);
     assert.deepEqual(
       listHabits({ roomId: room.id }).map((h) => h.id).includes(body.id),
@@ -108,27 +111,28 @@ describe("POST /api/admin/habits", () => {
 
   it("400s when the caller is not in a room", () => {
     const { status, body } = callCreate(
-      { name: "Homeless habit", type: "binary", pointsWeight: 1 },
+      { name: "Homeless habit", pointsWeight: 1 },
       ROOMLESS_TELEGRAM_ID
     );
     assert.equal(status, 400);
     assert.equal(body.error, "no_room");
   });
 
-  it("rejects an invalid type", () => {
-    const { status, body } = callCreate({ name: "Bad type", type: "counter", pointsWeight: 1 });
-    assert.equal(status, 400);
-    assert.equal(body.error, "invalid_type");
+  it("ignores a `type` a stale client still sends", () => {
+    // The field is retired. An older Mini App build posting it must not 400 —
+    // it simply has no say in what gets created.
+    const { status } = callCreate({ name: "Stale client", type: "counter", pointsWeight: 1 });
+    assert.equal(status, 201);
   });
 
   it("rejects a non-positive points weight", () => {
-    const { status, body } = callCreate({ name: "Bad weight", type: "binary", pointsWeight: 0 });
+    const { status, body } = callCreate({ name: "Bad weight", pointsWeight: 0 });
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_points_weight");
   });
 
   it("rejects an empty name", () => {
-    const { status, body } = callCreate({ name: "  ", type: "binary", pointsWeight: 1 });
+    const { status, body } = callCreate({ name: "  ", pointsWeight: 1 });
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_name");
   });
@@ -136,7 +140,7 @@ describe("POST /api/admin/habits", () => {
 
 describe("PATCH /api/admin/habits/:id", () => {
   it("is non-destructive: deactivating and reactivating a habit round-trips", () => {
-    const habit = makeHabit("Toggle me", "binary", 5);
+    const habit = makeHabit("Toggle me", 5);
 
     const off = callPatch(habit.id, { isActive: false });
     assert.equal(off.body.isActive, false);
@@ -146,7 +150,7 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("edits name and pointsWeight without touching the other", () => {
-    const habit = makeHabit("Original name", "quantity", 2);
+    const habit = makeHabit("Original name", 2);
 
     const renamed = callPatch(habit.id, { name: "Renamed" });
     assert.equal(renamed.body.name, "Renamed");
@@ -164,9 +168,78 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("400s when the body has none of the recognized fields", () => {
-    const habit = makeHabit("Empty patch", "binary", 1);
+    const habit = makeHabit("Empty patch", 1);
     const { status, body } = callPatch(habit.id, {});
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_body");
+  });
+});
+
+describe("period and description", () => {
+  it("defaults to daily and no goal line", () => {
+    const { body } = callCreate({ name: "Plain habit", pointsWeight: 3 });
+    assert.equal(body.period, "daily");
+    assert.equal(body.description, null);
+  });
+
+  it("creates a weekly habit with a goal line, trimming it", () => {
+    const { status, body } = callCreate({
+      name: "Weekly khatm",
+      pointsWeight: 30,
+      period: "weekly",
+      description: "  min 30 min  ",
+    });
+    assert.equal(status, 201);
+    assert.equal(body.period, "weekly");
+    assert.equal(body.description, "min 30 min");
+  });
+
+  it("rejects a period that is neither daily nor weekly", () => {
+    const { status, body } = callCreate({
+      name: "Fortnightly",
+      pointsWeight: 1,
+      period: "fortnightly",
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error, "invalid_period");
+  });
+
+  it("rejects a description that is not a string, or is too long", () => {
+    assert.equal(
+      callCreate({ name: "Bad goal", pointsWeight: 1, description: 42 }).body.error,
+      "invalid_description"
+    );
+    assert.equal(
+      callCreate({ name: "Long goal", pointsWeight: 1, description: "x".repeat(201) }).body.error,
+      "invalid_description"
+    );
+  });
+
+  it("treats a blank description as no description at all", () => {
+    const { body } = callCreate({ name: "Blank goal", pointsWeight: 1, description: "   " });
+    assert.equal(body.description, null);
+  });
+
+  it("edits and clears the goal line", () => {
+    const created = callCreate({ name: "Editable", pointsWeight: 2, description: "before" });
+    assert.equal(callPatch(created.body.id, { description: "after" }).body.description, "after");
+    assert.equal(callPatch(created.body.id, { description: null }).body.description, null);
+    // A description on its own is a valid patch — it must not read as an empty body.
+    assert.equal(callPatch(created.body.id, { description: "again" }).status, 200);
+  });
+
+  it("refuses to change a habit's period after creation", () => {
+    const created = callCreate({ name: "Fixed cadence", pointsWeight: 2, period: "weekly" });
+
+    // `period` alone is not a patch at all: nothing else in the body means there
+    // is nothing to change.
+    const { status, body } = callPatch(created.body.id, { period: "daily" });
+    assert.equal(status, 400);
+    assert.equal(body.error, "invalid_body");
+
+    // And sending it alongside a real change leaves the cadence alone.
+    const renamed = callPatch(created.body.id, { name: "Still weekly", period: "daily" });
+    assert.equal(renamed.body.name, "Still weekly");
+    assert.equal(renamed.body.period, "weekly");
   });
 });

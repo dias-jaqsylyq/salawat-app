@@ -5,6 +5,7 @@ import {
   formatDateParts,
   parseDateKey,
   subtractOneCalendarDay,
+  weekBounds,
 } from "./dates.js";
 
 export {
@@ -12,6 +13,10 @@ export {
   formatDateParts,
   parseDateKey,
   subtractOneCalendarDay,
+  WEEK_START_DAY,
+  weekBounds,
+  weekBoundsOfDateKey,
+  shiftWeekStart,
 } from "./dates.js";
 
 /** Returns today's calendar date (Y/M/D) as observed in the given IANA timezone. */
@@ -30,6 +35,26 @@ export function getTodayInTimezone(timeZone: string, now: Date = new Date()): Da
 /** Calendar day key (YYYY-MM-DD) in the challenge timezone — for daily caps. */
 export function getDayKeyInTimezone(now: Date = new Date()): string {
   return formatDateParts(getTodayInTimezone(config.timezone, now));
+}
+
+/**
+ * The Monday-Sunday week that is current *right now*, for everyone.
+ *
+ * The one place a timezone decides a week: TIMEZONE, not the viewer's own zone,
+ * so a weekly habit's scoring window and the weekly leaderboard's reset land on
+ * the same instant for every member of a room however far apart they live. A
+ * member in a zone ahead of TIMEZONE can therefore write a Monday log that this
+ * still counts in the week just ending — deliberate, and the direction that
+ * favours the member.
+ *
+ * (Making this per-room, from the creating admin's zone, is a separate task —
+ * it needs a rooms.timezone column, which deliberately does not exist yet.)
+ */
+export function getCurrentWeekBounds(now: Date = new Date()): {
+  weekStart: string;
+  weekEnd: string;
+} {
+  return weekBounds(getTodayInTimezone(config.timezone, now));
 }
 
 /**

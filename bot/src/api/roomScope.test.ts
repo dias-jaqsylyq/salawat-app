@@ -108,11 +108,11 @@ const beta = makeRoom("Beta room", "beta-room-pass");
 const alphaMember = joinRoom(alpha.room.id, "alpha-member");
 const betaMember = joinRoom(beta.room.id, "beta-member");
 
-const alphaHabit = createHabit(alpha.room.id, "Alpha habit", "quantity", 2);
-const betaHabit = createHabit(beta.room.id, "Beta habit", "quantity", 5);
+const alphaHabit = createHabit(alpha.room.id, "Alpha habit",  2);
+const betaHabit = createHabit(beta.room.id, "Beta habit",  5);
 
-upsertHabitLog(alphaMember.id, alphaHabit.id, 10, TODAY);
-upsertHabitLog(betaMember.id, betaHabit.id, 10, TODAY);
+upsertHabitLog(alphaMember.id, alphaHabit.id, 1, TODAY);
+upsertHabitLog(betaMember.id, betaHabit.id, 1, TODAY);
 
 /** Registered, but between rooms (PRD §3a) — reads answer empty, writes 400. */
 const roomless = createUser(nextTelegramId++, "roomless-user");
@@ -171,7 +171,7 @@ describe("GET /api/progress", () => {
       name: "Alpha room",
       categoriesEnabled: false,
     });
-    assert.equal(body.totalPoints, 20);
+    assert.equal(body.totalPoints, 2);
     assert.deepEqual(
       body.today.map((entry: any) => entry.habitId),
       [alphaHabit.id]

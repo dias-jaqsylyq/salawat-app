@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildLast7Days, computeStreak, effectiveMet } from "./streak.js";
+import { buildLast7Days, computeStreak, effectiveMet, streakFromLoggedWeeks } from "./streak.js";
+import { weekBounds, weekBoundsOfDateKey } from "./dates.js";
 import type { DateParts } from "../types.js";
 
 const today: DateParts = { year: 2026, month: 8, day: 11 };
@@ -307,5 +308,79 @@ describe("buildLast7Days", () => {
       .filter((d) => !d.locked && !d.metGoal);
     assert.ok(unlockedMissedPast.length > 0);
     assert.equal(unlockedMissedPast[unlockedMissedPast.length - 1]!.date, "2026-08-10");
+  });
+});
+
+describe("weekBounds", () => {
+  it("runs Monday to Sunday, and a Monday is its own week start", () => {
+    // 2026-09-14 is a Monday.
+    assert.deepEqual(weekBoundsOfDateKey("2026-09-14"), {
+      weekStart: "2026-09-14",
+      weekEnd: "2026-09-20",
+    });
+    assert.deepEqual(weekBoundsOfDateKey("2026-09-16"), {
+      weekStart: "2026-09-14",
+      weekEnd: "2026-09-20",
+    });
+    // Sunday belongs to the week that is ending, not the one about to start.
+    assert.deepEqual(weekBoundsOfDateKey("2026-09-20"), {
+      weekStart: "2026-09-14",
+      weekEnd: "2026-09-20",
+    });
+    assert.deepEqual(weekBoundsOfDateKey("2026-09-21"), {
+      weekStart: "2026-09-21",
+      weekEnd: "2026-09-27",
+    });
+  });
+
+  it("crosses month and year boundaries", () => {
+    // Thu 2026-12-31 sits in the week that starts Mon 2026-12-28.
+    assert.deepEqual(weekBoundsOfDateKey("2026-12-31"), {
+      weekStart: "2026-12-28",
+      weekEnd: "2027-01-03",
+    });
+    assert.deepEqual(weekBounds({ year: 2027, month: 1, day: 1 }), {
+      weekStart: "2026-12-28",
+      weekEnd: "2027-01-03",
+    });
+  });
+});
+
+describe("streakFromLoggedWeeks", () => {
+  const weeks = (...starts: string[]) => new Set(starts);
+
+  it("counts consecutive met weeks back from the current one", () => {
+    assert.equal(
+      streakFromLoggedWeeks(weeks("2026-09-21", "2026-09-14", "2026-09-07"), "2026-09-21"),
+      3
+    );
+  });
+
+  it("stops at a skipped week", () => {
+    assert.equal(
+      streakFromLoggedWeeks(weeks("2026-09-21", "2026-09-07"), "2026-09-21"),
+      1
+    );
+  });
+
+  it("gives the current week grace instead of collapsing to 0", () => {
+    // Nothing logged in the current week yet, but the three before it are met:
+    // a weekly streak must not reset every Monday morning.
+    assert.equal(
+      streakFromLoggedWeeks(weeks("2026-09-14", "2026-09-07", "2026-08-31"), "2026-09-21"),
+      3
+    );
+  });
+
+  it("counts the current week once it is met, without double-counting it", () => {
+    assert.equal(
+      streakFromLoggedWeeks(weeks("2026-09-21", "2026-09-14", "2026-09-07", "2026-08-31"), "2026-09-21"),
+      4
+    );
+  });
+
+  it("is 0 when neither this week nor last was met", () => {
+    assert.equal(streakFromLoggedWeeks(weeks("2026-08-31"), "2026-09-21"), 0);
+    assert.equal(streakFromLoggedWeeks(weeks(), "2026-09-21"), 0);
   });
 });

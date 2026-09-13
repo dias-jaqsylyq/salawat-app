@@ -31,18 +31,7 @@ const CONFIRM_MS = 900;
 
 const STREAK_DISPLAYS: { id: StreakDisplay; label: string; hint: string }[] = [
   { id: "current", label: "Current", hint: "One running streak count per habit." },
-  { id: "weekly", label: "Weekly", hint: "This week's days, one row per habit." },
-];
-
-/** 0 = Sunday … 6 = Saturday, matching users.week_start_day. */
-const WEEK_START_DAYS = [
-  { value: 1, label: "Monday" },
-  { value: 2, label: "Tuesday" },
-  { value: 3, label: "Wednesday" },
-  { value: 4, label: "Thursday" },
-  { value: 5, label: "Friday" },
-  { value: 6, label: "Saturday" },
-  { value: 0, label: "Sunday" },
+  { id: "weekly", label: "Weekly", hint: "This week (Mon–Sun), one row per habit." },
 ];
 
 function validate(
@@ -83,7 +72,6 @@ export default function SettingsScreen({
   const [fastingReminderEnabled, setFastingReminderEnabled] = useState(false);
   const [fastingReminderTime, setFastingReminderTime] = useState("20:00");
   const [streakDisplay, setStreakDisplay] = useState<StreakDisplay>("weekly");
-  const [weekStartDay, setWeekStartDay] = useState(1);
   const [timezone, setTimezone] = useState<string | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,7 +95,6 @@ export default function SettingsScreen({
         setFastingReminderEnabled(profile.fastingReminderEnabled);
         setFastingReminderTime(profile.fastingReminderTime);
         setStreakDisplay(profile.streakDisplay);
-        setWeekStartDay(profile.weekStartDay);
         setTimezone(profile.timezone);
         setRoom(profile.room);
       })
@@ -170,7 +157,6 @@ export default function SettingsScreen({
         // Saved with the rest of the form, not applied as you tap: the streak
         // shape is a preference, not a live toggle on the Progress screen.
         streakDisplay,
-        weekStartDay,
       });
       setConfirmation("Saved!");
       onSaved();
@@ -328,25 +314,11 @@ export default function SettingsScreen({
                       save.
                     </p>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="settings-week-start">Week starts on</Label>
-                    <select
-                      id="settings-week-start"
-                      value={weekStartDay}
-                      onChange={(e) => setWeekStartDay(Number(e.target.value))}
-                      className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={streakDisplay !== "weekly"}
-                    >
-                      {WEEK_START_DAYS.map((day) => (
-                        <option key={day.value} value={day.value}>
-                          {day.label}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-muted-foreground">
-                      The day the weekly view's calendar week begins.
-                    </p>
-                  </div>
+                  {/* "Week starts on" used to live here. The week is now the
+                      room's, Monday to Sunday, because weekly habits score in
+                      it and the leaderboard resets on it — a per-viewer start
+                      day would put the grid on a different week from the
+                      things drawn beneath it. */}
                 </section>
 
                 <section className="space-y-4">

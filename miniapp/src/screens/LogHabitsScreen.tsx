@@ -9,7 +9,7 @@ import type {
 } from "../api/types.ts";
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META, groupHabitsByCategory } from "../lib/habitCategories.ts";
-import { BinaryHabitRow, QuantityHabitRow } from "../components/HabitLogRow.tsx";
+import { BinaryHabitRow } from "../components/HabitLogRow.tsx";
 import PersonalHabits from "../components/PersonalHabits.tsx";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -36,31 +36,30 @@ interface HabitRowsProps {
   onLogged: () => void;
 }
 
-/** One card of habit rows — the whole list when categories are off, one group when on. */
+/**
+ * One card of habit rows — the whole list when categories are off, one group
+ * when on.
+ *
+ * Weekly habits sit among the daily ones in the same categories rather than in
+ * a block of their own: from the member's side this is still just "the things
+ * my room asks of me", and a separate section would imply a separate ritual.
+ * The row's own badge is what tells them the difference.
+ */
 function HabitRows({ initData, habits, progress, onLogged }: HabitRowsProps) {
   return (
     <Card>
       <CardContent className="divide-y p-0">
         {habits.map((habit) => {
           const entry = findEntry(progress.today, habit.id);
-          return habit.type === "quantity" ? (
-            <QuantityHabitRow
-              key={habit.id}
-              name={habit.name}
-              pointsWeight={habit.pointsWeight}
-              value={entry?.value ?? 0}
-              logged={entry?.logged ?? false}
-              onSave={async (value) => {
-                await logHabit(initData, habit.id, value);
-                hapticMedium();
-                onLogged();
-              }}
-            />
-          ) : (
+          const streak = progress.streaks.find((s) => s.habitId === habit.id);
+          return (
             <BinaryHabitRow
               key={habit.id}
               name={habit.name}
+              description={habit.description}
               pointsWeight={habit.pointsWeight}
+              weekly={habit.period === "weekly"}
+              countedThisWeek={(streak?.weekCount ?? 0) > 0}
               logged={entry?.logged ?? false}
               onToggle={async (checked) => {
                 if (checked) await logHabit(initData, habit.id);

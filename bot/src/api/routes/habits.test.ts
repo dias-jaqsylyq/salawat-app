@@ -79,14 +79,18 @@ function makeUser(): number {
   return telegramId;
 }
 
-function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
-  return createHabit(room.id, name, type, pointsWeight);
+function makeHabit(
+  name: string,
+  pointsWeight: number,
+  period: "daily" | "weekly" = "daily"
+) {
+  return createHabit(room.id, name, pointsWeight, null, period);
 }
 
 describe("GET /api/habits", () => {
   it("lists only active habits", () => {
-    const active = makeHabit("Read Qur'an", "quantity", 2);
-    const inactive = makeHabit("Retired habit", "binary", 5);
+    const active = makeHabit("Read Qur'an", 2);
+    const inactive = makeHabit("Retired habit", 5);
     updateHabit(inactive.id, { isActive: false });
 
     const { body } = callList(makeUser());
@@ -98,7 +102,8 @@ describe("GET /api/habits", () => {
     assert.deepEqual(listed, {
       id: active.id,
       name: "Read Qur'an",
-      type: "quantity",
+      description: null,
+      period: "daily",
       pointsWeight: 2,
       category: null,
     });
@@ -106,55 +111,52 @@ describe("GET /api/habits", () => {
 });
 
 describe("POST /api/habits/:id/log", () => {
-  it("upserts a quantity habit's value for today, freezing points", () => {
+  it("marks today done, freezing the habit's flat weight", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Salawat count", "quantity", 3);
+    const habit = makeHabit("Salawat", 3);
 
-    const first = callLog(telegramId, habit.id, { value: 10 });
+    const first = callLog(telegramId, habit.id, {});
     assert.equal(first.status, 200);
     assert.deepEqual(first.body, {
       success: true,
       habitId: habit.id,
-      value: 10,
-      points: 30,
+      value: 1,
+      points: 3,
       logged: true,
     });
 
     // Second call same day overwrites rather than adding.
-    const second = callLog(telegramId, habit.id, { value: 4 });
-    assert.equal(second.body.value, 4);
-    assert.equal(second.body.points, 12);
+    const second = callLog(telegramId, habit.id, { value: 1 });
+    assert.equal(second.body.value, 1);
+    assert.equal(second.body.points, 3);
   });
 
-  it("treats an omitted value as 1 for a binary habit", () => {
+  it("scores a weekly habit once however many days of the week are marked", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Prayed Fajr in jamaat", "binary", 15);
+    const habit = makeHabit("Weekly khatm", 20, "weekly");
+    const user = getUserByTelegramId(telegramId)!;
 
-    const { body } = callLog(telegramId, habit.id, {});
-    assert.equal(body.value, 1);
-    assert.equal(body.points, 15);
+    // Both calls land on the caller's today, so the second is the same row —
+    // the week-level cap is exercised properly in repository.test.ts, where the
+    // dates can be chosen. Here we only care that the route stays flat.
+    assert.equal(callLog(telegramId, habit.id, {}).body.points, 20);
+    assert.equal(callLog(telegramId, habit.id, {}).body.points, 20);
+    assert.equal(getUserTotalPoints(user.id), 20);
   });
 
-  it("rejects a non-1 value for a binary habit", () => {
+  it("rejects a value other than 1", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Fasted today", "binary", 10);
+    const habit = makeHabit("Fasted today", 10);
 
-    const { status, body } = callLog(telegramId, habit.id, { value: 5 });
-    assert.equal(status, 400);
-    assert.equal(body.error, "invalid_value");
-  });
-
-  it("rejects a negative or non-integer value for a quantity habit", () => {
-    const telegramId = makeUser();
-    const habit = makeHabit("Pages read", "quantity", 1);
-
+    assert.equal(callLog(telegramId, habit.id, { value: 5 }).status, 400);
     assert.equal(callLog(telegramId, habit.id, { value: -1 }).status, 400);
     assert.equal(callLog(telegramId, habit.id, { value: 1.5 }).status, 400);
+    assert.equal(callLog(telegramId, habit.id, { value: 5 }).body.error, "invalid_value");
   });
 
   it("rejects logging against a deactivated habit", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Soon retired", "binary", 5);
+    const habit = makeHabit("Soon retired", 5);
     updateHabit(habit.id, { isActive: false });
 
     const { status, body } = callLog(telegramId, habit.id, {});
@@ -170,7 +172,7 @@ describe("POST /api/habits/:id/log", () => {
   });
 
   it("403s for a telegram id with no registered user", () => {
-    const habit = makeHabit("Registered users only", "binary", 5);
+    const habit = makeHabit("Registered users only", 5);
     const { status, body } = callLog(999_999_999, habit.id, {});
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");
@@ -180,7 +182,7 @@ describe("POST /api/habits/:id/log", () => {
 describe("DELETE /api/habits/:id/log", () => {
   it("removes today's binary log and its points", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Prayed Fajr in jamaat", "binary", 15);
+    const habit = makeHabit("Prayed Fajr in jamaat", 15);
     callLog(telegramId, habit.id, {});
     const user = getUserByTelegramId(telegramId)!;
     assert.equal(getUserTotalPoints(user.id), 15);
@@ -191,22 +193,23 @@ describe("DELETE /api/habits/:id/log", () => {
     assert.equal(getUserTotalPoints(user.id), 0);
   });
 
-  it("removes today's quantity log and its points", () => {
+  it("removes today's weekly log and the points it banked", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Salawat count", "quantity", 3);
-    callLog(telegramId, habit.id, { value: 10 });
+    const habit = makeHabit("Weekly unlog", 30, "weekly");
+    callLog(telegramId, habit.id, {});
     const user = getUserByTelegramId(telegramId)!;
     assert.equal(getUserTotalPoints(user.id), 30);
 
     const { status, body } = callDeleteLog(telegramId, habit.id);
     assert.equal(status, 200);
     assert.deepEqual(body, { success: true, habitId: habit.id, logged: false });
+    // Nothing else in the week is marked, so the week loses its points.
     assert.equal(getUserTotalPoints(user.id), 0);
   });
 
   it("is idempotent when there is no log for today", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Never logged", "binary", 5);
+    const habit = makeHabit("Never logged", 5);
 
     const { status, body } = callDeleteLog(telegramId, habit.id);
     assert.equal(status, 200);
@@ -215,7 +218,7 @@ describe("DELETE /api/habits/:id/log", () => {
 
   it("succeeds even against a deactivated habit", () => {
     const telegramId = makeUser();
-    const habit = makeHabit("Soon retired", "binary", 5);
+    const habit = makeHabit("Soon retired", 5);
     callLog(telegramId, habit.id, {});
     updateHabit(habit.id, { isActive: false });
 
@@ -232,7 +235,7 @@ describe("DELETE /api/habits/:id/log", () => {
   });
 
   it("403s for a telegram id with no registered user", () => {
-    const habit = makeHabit("Registered users only", "binary", 5);
+    const habit = makeHabit("Registered users only", 5);
     const { status, body } = callDeleteLog(999_999_999, habit.id);
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");

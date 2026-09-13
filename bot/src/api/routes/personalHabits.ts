@@ -1,7 +1,6 @@
 import type { Request, Response } from "express";
 import {
   HABIT_LOG_RATE_LIMIT_PER_MINUTE,
-  MAX_HABIT_VALUE,
   MAX_PERSONAL_HABITS_PER_ROOM,
 } from "../../config.js";
 import {
@@ -13,7 +12,7 @@ import {
   updatePersonalHabit,
   upsertPersonalHabitLog,
 } from "../../db/repository.js";
-import type { HabitType, PersonalHabit } from "../../types.js";
+import type { PersonalHabit } from "../../types.js";
 import { getUserTodayKey } from "../../utils/challenge.js";
 import { categoryForCreate, checkCategory, isValidHabitName } from "../habitValidation.js";
 import { parseIdParam } from "../params.js";
@@ -37,7 +36,6 @@ function personalHabitResponse(habit: PersonalHabit) {
   return {
     id: habit.id,
     name: habit.name,
-    type: habit.type,
     category: habit.category,
     createdAt: habit.created_at,
     updatedAt: habit.updated_at,
@@ -62,7 +60,7 @@ export function listPersonalHabitsRoute(req: Request, res: Response): void {
   );
 }
 
-/** POST /api/personal-habits — body `{name, type, category?}`. */
+/** POST /api/personal-habits — body `{name, category?}`. */
 export function createPersonalHabitRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
   if (!caller) return;
@@ -71,12 +69,6 @@ export function createPersonalHabitRoute(req: Request, res: Response): void {
 
   if (!isValidHabitName(body.name)) {
     res.status(400).json({ success: false, error: "invalid_name" });
-    return;
-  }
-
-  const type: unknown = body.type;
-  if (type !== "quantity" && type !== "binary") {
-    res.status(400).json({ success: false, error: "invalid_type" });
     return;
   }
 
@@ -102,14 +94,13 @@ export function createPersonalHabitRoute(req: Request, res: Response): void {
     caller.user.id,
     caller.roomId,
     body.name.trim(),
-    type as HabitType,
     category
   );
   res.status(201).json(personalHabitResponse(habit));
 }
 
 /**
- * PATCH /api/personal-habits/:id — body `{name?, type?, category?}`.
+ * PATCH /api/personal-habits/:id — body `{name?, category?}`.
  * Unlike room habits, the owner edits these themselves; an admin has no route
  * that reaches them at all.
  */
@@ -130,10 +121,9 @@ export function patchPersonalHabitRoute(req: Request, res: Response): void {
 
   const body = req.body ?? {};
   const hasName = Object.prototype.hasOwnProperty.call(body, "name");
-  const hasType = Object.prototype.hasOwnProperty.call(body, "type");
   const hasCategory = Object.prototype.hasOwnProperty.call(body, "category");
 
-  if (!hasName && !hasType && !hasCategory) {
+  if (!hasName && !hasCategory) {
     res.status(400).json({ success: false, error: "invalid_body" });
     return;
   }
@@ -147,15 +137,6 @@ export function patchPersonalHabitRoute(req: Request, res: Response): void {
     name = body.name.trim();
   }
 
-  let type: HabitType | undefined;
-  if (hasType) {
-    if (body.type !== "quantity" && body.type !== "binary") {
-      res.status(400).json({ success: false, error: "invalid_type" });
-      return;
-    }
-    type = body.type;
-  }
-
   const checked = checkCategory(
     body.category,
     hasCategory,
@@ -166,7 +147,7 @@ export function patchPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const habit = updatePersonalHabit(id, { name, type, category: checked.category });
+  const habit = updatePersonalHabit(id, { name, category: checked.category });
   res.json(personalHabitResponse(habit));
 }
 
@@ -215,27 +196,14 @@ export function logPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
+  // Done-or-not: the only value a log can carry is 1. `value` is still accepted
+  // so an older Mini App build posting `{value: 1}` keeps working.
   const body = req.body ?? {};
-  let value: number;
-  if (habit.type === "binary") {
-    if (body.value === undefined || body.value === null || body.value === 1) {
-      value = 1;
-    } else {
-      res.status(400).json({ success: false, error: "invalid_value" });
-      return;
-    }
-  } else {
-    if (
-      typeof body.value !== "number" ||
-      !Number.isInteger(body.value) ||
-      body.value < 0 ||
-      body.value > MAX_HABIT_VALUE
-    ) {
-      res.status(400).json({ success: false, error: "invalid_value" });
-      return;
-    }
-    value = body.value;
+  if (body.value !== undefined && body.value !== null && body.value !== 1) {
+    res.status(400).json({ success: false, error: "invalid_value" });
+    return;
   }
+  const value = 1;
 
   if (!allowRequest(req.telegramId, HABIT_LOG_RATE_LIMIT_PER_MINUTE)) {
     res.status(429).json({ success: false, error: "rate_limited" });
