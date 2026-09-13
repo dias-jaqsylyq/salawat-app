@@ -237,8 +237,7 @@ identifier explicitly).
   a **brand-new user**. An **already-registered** user's deep link is
   honoured too, and what happens depends on the room they are in:
   - **no current room** (they left one) — they join the linked room
-    immediately, nothing to confirm. This is the *only* way back into a
-    room for an existing account; without it, leaving is a one-way door.
+    immediately, nothing to confirm.
   - **the room the link points at** — told so, nothing changes.
   - **a different room** — one Yes/No question naming **both** rooms in
     the message text (never on the buttons: room names are free text).
@@ -259,6 +258,23 @@ identifier explicitly).
   who is an admin and its **only** member has the old room deleted
   behind them (see §6). Every message of the dialog is queued for
   deletion after `REMINDER_DELETE_AFTER_MINUTES`, like the reminders.
+- **A registered user with no room can register again**: a bare
+  `/start` (no deep link) reopens the **entire** signup conversation
+  from the role question — admin branch to a brand new room, or
+  participant branch with the **password typed into the chat**. Every
+  answer is asked afresh and **nothing** carries over from the previous
+  registration: name, nickname, reminder settings and the role itself
+  are all re-answered. (Deliberately unlike the deep-link switch above,
+  where nickname and reminders follow the person.) Settings signup never
+  asks about — timezone, streak display, week start — are left alone, as
+  are the user's `id`, their history, and their logs in previous rooms.
+  Without this, leaving a room was a **one-way door**: the old reply was
+  a static "you're not in a room right now" and the Mini App answered it
+  by telling the user to `/start` — a closed loop unless somebody handed
+  them an invite link. Role being re-answered is a knowing exception to
+  "role is chosen once" (§6): this *is* a new registration, and
+  `users.role` is a label the code never reads — admin-ness lives in
+  `room_admins`.
 - **Legacy global commands retired**: `/deleteuser` and `/makeadmin`
   (from the pre-multi-room single-tenant era) are **removed entirely**,
   fully superseded by the new room-scoped kick (§3a) and co-admin
@@ -334,7 +350,11 @@ its own PR:
 
 ## 6. Explicitly out of scope for v1
 
-- Changing role after registration (admin → participant or vice versa).
+- Changing role after registration (admin → participant or vice
+  versa) — there is no "change my role" action. A user with **no
+  room** who registers again from a bare `/start` (§1) answers the
+  role question afresh like anyone else, which is a new registration
+  rather than a change to an existing one.
 - An admin owning more than one room.
 - Permission tiers between main admin and co-admins (all co-admins are
   full-power in v1, including demoting the original owner — see §3a).

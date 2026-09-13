@@ -682,6 +682,114 @@ export function createUser(
   })();
 }
 
+/**
+ * Overwrite an existing users row with a fresh set of signup answers.
+ *
+ * Backs re-registration: someone who left their room and ran the whole signup
+ * conversation again from a bare /start (start.ts). They answered every
+ * question from scratch, so every answer is written from scratch — nothing is
+ * carried over from the registration this replaces.
+ *
+ * Only the columns a signup actually asks about. Deliberately untouched:
+ *   • current_room_id / room_joined_at — setUserCurrentRoom owns those, and it
+ *     is the only thing that keeps the two in step.
+ *   • timezone, streak_display, week_start_day — Mini App settings, never asked
+ *     here, and silently resetting them would rearrange the app under someone
+ *     who only wanted a new room.
+ *   • id and created_at — this is the same account, with the same history
+ *     hanging off it (habit_logs point at users.id).
+ *
+ * role is rewritten because the role question is asked again. Safe despite the
+ * PRD calling it chosen-once: users.role is written at registration and read
+ * nowhere — not for authorization (that is room_admins, via isRoomAdmin), not
+ * by the API, not by the Mini App.
+ */
+export function applyRegistrationAnswers(
+  telegramId: number,
+  nickname: string,
+  profile: TelegramProfile,
+  realName: string | null,
+  reminders: CreateUserReminders,
+  role: UserRole
+): User {
+  db.prepare(
+    `UPDATE users
+     SET nickname = ?, role = ?,
+         telegram_username = ?, telegram_first_name = ?, telegram_last_name = ?,
+         real_name = ?,
+         reminder_enabled = ?, reminder_time = ?,
+         fasting_reminder_enabled = ?, fasting_reminder_time = ?
+     WHERE telegram_id = ?`
+  ).run(
+    nickname,
+    role,
+    profile.telegramUsername,
+    profile.telegramFirstName,
+    profile.telegramLastName,
+    realName,
+    reminders.reminderEnabled ? 1 : 0,
+    reminders.reminderTime,
+    reminders.fastingReminderEnabled ? 1 : 0,
+    reminders.fastingReminderTime,
+    telegramId
+  );
+  return getUserByTelegramId(telegramId) ?? (() => {
+    throw new Error(`applyRegistrationAnswers: user ${telegramId} not found`);
+  })();
+}
+
+/**
+ * Save a finished signup against this Telegram id, whether or not one has ever
+ * been saved before: a new row for a first registration, an overwrite of the
+ * existing one for someone registering again after leaving their room.
+ *
+ * The one entry point both finalize branches use, which is what keeps the
+ * second case from hitting UNIQUE(users.telegram_id) — a collision that used to
+ * be the only way this could fail, and is now not reachable from either.
+ *
+ * Refuses outright for an existing user who is still in a room. Registration is
+ * not a way to move rooms: the setUserCurrentRoom below would quietly strip
+ * their co-admin status and delete the personal habits they keep in that room.
+ * Moving rooms is switchRoomWithKick, behind an explicit yes. finalizeRegistration
+ * checks the same thing before it gets here; this is the lock on the door the
+ * damage would actually come through.
+ */
+export function registerUser(
+  telegramId: number,
+  nickname: string,
+  profile: TelegramProfile,
+  realName: string | null,
+  reminders: CreateUserReminders,
+  membership: CreateUserMembership = {}
+): User {
+  const existing = getUserByTelegramId(telegramId);
+  if (!existing) {
+    return createUser(telegramId, nickname, profile, realName, reminders, membership);
+  }
+  if (existing.current_room_id !== null) {
+    throw new Error(
+      `registerUser: user ${telegramId} is already in room ${existing.current_room_id} — ` +
+        `registration cannot move someone between rooms`
+    );
+  }
+
+  const save = db.transaction((): User => {
+    const user = applyRegistrationAnswers(
+      telegramId,
+      nickname,
+      profile,
+      realName,
+      reminders,
+      membership.role ?? "participant"
+    );
+    // Through setUserCurrentRoom rather than the UPDATE above so room_joined_at
+    // is stamped by the one function that knows when it should be.
+    setUserCurrentRoom(user.id, membership.currentRoomId ?? null);
+    return getUserByTelegramId(telegramId)!;
+  });
+  return save();
+}
+
 export interface AdminWithRoom {
   user: User;
   room: Room;
@@ -713,7 +821,10 @@ export function createAdminWithRoom(
   room: { name: string; categoriesEnabled: boolean }
 ): AdminWithRoom {
   const register = db.transaction((password: string) => {
-    const user = createUser(telegramId, nickname, profile, realName, reminders, {
+    // registerUser, not createUser: an admin registering again after leaving
+    // their room already has a users row, and everything below this line works
+    // the same either way.
+    const user = registerUser(telegramId, nickname, profile, realName, reminders, {
       role: "admin",
       // The room does not exist yet — it needs this user's id as its owner.
       currentRoomId: null,

@@ -12,7 +12,6 @@ import { escapeHtml } from "../api/broadcastFormatting.js";
 import {
   clearRegistrationMessages,
   createAdminWithRoom,
-  createUser,
   deletePendingRegistration,
   getRoomById,
   getRoomByPassword,
@@ -20,6 +19,7 @@ import {
   isNicknameTaken,
   listRegistrationMessageIds,
   recordRegistrationMessage,
+  registerUser,
   updatePendingRegistration,
 } from "../db/repository.js";
 import { safeDeleteMessage } from "../utils/messages.js";
@@ -323,24 +323,10 @@ async function handleFinalizeFailure(
     err
   );
 
-  // The only UNIQUE constraint the users INSERT can hit is users.telegram_id
-  // — so if a row for this id exists now, the account was already created
-  // (by an earlier attempt, or some other path) and this "failure" just means
-  // we're out of sync with our own pending row. Reconcile instead of scaring
-  // an already-registered person with a generic error.
-  if (getUserByTelegramId(telegramId) !== undefined) {
-    deletePendingRegistration(telegramId);
-    // Nothing will ever sweep these now — the finalize that would have is the
-    // one we are reconciling away.
-    clearRegistrationMessages(telegramId);
-    await ctx.reply(
-      "Looks like you're already registered! Open the Mini App from the menu button (☰) to get started."
-    );
-    return;
-  }
-
   // Pending row is deliberately left in place (not deleted) so the user can
-  // simply retry once whatever this was is resolved.
+  // simply retry once whatever this was is resolved. That includes someone
+  // re-registering after leaving a room: their row already exists, which is
+  // ordinary here and no reason to throw their answers away.
   await ctx.reply(
     "Something went wrong finishing your signup. Please try again — resend your last answer, " +
       "or contact an admin if this keeps happening."
@@ -435,7 +421,9 @@ async function finalizeParticipantRegistration(
   }
 
   try {
-    createUser(
+    // registerUser, not createUser: someone who left a room and signed up again
+    // already has a users row, and this writes their new answers onto it.
+    registerUser(
       telegramId,
       pending.nickname!,
       profileFromContext(ctx),
@@ -465,6 +453,28 @@ async function finalizeRegistration(ctx: MyContext, pending: PendingRegistration
   }
   if (pending.reminder_enabled === null || pending.fasting_reminder_enabled === null) {
     throw new Error(`Incomplete reminder answers for ${telegramId}`);
+  }
+
+  // A signup must never finish on top of a live membership: it would move
+  // someone out of a room they never left, and silently rewrite the answers
+  // they gave when they joined it. Reachable only if the gates in start.ts were
+  // bypassed, or they gained a room part-way through this conversation.
+  //
+  // This used to live in handleFinalizeFailure, where it read the
+  // UNIQUE(users.telegram_id) collision as "already registered" and reconciled.
+  // Finalize writes through registerUser now, which updates an existing row
+  // instead of colliding with it — so there is no error left to catch, and the
+  // check has to come before the write rather than after it.
+  const registered = getUserByTelegramId(telegramId);
+  if (registered?.current_room_id != null) {
+    deletePendingRegistration(telegramId);
+    // Nothing will ever sweep these now — the finalize that would have is the
+    // one being reconciled away.
+    clearRegistrationMessages(telegramId);
+    await ctx.reply(
+      "Looks like you're already registered! Open the Mini App from the menu button (☰) to get started."
+    );
+    return;
   }
 
   if (pending.role === "admin") {

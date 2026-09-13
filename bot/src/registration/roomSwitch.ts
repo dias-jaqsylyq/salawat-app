@@ -153,6 +153,9 @@ const ROOM_GONE_TEXT =
 /**
  * A `/start <payload>` from someone who already has an account. Always answers.
  *
+ * Returns whether the payload opened a real room, so the caller can tell a link
+ * that took charge of the conversation from one that did nothing.
+ *
  * This is the only place a room-join rate-limit token is spent: the click is
  * the join attempt, and answering the question that follows must never cost a
  * second one.
@@ -161,19 +164,19 @@ export async function handleRegisteredDeepLink(
   ctx: MyContext,
   user: User,
   payload: string
-): Promise<void> {
+): Promise<boolean> {
   queueIncoming(ctx);
 
   const resolution = resolveJoinPassword(user.telegram_id, payload);
   if (!resolution.room) {
     await replyEphemeral(ctx, `That invite link didn't work — ${escapeHtml(resolution.error)}`);
-    return;
+    return false;
   }
   const room = resolution.room;
 
   if (user.current_room_id === room.id) {
     await replyEphemeral(ctx, `You're already in <b>${escapeHtml(room.name)}</b>.`);
-    return;
+    return true;
   }
 
   const from = user.current_room_id === null ? undefined : getRoomById(user.current_room_id);
@@ -181,7 +184,7 @@ export async function handleRegisteredDeepLink(
     // Nothing to stay in, so nothing to ask: a user between rooms joins the
     // linked room the same way a brand-new one would.
     await joinLinkedRoom(ctx, user, room);
-    return;
+    return true;
   }
 
   ask(user.telegram_id, {
@@ -191,6 +194,7 @@ export async function handleRegisteredDeepLink(
     askedAt: Date.now(),
   });
   await replyEphemeral(ctx, switchQuestionText(from.name, room.name), YES_NO_KEYBOARD);
+  return true;
 }
 
 /**

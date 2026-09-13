@@ -30,7 +30,9 @@ const {
   listHabits,
   listPersonalHabits,
   listRoomAdminUserIds,
+  getParticipantCount,
   regenerateRoomPassword,
+  registerUser,
   removeRoomAdmin,
   setRoomCategoriesEnabled,
   setUserCurrentRoom,
@@ -513,6 +515,69 @@ describe("deleteRoom", () => {
     assert.equal(getRoomByPassword("reusable-pass-room")?.id, reborn.room.id);
 
     assert.deepEqual(deleteRoom(999_999), { deleted: false, membersDetached: 0 });
+  });
+});
+
+describe("registerUser", () => {
+  it("writes a second registration onto the same row, keeping the account", () => {
+    const { room, owner } = makeRoom("Re-reg room", "re-reg-room-pass");
+    const returning = makeUser("Before");
+    setUserCurrentRoom(returning.id, room.id);
+    updateUserProfile(returning.telegram_id, { realName: "Before Name" });
+    leaveCurrentRoom(returning.id);
+
+    const after = registerUser(
+      returning.telegram_id,
+      "After",
+      { telegramUsername: null, telegramFirstName: null, telegramLastName: null },
+      "After Name",
+      {
+        reminderEnabled: true,
+        reminderTime: "05:00",
+        fastingReminderEnabled: false,
+        fastingReminderTime: "20:00",
+      },
+      { role: "admin", currentRoomId: room.id }
+    );
+
+    // Same account, new answers — their history hangs off this id.
+    assert.equal(after.id, returning.id);
+    assert.equal(after.nickname, "After");
+    assert.equal(after.real_name, "After Name");
+    assert.equal(after.role, "admin");
+    assert.equal(after.reminder_time, "05:00");
+    assert.equal(after.current_room_id, room.id);
+    assert.notEqual(after.room_joined_at, null);
+    assert.equal(getParticipantCount(room.id), 2);
+    assert.equal(owner.id !== after.id, true);
+  });
+
+  it("refuses to move someone who is still in a room", () => {
+    const { room, owner } = makeRoom("Immovable room", "immovable-room-pass");
+    const elsewhere = makeRoom("Elsewhere", "elsewhere-reg-pass");
+    addRoomAdmin(room.id, makeUser().id);
+
+    // Registration is not a way to change rooms: doing it here would strip
+    // their co-admin row and personal habits with no confirmation anywhere.
+    assert.throws(
+      () =>
+        registerUser(
+          owner.telegram_id,
+          "Sneaky",
+          { telegramUsername: null, telegramFirstName: null, telegramLastName: null },
+          null,
+          {
+            reminderEnabled: false,
+            reminderTime: "20:00",
+            fastingReminderEnabled: false,
+            fastingReminderTime: "20:00",
+          },
+          { role: "participant", currentRoomId: elsewhere.room.id }
+        ),
+      /already in room/
+    );
+    assert.equal(getUserByTelegramId(owner.telegram_id)?.current_room_id, room.id);
+    assert.equal(isRoomAdmin(owner.id, room.id), true);
   });
 });
 
