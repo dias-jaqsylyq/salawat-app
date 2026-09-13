@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import type { Bot } from "grammy";
+import { hideAppMenuButton } from "../../utils/menuButton.js";
 import type { MyContext } from "../../context.js";
 import {
   addRoomAdmin,
@@ -136,6 +137,8 @@ export function createKickParticipantRoute(bot: Bot<MyContext>) {
     } catch (err) {
       console.error(`Failed to notify kicked user ${target.telegram_id}:`, err);
     }
+    // They have no room now, so the app has nothing to open. Never throws.
+    await hideAppMenuButton(bot.api, target.telegram_id);
 
     res.json({
       success: true,

@@ -38,7 +38,7 @@ import {
   demoteParticipantRoute,
   promoteParticipantRoute,
 } from "./routes/adminParticipants.js";
-import { leaveRoomRoute } from "./routes/room.js";
+import { createLeaveRoomRoute } from "./routes/room.js";
 import { createBroadcastRoute } from "./routes/broadcast.js";
 import {
   adminPdfUpload,
@@ -130,7 +130,7 @@ export function createApiServer(bot: Bot<MyContext>) {
     "/api/room/leave",
     telegramAuth,
     rateLimited(ROOM_ACTION_RATE_LIMIT_PER_MINUTE),
-    leaveRoomRoute
+    createLeaveRoomRoute(bot)
   );
   app.get("/api/is-admin", telegramAuth, isAdminRoute);
   app.get("/api/admin/stats", telegramAuth, requireAdmin, adminStatsRoute);

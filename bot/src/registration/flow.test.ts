@@ -5,6 +5,9 @@ import type { MyContext } from "../context.js";
 process.env.BOT_TOKEN ??= "flow-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
+// A real-looking URL: the app menu button is deliberately not set at all while
+// MINI_APP_URL is a placeholder, and these tests are about it being set.
+process.env.MINI_APP_URL ??= "https://miniapp.test/app";
 
 const {
   createRoom,
@@ -43,6 +46,14 @@ function assertTelegramMarkdownParses(text: string): void {
   }
 }
 
+/** Every chat menu button change any test made, newest last. */
+const menuButtons: { chatId: number; type: string }[] = [];
+
+/** What this chat's menu button was last set to, or undefined if untouched. */
+function lastMenuButton(chatId: number): string | undefined {
+  return menuButtons.filter((entry) => entry.chatId === chatId).at(-1)?.type;
+}
+
 function makeCtx(
   telegramId: number,
   messageText?: string
@@ -53,8 +64,14 @@ function makeCtx(
   const replies: Array<{ text: string; opts: any }> = [];
   const ctx = {
     from: { id: telegramId, is_bot: false, first_name: "Test", username: `user_${telegramId}` },
+    chat: { id: telegramId, type: "private" },
     message: messageText ? { text: messageText } : undefined,
     me: { username: "test_habit_bot" },
+    api: {
+      async setChatMenuButton(args: { chat_id?: number; menu_button: { type: string } }) {
+        menuButtons.push({ chatId: args.chat_id!, type: args.menu_button.type });
+      },
+    },
     reply: async (text: string, opts?: any) => {
       if (opts?.parse_mode === "Markdown") {
         assertTelegramMarkdownParses(text);
@@ -101,6 +118,19 @@ async function registerAdmin(
   const user = getUserByTelegramId(telegramId)!;
   return { user, room: getRoomById(user.current_room_id!)!, replies };
 }
+
+describe("the role question", () => {
+  it("does not claim the choice is permanent, because it is not", async () => {
+    const telegramId = makeTelegramId();
+    const { ctx, replies } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+
+    const asked = replies.at(-1)!.text;
+    assert.doesNotMatch(asked, /can't be changed later/i);
+    // Leaving a room and signing up again is exactly what it now offers.
+    assert.match(asked, /leave your room later and start over/i);
+  });
+});
 
 describe("parseRole", () => {
   it("accepts the keyboard labels and typed shorthands", () => {
@@ -481,6 +511,78 @@ describe("registration flow — shared steps", () => {
     assert.equal(after.current_room_id, room.id);
     assert.equal(after.nickname, "Settled");
     assert.equal(getRoomByPassword("would-be-room"), undefined);
+  });
+});
+
+describe("the app menu button", () => {
+  it("appears once a new admin has a room", async () => {
+    const telegramId = makeTelegramId();
+    await registerAdmin(telegramId, "Button Room", "ButtonAdmin");
+
+    assert.equal(lastMenuButton(telegramId), "web_app");
+  });
+
+  it("appears for a participant who joins with a password", async () => {
+    const host = (await registerAdmin(makeTelegramId(), "Joinable", "JoinAdmin")).room;
+    const telegramId = makeTelegramId();
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    await answer(
+      ctx,
+      telegramId,
+      PARTICIPANT_CHOICE_LABEL,
+      host.password,
+      "Joining Person",
+      "JoinNick",
+      "No",
+      "No"
+    );
+
+    assert.equal(getUserByTelegramId(telegramId)!.current_room_id, host.id);
+    assert.equal(lastMenuButton(telegramId), "web_app");
+  });
+
+  it("is taken away when someone between rooms sends /start", async () => {
+    const telegramId = makeTelegramId();
+    const { user, room } = await registerAdmin(telegramId, "Stale Button", "StaleNick");
+    const heir = createUser(makeTelegramId(), "Stale Heir");
+    const { setUserCurrentRoom, addRoomAdmin } = await import("../db/repository.js");
+    setUserCurrentRoom(heir.id, room.id);
+    addRoomAdmin(room.id, heir.id);
+    leaveCurrentRoom(user.id);
+
+    await startCommand(makeCtx(telegramId, "/start").ctx);
+
+    // Self-healing for anyone who left before the button followed membership:
+    // their leave is long past, so /start is the first chance to correct it.
+    assert.equal(lastMenuButton(telegramId), "commands");
+  });
+
+  it("comes back when someone between rooms registers again", async () => {
+    const telegramId = makeTelegramId();
+    const { user, room } = await registerAdmin(telegramId, "Round One", "RoundOneNick");
+    const heir = createUser(makeTelegramId(), "Heir");
+    const { setUserCurrentRoom, addRoomAdmin } = await import("../db/repository.js");
+    setUserCurrentRoom(heir.id, room.id);
+    addRoomAdmin(room.id, heir.id);
+    leaveCurrentRoom(user.id);
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    await answer(
+      ctx,
+      telegramId,
+      ADMIN_CHOICE_LABEL,
+      "Round Two",
+      "Round Two Room",
+      "No",
+      "RoundTwoNick",
+      "No",
+      "No"
+    );
+
+    assert.notEqual(getUserByTelegramId(telegramId)!.current_room_id, null);
+    assert.equal(lastMenuButton(telegramId), "web_app");
   });
 });
 
