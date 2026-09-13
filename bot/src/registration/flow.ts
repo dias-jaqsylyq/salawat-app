@@ -33,7 +33,7 @@ import type {
   UserRole,
 } from "../types.js";
 
-const YES_NO_KEYBOARD = new Keyboard()
+export const YES_NO_KEYBOARD = new Keyboard()
   .text("Yes")
   .text("No")
   .resized()
@@ -50,7 +50,7 @@ const ROLE_KEYBOARD = new Keyboard()
   .resized()
   .oneTime();
 
-const REMOVE_KEYBOARD = { remove_keyboard: true as const };
+export const REMOVE_KEYBOARD = { remove_keyboard: true as const };
 
 /** Room names are free text shown back to everyone in the room — keep them sane. */
 const MAX_ROOM_NAME_LENGTH = 100;
@@ -231,7 +231,7 @@ function remindersFromPending(pending: PendingRegistration) {
   };
 }
 
-function openAppKeyboard(): InlineKeyboard {
+export function openAppKeyboard(): InlineKeyboard {
   return new InlineKeyboard().url("Open App", config.miniAppDeepLink);
 }
 
@@ -239,29 +239,63 @@ function openAppKeyboard(): InlineKeyboard {
  * Reply, and if the fancy HTML version fails, fall back to a plain one — the
  * account is already saved by the time these run, so a failed confirmation must
  * never leave the user thinking signup itself failed.
+ *
+ * Returns the id of whichever message actually went out, for callers that have
+ * to do something with it afterwards; undefined when both attempts failed.
  */
-async function sendConfirmation(
+export async function sendConfirmation(
   ctx: MyContext,
   telegramId: number,
   html: string,
   plainFallback: string
-): Promise<void> {
+): Promise<number | undefined> {
   try {
-    await ctx.reply(html, { parse_mode: "HTML", reply_markup: openAppKeyboard() });
+    const sent = await ctx.reply(html, { parse_mode: "HTML", reply_markup: openAppKeyboard() });
+    return sent.message_id;
   } catch (err) {
     console.error(
       `finalizeRegistration: user ${telegramId} was saved but the confirmation reply failed:`,
       err
     );
     try {
-      await ctx.reply(plainFallback);
+      const sent = await ctx.reply(plainFallback);
+      return sent.message_id;
     } catch (fallbackErr) {
       console.error(
         `finalizeRegistration: fallback confirmation also failed for ${telegramId}:`,
         fallbackErr
       );
+      return undefined;
     }
   }
+}
+
+/**
+ * The "you're in" message. Shared by the end of participant signup and by a
+ * deep-link room switch (roomSwitch.ts) so the two can never drift apart: it
+ * names the new room and nothing else — someone arriving from another room is
+ * told where they have landed, not what became of where they were.
+ *
+ * HTML, not Markdown: nickname and room name are free text and Telegram's
+ * legacy Markdown parser 400s on any unmatched _ * ` [ (e.g. a nickname like
+ * "ali_2005"), which would make this reply silently vanish into bot.catch()
+ * even though the user had just been fully registered.
+ */
+export function roomWelcomeHtml(roomName: string, nickname: string): string {
+  return (
+    `You're in <b>${escapeHtml(roomName)}</b>, <b>${escapeHtml(nickname)}</b>! 🌙\n\n` +
+    `All logging, progress, leaderboard, and settings are in the Mini App.\n` +
+    `You can change your details anytime in Settings.\n\n` +
+    `Tap below (or the menu button ☰) to open the app.`
+  );
+}
+
+/** The plain-text fallback for roomWelcomeHtml. */
+export function roomWelcomePlain(roomName: string, nickname: string): string {
+  return (
+    `You're in ${roomName}, ${nickname}! ` +
+    `Open the Mini App from the menu button (☰) to get started.`
+  );
 }
 
 /**
@@ -415,21 +449,12 @@ async function finalizeParticipantRegistration(
     return;
   }
 
-  // HTML, not Markdown: nickname and room name are free text and Telegram's
-  // legacy Markdown parser 400s on any unmatched _ * ` [ (e.g. a nickname like
-  // "ali_2005"), which would make this reply silently vanish into bot.catch()
-  // even though the user had just been fully registered above.
-  const html =
-    `You're in <b>${escapeHtml(room.name)}</b>, <b>${escapeHtml(pending.nickname!)}</b>! 🌙\n\n` +
-    `All logging, progress, leaderboard, and settings are in the Mini App.\n` +
-    `You can change your details anytime in Settings.\n\n` +
-    `Tap below (or the menu button ☰) to open the app.`;
-
-  const plain =
-    `You're in ${room.name}, ${pending.nickname}! ` +
-    `Open the Mini App from the menu button (☰) to get started.`;
-
-  await sendConfirmation(ctx, telegramId, html, plain);
+  await sendConfirmation(
+    ctx,
+    telegramId,
+    roomWelcomeHtml(room.name, pending.nickname!),
+    roomWelcomePlain(room.name, pending.nickname!)
+  );
   await cleanupRegistrationMessages(ctx, telegramId, conversation);
 }
 

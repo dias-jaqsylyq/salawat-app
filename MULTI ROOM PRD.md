@@ -40,7 +40,9 @@
   it (exact data-retention behavior — delete vs. archive — is an
   implementation decision, default to **archive/keep for history,
   simply detach from active room membership** unless a cleaner delete
-  is trivially cheap).
+  is trivially cheap). That archive default holds for the Mini App's
+  "Leave room" action; a **deep-link switch** deletes instead (kick
+  semantics — see the deep-link bullet in §1).
 - **Habit categories are a per-room binary toggle**, not per-habit free
   text: **categories ON** (fixed set `IQ` / `SQ` / `PQ` / `EQ`, every
   habit in this room must have exactly one of these four) or
@@ -125,10 +127,12 @@ competition (Admin) or joining one (Participant)?"**
    room the password resolved to.
 
 **Switching rooms** (existing participant, not part of initial
-registration): a new bot command or Settings-screen action —
-"Leave current room" → prompts for a new room password → re-validates
-nickname uniqueness **within the new room** (nickname uniqueness is
-now room-scoped, not global) → updates `current_room_id`.
+registration): via the new room's **deep link**, confirmed with a
+Yes/No question → re-validates nickname uniqueness **within the new
+room** (nickname uniqueness is now room-scoped, not global) → updates
+`current_room_id`. There is deliberately no "type a new room password"
+prompt: the link is the credential, and a password typed into the chat
+would need its own rate-limited entry point for no added reach.
 
 ## 3. Mini App changes
 
@@ -230,12 +234,31 @@ identifier explicitly).
   Telegram deep link (`t.me/<bot_username>?start=<password>`), same
   pattern as Telegram group invite links — following it pre-fills the
   password and skips straight to the participant registration flow for
-  a **brand-new user**. If an **already-registered** user follows
-  someone else's room deep link, the bot **ignores the deep-link
-  payload entirely** and just shows the normal "you're already
-  registered in {room name}" message (§3a) — it does **not** offer to
-  switch rooms via deep link (switching rooms, if ever surfaced, stays
-  a deliberate explicit action, not a side-effect of clicking a link).
+  a **brand-new user**. An **already-registered** user's deep link is
+  honoured too, and what happens depends on the room they are in:
+  - **no current room** (they left one) — they join the linked room
+    immediately, nothing to confirm. This is the *only* way back into a
+    room for an existing account; without it, leaving is a one-way door.
+  - **the room the link points at** — told so, nothing changes.
+  - **a different room** — one Yes/No question naming **both** rooms in
+    the message text (never on the buttons: room names are free text).
+    Switching stays a deliberate, confirmed action, never a side-effect
+    of clicking a link. Any other message **drops** the question and is
+    handled normally — it is never re-asked. No attempt limit, and no
+    manual password entry: this path is deep-link only.
+
+  A confirmed switch is **destructive to the room being left**, using
+  kick semantics (§3a) rather than leave semantics: the user's habit
+  logs and personal habits there are deleted and co-admin status is
+  dropped. Their nickname carries over if it is free in the new room;
+  if not, the bot asks for a new one, checking **only** uniqueness in
+  the new room (not the real-name comparison signup makes). Reminder
+  settings are untouched. Someone who is the old room's **last admin
+  with other members still in it** is refused and told to assign
+  another admin in the Mini App and tap the same link again; someone
+  who is an admin and its **only** member has the old room deleted
+  behind them (see §6). Every message of the dialog is queued for
+  deletion after `REMINDER_DELETE_AFTER_MINUTES`, like the reminders.
 - **Legacy global commands retired**: `/deleteuser` and `/makeadmin`
   (from the pre-multi-room single-tenant era) are **removed entirely**,
   fully superseded by the new room-scoped kick (§3a) and co-admin
@@ -320,7 +343,12 @@ its own PR:
   a room entirely, as opposed to the last-admin-protection case in §3a
   which only covers *leaving/self-demoting*) — not specified, raise
   with the user if it comes up during implementation rather than
-  guessing.
+  guessing. **One deliberate exception, already built**: an admin who
+  is the *only* member of their room and switches away via a deep link
+  has that room deleted behind them (§1), because the alternative is a
+  room with nobody in it and nobody able to reach it. That is the whole
+  exception — there is no "delete my room" action, button or command
+  anywhere, and `deleteRoom` has exactly that one caller.
 - Rate-limit specifics for wrong-password attempts on room join beyond
   reusing existing `allowRequest` conventions.
 - A cap on room size (number of participants) or total number of rooms

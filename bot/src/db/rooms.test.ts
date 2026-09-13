@@ -9,8 +9,10 @@ const {
   addRoomAdmin,
   countRoomAdmins,
   createHabit,
+  createPersonalHabit,
   createRoom,
   createUser,
+  deleteRoom,
   demoteRoomAdmin,
   getExportRows,
   getHabitById,
@@ -20,19 +22,24 @@ const {
   getUserByTelegramId,
   getUserTotalPoints,
   getUsersWithRemindersEnabled,
+  isLastAdminWithMembers,
   isNicknameTaken,
   isRoomAdmin,
   kickUserFromRoom,
   leaveCurrentRoom,
   listHabits,
+  listPersonalHabits,
   listRoomAdminUserIds,
   regenerateRoomPassword,
   removeRoomAdmin,
   setRoomCategoriesEnabled,
   setUserCurrentRoom,
+  switchRoomWithKick,
   updateHabit,
   updateRoomPassword,
+  updateUserProfile,
   upsertHabitLog,
+  upsertPersonalHabitLog,
 } = await import("./repository.js");
 const { db } = await import("./client.js");
 
@@ -419,6 +426,246 @@ describe("kickUserFromRoom", () => {
       habitLogsDeleted: 0,
       wasRoomAdmin: false,
     });
+  });
+});
+
+/** Everything a room owns, so a delete has something real to cascade through. */
+function furnishRoom(name: string, password: string) {
+  const { room, owner } = makeRoom(name, password);
+  const habit = createHabit(room.id, `${name} habit`, "quantity", 2);
+  upsertHabitLog(owner.id, habit.id, 5, "2026-09-01");
+  const personal = createPersonalHabit(owner.id, room.id, `${name} personal`, "binary", null);
+  upsertPersonalHabitLog(personal.id, 1, "2026-09-01");
+  return { room, owner, habit, personal };
+}
+
+function countIn(table: string, roomId: number): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE room_id = ?`)
+    .get(roomId) as { n: number };
+  return row.n;
+}
+
+describe("deleteRoom", () => {
+  it("takes every table that hangs off the room with it", () => {
+    const { room } = furnishRoom("Doomed room", "doomed-room-pass");
+
+    const result = deleteRoom(room.id);
+
+    assert.equal(result.deleted, true);
+    assert.equal(getRoomById(room.id), undefined);
+    // The cascade is the only thing doing this work — nothing above deletes a
+    // child row by hand — so it is worth asserting table by table. habit_logs
+    // in particular points at habits with no ON DELETE clause of its own, and
+    // survives this only because SQLite checks immediate foreign keys at the
+    // end of the statement rather than row by row.
+    for (const table of [
+      "room_admins",
+      "habits",
+      "habit_logs",
+      "personal_habits",
+      "personal_habit_logs",
+    ]) {
+      assert.equal(countIn(table, room.id), 0, `${table} should be empty`);
+    }
+  });
+
+  it("leaves the members it had without a room, and without a stale join date", () => {
+    const { room, owner } = furnishRoom("Emptied room", "emptied-room-pass");
+    const other = makeUser();
+    setUserCurrentRoom(other.id, room.id);
+
+    const result = deleteRoom(room.id);
+
+    assert.equal(result.membersDetached, 2);
+    for (const user of [owner, other]) {
+      const after = getUserByTelegramId(user.telegram_id)!;
+      assert.equal(after.current_room_id, null);
+      // current_room_id is ON DELETE SET NULL; room_joined_at is not, and a
+      // join date with no room behind it would outlive the room forever.
+      assert.equal(after.room_joined_at, null);
+    }
+  });
+
+  it("touches nothing belonging to another room", () => {
+    const doomed = furnishRoom("Neighbour A", "neighbour-a-pass");
+    const survivor = furnishRoom("Neighbour B", "neighbour-b-pass");
+
+    deleteRoom(doomed.room.id);
+
+    assert.equal(getRoomById(survivor.room.id)?.id, survivor.room.id);
+    assert.equal(countIn("habits", survivor.room.id), 1);
+    assert.equal(countIn("habit_logs", survivor.room.id), 1);
+    assert.equal(countIn("personal_habits", survivor.room.id), 1);
+    assert.equal(
+      getUserByTelegramId(survivor.owner.telegram_id)?.current_room_id,
+      survivor.room.id
+    );
+  });
+
+  it("frees the password again and shrugs at an id that never existed", () => {
+    const { room } = makeRoom("Reusable pass room", "reusable-pass-room");
+
+    deleteRoom(room.id);
+
+    assert.equal(getRoomByPassword("reusable-pass-room"), undefined);
+    const reborn = makeRoom("Second life", "reusable-pass-room");
+    assert.equal(getRoomByPassword("reusable-pass-room")?.id, reborn.room.id);
+
+    assert.deepEqual(deleteRoom(999_999), { deleted: false, membersDetached: 0 });
+  });
+});
+
+describe("switchRoomWithKick", () => {
+  it("moves a plain member and deletes what they earned in the room they left", () => {
+    const from = makeRoom("Leaving room", "leaving-room-pass");
+    const to = makeRoom("Arriving room", "arriving-room-pass");
+    const elsewhere = makeRoom("Third room", "third-room-pass");
+    const mover = makeUser("mover-switch");
+
+    const oldHabit = createHabit(from.room.id, "Old habit", "quantity", 2);
+    const otherHabit = createHabit(elsewhere.room.id, "Other habit", "quantity", 3);
+    setUserCurrentRoom(mover.id, elsewhere.room.id);
+    upsertHabitLog(mover.id, otherHabit.id, 5, "2026-09-01");
+    setUserCurrentRoom(mover.id, from.room.id);
+    upsertHabitLog(mover.id, oldHabit.id, 5, "2026-09-01");
+    createPersonalHabit(mover.id, from.room.id, "Old personal", "binary", null);
+
+    const result = switchRoomWithKick(mover.id, to.room.id);
+
+    assert.equal(result.switched, true);
+    assert.equal(result.oldRoomId, from.room.id);
+    assert.equal(result.oldRoomDeleted, false);
+    assert.equal(result.habitLogsDeleted, 1);
+    assert.equal(getUserByTelegramId(mover.telegram_id)?.current_room_id, to.room.id);
+    // A switch is a kick, not a leave: nothing of theirs is left ranking in the
+    // room they walked out of.
+    assert.equal(getUserTotalPoints(mover.id, from.room.id), 0);
+    assert.equal(listPersonalHabits(mover.id, from.room.id).length, 0);
+    // A room they passed through earlier is none of this switch's business.
+    assert.equal(getUserTotalPoints(mover.id, elsewhere.room.id), 15);
+  });
+
+  it("drops co-admin status in the room being left", () => {
+    const from = makeRoom("Co-admin room", "co-admin-room-pass");
+    const to = makeRoom("Somewhere else", "somewhere-else-pass");
+    const coAdmin = makeUser("co-admin-switch");
+    setUserCurrentRoom(coAdmin.id, from.room.id);
+    addRoomAdmin(from.room.id, coAdmin.id);
+
+    assert.equal(switchRoomWithKick(coAdmin.id, to.room.id).switched, true);
+
+    // Co-admin status never transfers and never survives a move (PRD §3a).
+    assert.equal(isRoomAdmin(coAdmin.id, from.room.id), false);
+    assert.equal(isRoomAdmin(coAdmin.id, to.room.id), false);
+    assert.equal(countRoomAdmins(from.room.id), 1);
+  });
+
+  it("refuses the last admin of a room that still has people in it, writing nothing", () => {
+    const from = makeRoom("Stranded room", "stranded-room-pass");
+    const to = makeRoom("Tempting room", "tempting-room-pass");
+    const member = makeUser("left-behind");
+    setUserCurrentRoom(member.id, from.room.id);
+    const habit = createHabit(from.room.id, "Kept habit", "quantity", 2);
+    upsertHabitLog(from.owner.id, habit.id, 5, "2026-09-01");
+
+    const result = switchRoomWithKick(from.owner.id, to.room.id);
+
+    assert.equal(result.lastAdmin, true);
+    assert.equal(result.switched, false);
+    assert.equal(result.habitLogsDeleted, 0);
+    assert.equal(getUserByTelegramId(from.owner.telegram_id)?.current_room_id, from.room.id);
+    assert.equal(getUserTotalPoints(from.owner.id, from.room.id), 10);
+    assert.equal(isRoomAdmin(from.owner.id, from.room.id), true);
+    assert.equal(isLastAdminWithMembers(from.owner.id, from.room.id), true);
+
+    // ...and it goes through the moment someone else can run the room.
+    addRoomAdmin(from.room.id, member.id);
+    assert.equal(isLastAdminWithMembers(from.owner.id, from.room.id), false);
+    assert.equal(switchRoomWithKick(from.owner.id, to.room.id).switched, true);
+    assert.equal(getRoomById(from.room.id)?.id, from.room.id);
+  });
+
+  it("deletes the old room when its only member was an admin", () => {
+    const from = furnishRoom("Last one out", "last-one-out-pass");
+    const to = makeRoom("Fresh start", "fresh-start-pass");
+
+    const result = switchRoomWithKick(from.owner.id, to.room.id);
+
+    assert.equal(result.switched, true);
+    assert.equal(result.oldRoomDeleted, true);
+    assert.equal(getRoomById(from.room.id), undefined);
+    assert.equal(getUserByTelegramId(from.owner.telegram_id)?.current_room_id, to.room.id);
+    assert.equal(countIn("habits", from.room.id), 0);
+  });
+
+  it("leaves an empty room standing when its last member did not run it", () => {
+    const from = makeRoom("Orphan room", "orphan-room-pass");
+    const to = makeRoom("Anywhere else", "anywhere-else-pass");
+    // Contrived on purpose: only a direct edit gets a room to a sole member who
+    // is not its admin, since leaving is refused for the last admin.
+    removeRoomAdmin(from.room.id, from.owner.id);
+
+    const result = switchRoomWithKick(from.owner.id, to.room.id);
+
+    assert.equal(result.switched, true);
+    // We only ever delete a room on behalf of someone who was running it.
+    assert.equal(result.oldRoomDeleted, false);
+    assert.equal(getRoomById(from.room.id)?.id, from.room.id);
+  });
+
+  it("carries the whole person across: nickname, real name and reminders", () => {
+    const from = makeRoom("Departure", "departure-pass");
+    const to = makeRoom("Arrival", "arrival-pass");
+    const mover = makeUser("Unchanged");
+    setUserCurrentRoom(mover.id, from.room.id);
+    updateUserProfile(mover.telegram_id, {
+      realName: "Real Person",
+      reminderEnabled: true,
+      reminderTime: "07:15",
+      fastingReminderEnabled: true,
+      fastingReminderTime: "21:45",
+    });
+
+    switchRoomWithKick(mover.id, to.room.id);
+
+    const after = getUserByTelegramId(mover.telegram_id)!;
+    assert.equal(after.nickname, "Unchanged");
+    assert.equal(after.real_name, "Real Person");
+    assert.equal(after.reminder_enabled, 1);
+    assert.equal(after.reminder_time, "07:15");
+    assert.equal(after.fasting_reminder_enabled, 1);
+    assert.equal(after.fasting_reminder_time, "21:45");
+    assert.notEqual(after.room_joined_at, null);
+  });
+
+  it("moves someone who is between rooms without deleting anything", () => {
+    const to = makeRoom("Way back in", "way-back-in-pass");
+    const roomless = makeUser("roomless-switch");
+
+    const result = switchRoomWithKick(roomless.id, to.room.id);
+
+    assert.equal(result.switched, true);
+    assert.equal(result.oldRoomId, null);
+    assert.equal(result.oldRoomDeleted, false);
+    assert.equal(result.habitLogsDeleted, 0);
+    assert.equal(getUserByTelegramId(roomless.telegram_id)?.current_room_id, to.room.id);
+  });
+
+  it("reports a room that is already gone, and a room they are already in", () => {
+    const { room, owner } = makeRoom("Standing still", "standing-still-pass");
+
+    const missing = switchRoomWithKick(owner.id, 999_999);
+    assert.equal(missing.targetMissing, true);
+    assert.equal(missing.switched, false);
+    assert.equal(getUserByTelegramId(owner.telegram_id)?.current_room_id, room.id);
+
+    const joinedAt = getUserByTelegramId(owner.telegram_id)!.room_joined_at;
+    const again = switchRoomWithKick(owner.id, room.id);
+    assert.equal(again.alreadyThere, true);
+    assert.equal(again.switched, false);
+    // A no-op must not read as a fresh join to the weekly view.
+    assert.equal(getUserByTelegramId(owner.telegram_id)!.room_joined_at, joinedAt);
   });
 });
 
