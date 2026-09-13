@@ -389,9 +389,21 @@ signup may be gone. They just send `/start` again — partial answers live in
 Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on the server. Expose `PORT` over HTTPS (e.g. via nginx + Let's Encrypt) so the Mini App can reach `/api/*`. Point `DB_PATH` at a durable disk path and run `npm run backup` on a cron.
 
 ## Bot commands
-- `/start` — if already registered: a menu-button nudge naming the room they're in (so no separate "which room am I in" command is needed). If not: starts or **resumes** the signup conversation. Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
+- `/start` — three audiences. **Registered and in a room**: a menu-button nudge naming that room (so no separate "which room am I in" command is needed). **Registered but in no room**: the entire signup conversation opens again from the role question — see *Registering again* below. **Not registered**: starts or **resumes** signup. Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
 - `/start <password>` — a room's invite deep link (`t.me/<bot>?start=<password>`). For a **new** user with a valid password it skips the role and password questions and opens signup straight into that room; an unknown password falls back to the normal first question. For an **already-registered** user it is the room-switch entry point (`registration/roomSwitch.ts`): with no current room they join immediately, for the room they are already in they are told so, and for any other room they get one Yes/No question. See *Switching rooms* below.
-- `/help` — registered users get the menu nudge; unregistered users with a pending signup are re-prompted at their current step; others are told to send `/start`.
+- `/help` — registered users in a room get the menu nudge; anyone with a pending signup (including a registered user between rooms) is re-prompted at their current step; others are told to send `/start`.
+
+### Registering again (`commands/start.ts`)
+
+A registered user with `current_room_id = NULL` gets the **whole signup conversation** back from a bare `/start` — the role question, then either branch in full, including **typing a room password into the chat** on the participant side. Before this, that user's only reply was a static "you're not in a room right now, tap the menu button", and the Mini App's `NoRoomScreen` answered *that* by telling them to `/start`: a closed loop with no way into a room unless someone handed them an invite link.
+
+Every answer is asked again and **nothing carries over** — name, nickname, reminders, and the role itself. That is the deliberate opposite of a deep-link switch (below), where the person is moving house and their settings travel with them; here they are starting over. `users.role` is rewritten along with the rest, which is safe because it is written at registration and read nowhere: admin-ness is `room_admins`, via `isRoomAdmin`.
+
+What is *not* touched: `timezone`, `streak_display` and `week_start_day` (Mini App settings, never asked at signup — resetting them would rearrange the app under someone who only wanted a new room), the `users.id` and `created_at` (the same account, with the same history hanging off it), and their `habit_logs` in previous rooms (room-scoped, and already settled by however they left).
+
+Mechanically this is the existing `pending_registrations` state machine with the "already registered" gate opened for roomless users only (`isBetweenRooms` / `mayAnswerSignup` in `commands/start.ts`). Finalize goes through `registerUser`, which updates the existing `users` row instead of inserting a second one — so the `UNIQUE(users.telegram_id)` collision that used to be the only way finalize could fail is no longer reachable from either path. In its place, `finalizeRegistration` refuses **before** writing if the user already has a room, which would otherwise move them out of a room they never left.
+
+Two rules keep this and the deep link from tripping over each other: a bare `/start` drops an open room-switch question, and an invite link drops a half-typed re-registration (queueing its leftover messages for the hour-delayed deletion, like the rest of the dialog). The newer intent wins, in both directions.
 
 ### Switching rooms (`registration/roomSwitch.ts`)
 

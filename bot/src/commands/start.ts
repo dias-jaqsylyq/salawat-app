@@ -1,12 +1,18 @@
 import type { MyContext } from "../context.js";
 import { escapeHtml } from "../api/broadcastFormatting.js";
 import {
+  clearRegistrationMessages,
+  deletePendingRegistration,
+  enqueueMessageDeletion,
   ensurePendingRegistration,
   getPendingRegistration,
   getRoomById,
   getUserByTelegramId,
+  listRegistrationMessageIds,
   startPendingRegistrationForRoom,
 } from "../db/repository.js";
+import { config } from "../config.js";
+import type { User } from "../types.js";
 import {
   handleRegistrationAnswer,
   promptCurrentStep,
@@ -26,14 +32,67 @@ export const HELP_UNREGISTERED_TEXT =
 
 /**
  * The already-registered nudge, naming the user's room (PRD §3a) so "which room
- * am I in" never needs its own command. Falls back to a room-less wording for
- * the window between leaving one room and joining the next.
+ * am I in" never needs its own command.
+ *
+ * Someone between rooms is sent to /start instead of to the menu button: the
+ * app has nothing to show them without a room, and /start is where they join
+ * or create one. Pointing them at the menu button was a loop — the Mini App
+ * answered it by telling them to /start.
  */
 export function registeredMenuText(roomName: string | null): string {
-  const where = roomName
-    ? `You're registered in <b>${escapeHtml(roomName)}</b> — logging, progress, and the leaderboard are in the app.`
-    : "You're registered, but you're not in a room right now.";
-  return `🌙 <b>Habit Tracker</b>\n\n${where}\n\nTap the menu button (☰ next to the message box) to open it.`;
+  if (!roomName) {
+    return (
+      `🌙 <b>Habit Tracker</b>\n\n` +
+      `You're registered, but you're not in a room right now.\n\n` +
+      `Send /start to join one with its password, or to create a room of your own.`
+    );
+  }
+  return (
+    `🌙 <b>Habit Tracker</b>\n\n` +
+    `You're registered in <b>${escapeHtml(roomName)}</b> — logging, progress, and the leaderboard are in the app.\n\n` +
+    `Tap the menu button (☰ next to the message box) to open it.`
+  );
+}
+
+/**
+ * True for a registered user with no room. They may run the whole signup
+ * conversation again from a bare /start — a fresh role question and every
+ * answer asked from scratch — which for everyone else is closed off.
+ */
+function isBetweenRooms(user: User | undefined): boolean {
+  return user !== undefined && user.current_room_id === null;
+}
+
+/**
+ * Who is allowed to be answering signup questions right now: someone who has
+ * never registered, and someone who has but is between rooms and going through
+ * it again. A user with a room is neither, and their answers are ordinary chat.
+ */
+function mayAnswerSignup(telegramId: number): boolean {
+  const user = getUserByTelegramId(telegramId);
+  return user === undefined || isBetweenRooms(user);
+}
+
+/**
+ * Throw away a signup that is no longer going anywhere, queueing whatever of it
+ * is still on screen for deletion an hour out (the same queue roomSwitch.ts and
+ * the reminders use) rather than leaving the questions hanging in the chat.
+ *
+ * Two callers, both cases where the pending row can only mislead: an invite
+ * link superseding a half-finished re-registration, and a user who has a room
+ * again and so can never finish one.
+ */
+function abandonPendingRegistration(telegramId: number): void {
+  if (!getPendingRegistration(telegramId)) return;
+  try {
+    for (const messageId of listRegistrationMessageIds(telegramId)) {
+      enqueueMessageDeletion(telegramId, messageId, config.reminderDeleteAfterMinutes);
+    }
+  } catch (err) {
+    console.error(`Could not queue the abandoned signup of ${telegramId} for deletion:`, err);
+  }
+  clearRegistrationMessages(telegramId);
+  deletePendingRegistration(telegramId);
 }
 
 /**
@@ -72,9 +131,28 @@ export async function startCommand(ctx: MyContext) {
       // which left anyone who had left their room with no way back into one.
       // The payload is honoured now — but a switch out of a room they are
       // actually in still takes an explicit yes (roomSwitch.ts).
-      await handleRegisteredDeepLink(ctx, user, linked);
+      //
+      // A link that opens a real room is the newer intent, so it supersedes a
+      // re-registration half-typed into the chat: left behind, that row would
+      // wait to be resumed by some later /start and finish into a room change
+      // nobody asked for. A link that opens nothing supersedes nothing — a
+      // mistyped or expired one must not cost them the answers they gave.
+      if (await handleRegisteredDeepLink(ctx, user, linked)) {
+        abandonPendingRegistration(telegramId);
+      }
       return;
     }
+    if (isBetweenRooms(user)) {
+      // The whole signup conversation, from the role question down: they are
+      // choosing a room all over again, and everything it asks is asked afresh.
+      const pending = ensurePendingRegistration(telegramId);
+      trackRegistrationMessage(telegramId, ctx.message?.message_id);
+      await promptCurrentStep(ctx, pending);
+      return;
+    }
+    // Registered and in a room: a pending row here can never be finished, and
+    // would only be resumed into confusion.
+    abandonPendingRegistration(telegramId);
     await ctx.reply(registeredMenuText(currentRoomName(telegramId)), { parse_mode: "HTML" });
     return;
   }
@@ -116,7 +194,8 @@ export async function helpCommand(ctx: MyContext) {
   // Asking for help is not an answer to a room-switch question; drop it.
   clearRoomSwitchState(telegramId);
 
-  if (getUserByTelegramId(telegramId)) {
+  const user = getUserByTelegramId(telegramId);
+  if (user && !isBetweenRooms(user)) {
     await ctx.reply(registeredMenuText(currentRoomName(telegramId)), { parse_mode: "HTML" });
     return;
   }
@@ -159,7 +238,9 @@ async function replyWithNextStep(
   telegramId: number,
   preface?: string
 ): Promise<void> {
-  if (getUserByTelegramId(telegramId)) {
+  // Someone between rooms is mid-signup like anyone else, so their question
+  // comes before the menu nudge — which for them says "send /start" anyway.
+  if (!mayAnswerSignup(telegramId)) {
     const menu = registeredMenuText(currentRoomName(telegramId));
     await ctx.reply(preface ? `${preface}\n\n${menu}` : menu, { parse_mode: "HTML" });
     return;
@@ -193,7 +274,7 @@ export async function registrationTextHandler(ctx: MyContext) {
   // Anything sent mid-signup belongs to the signup conversation — a real answer,
   // a mistyped command, a second guess — and is swept away with it. Recorded
   // before the handlers below so an unknown command is covered too.
-  if (!getUserByTelegramId(telegramId) && getPendingRegistration(telegramId)) {
+  if (mayAnswerSignup(telegramId) && getPendingRegistration(telegramId)) {
     trackRegistrationMessage(telegramId, ctx.message?.message_id);
   }
 
@@ -205,7 +286,7 @@ export async function registrationTextHandler(ctx: MyContext) {
     return;
   }
 
-  const pending = getUserByTelegramId(telegramId) ? undefined : getPendingRegistration(telegramId);
+  const pending = mayAnswerSignup(telegramId) ? getPendingRegistration(telegramId) : undefined;
   if (!pending) {
     // Registered, or never started: either way there is no answer to record,
     // but staying silent leaves them typing into a void.
@@ -235,7 +316,7 @@ export async function unsupportedMessageHandler(ctx: MyContext) {
 
   // A sticker sent at the nickname question is as much part of the signup mess
   // as a typed answer, so it is swept away with the rest.
-  if (!getUserByTelegramId(telegramId) && getPendingRegistration(telegramId)) {
+  if (mayAnswerSignup(telegramId) && getPendingRegistration(telegramId)) {
     trackRegistrationMessage(telegramId, ctx.message?.message_id);
   }
 

@@ -11,17 +11,19 @@ const {
   createUser,
   getPendingRegistration,
   getRoomById,
+  getRoomByPassword,
   getUserByTelegramId,
   ensurePendingRegistration,
   isRoomAdmin,
+  leaveCurrentRoom,
   listRoomAdminUserIds,
+  updateUserProfile,
 } = await import("../db/repository.js");
 const { db } = await import("../db/client.js");
 const { handleRegistrationAnswer, ADMIN_CHOICE_LABEL, PARTICIPANT_CHOICE_LABEL, parseRole } =
   await import("./flow.js");
-const { parseStartPayload, registeredMenuText, startCommand } = await import(
-  "../commands/start.js"
-);
+const { parseStartPayload, registeredMenuText, registrationTextHandler, startCommand } =
+  await import("../commands/start.js");
 
 /**
  * Approximates Telegram Bot API's real legacy-"Markdown" entity parser: a lone
@@ -439,60 +441,225 @@ describe("registration flow — shared steps", () => {
     assert.match(last.text, /Bros &lt;3 &amp; Co/);
   });
 
-  it("reconciles instead of erroring when a users row already exists for this telegram_id " +
-    "(the only constraint the users INSERT can violate), logging the real SQL error either way",
-  async () => {
+  it("refuses to finish a signup on top of a live membership, reconciling instead", async () => {
     const telegramId = makeTelegramId();
-    // A stale/pre-existing users row for this telegram_id — the exact condition
-    // reproduced for the live "Something went wrong finishing your signup" report
-    // (a users row survived from before this signup attempt, so the INSERT hits
-    // UNIQUE(users.telegram_id) at finalize time).
-    db.prepare("INSERT INTO users (telegram_id, nickname) VALUES (?, ?)").run(
-      telegramId,
-      "Collision"
-    );
+    // A user who is already fully set up, with a pending signup somehow still
+    // open against them. Finishing it would move them out of a room they never
+    // left and overwrite the answers they gave when they joined it.
+    //
+    // The shape this guards used to be a UNIQUE(users.telegram_id) collision
+    // caught at finalize. It is a check *before* the write now: finalize writes
+    // through registerUser, which updates an existing row rather than colliding
+    // with it — that is what lets someone re-register after leaving a room, and
+    // it means there is no longer an error to catch here.
+    const existing = createUser(telegramId, "Settled");
+    const room = createRoom("Settled Room", "settled-room-pass", existing.id);
+    const { setUserCurrentRoom } = await import("../db/repository.js");
+    setUserCurrentRoom(existing.id, room.id);
 
     const { ctx, replies } = makeCtx(telegramId);
     ensurePendingRegistration(telegramId);
+    await answer(
+      ctx,
+      telegramId,
+      ADMIN_CHOICE_LABEL,
+      "Settled Person",
+      "Would-Be Room",
+      "No",
+      "SettledNick",
+      "No",
+      "No"
+    );
 
-    const originalConsoleError = console.error;
-    const errors: unknown[][] = [];
-    console.error = (...args: unknown[]) => {
-      errors.push(args);
-    };
-    try {
-      await answer(
-        ctx,
-        telegramId,
-        ADMIN_CHOICE_LABEL,
-        "Collision Person",
-        "Collision Room",
-        "No",
-        "CollisionNick",
-        "Yes",
-        "20:00",
-        "No"
-      );
-    } finally {
-      console.error = originalConsoleError;
-    }
-
-    // The real SQL error and a diagnostic snapshot must be logged, not just
-    // "something failed" — this is what makes the next occurrence diagnosable.
-    const logged = errors.map((args) => args.map(String).join(" ")).join("\n");
-    assert.match(logged, /finalizeRegistration/);
-    assert.match(logged, /UNIQUE constraint failed: users\.telegram_id/);
-    assert.match(logged, /users row already exists for this telegram_id\? true/);
-    assert.match(logged, /nickname .* taken by someone else\? false/);
-
-    // Self-healing: the stale collision means the account already exists, so
-    // this isn't a scary failure — clean up the now-redundant pending row and
-    // tell the user plainly, instead of "something went wrong".
+    // Told plainly, not scared with a generic error, and the now-useless
+    // pending row is cleaned up.
     assert.equal(getPendingRegistration(telegramId), undefined);
     assert.match(replies.at(-1)!.text, /already registered/i);
 
-    // The failed signup left no half-created room behind.
+    // Nothing of theirs moved, and no second room was created for them.
+    const after = getUserByTelegramId(telegramId)!;
+    assert.equal(after.current_room_id, room.id);
+    assert.equal(after.nickname, "Settled");
+    assert.equal(getRoomByPassword("would-be-room"), undefined);
+  });
+});
+
+describe("registering again after leaving a room", () => {
+  /** An admin who set a room up, then handed it over and walked out. */
+  async function strandedAdmin(roomName: string, nickname: string) {
+    const telegramId = makeTelegramId();
+    const { user, room } = await registerAdmin(telegramId, roomName, nickname);
+    // Somebody has to be able to run the room they are leaving.
+    const heir = createUser(makeTelegramId(), `${nickname} Heir`);
+    const { setUserCurrentRoom, addRoomAdmin } = await import("../db/repository.js");
+    setUserCurrentRoom(heir.id, room.id);
+    addRoomAdmin(room.id, heir.id);
+
+    leaveCurrentRoom(user.id);
     assert.equal(getUserByTelegramId(telegramId)!.current_room_id, null);
+    return { telegramId, userId: user.id, oldRoom: room };
+  }
+
+  it("opens the role question on a bare /start instead of a dead end", async () => {
+    const { telegramId } = await strandedAdmin("Left Behind", "Leaver");
+
+    const { ctx, replies } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+
+    // The bug: this used to be a static "you're not in a room right now" with
+    // no way forward, and the Mini App answered it by saying to send /start.
+    assert.equal(getPendingRegistration(telegramId)?.step, "role");
+    assert.match(replies.at(-1)!.text, /setting up a new competition, or joining one/i);
+  });
+
+  it("runs the whole admin branch again and builds a brand new room", async () => {
+    const { telegramId, userId, oldRoom } = await strandedAdmin("First Room", "FirstNick");
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    await answer(
+      ctx,
+      telegramId,
+      ADMIN_CHOICE_LABEL,
+      "Second Life",
+      "Second Room",
+      "Yes",
+      "SecondNick",
+      "No",
+      "No"
+    );
+
+    const after = getUserByTelegramId(telegramId)!;
+    const room = getRoomById(after.current_room_id!)!;
+    assert.equal(room.name, "Second Room");
+    assert.equal(room.categories_enabled, 1);
+    assert.notEqual(room.id, oldRoom.id);
+    assert.equal(isRoomAdmin(after.id, room.id), true);
+    assert.notEqual(after.room_joined_at, null);
+    // The same account, not a new one: their history hangs off this id.
+    assert.equal(after.id, userId);
+    assert.equal(getPendingRegistration(telegramId), undefined);
+    // And the room they left is none of this signup's business.
+    assert.equal(getRoomById(oldRoom.id)?.name, "First Room");
+    assert.equal(isRoomAdmin(after.id, oldRoom.id), false);
+  });
+
+  it("runs the participant branch again with the password typed into the chat", async () => {
+    const { telegramId, userId } = await strandedAdmin("Origin Room", "OriginNick");
+    const destination = (await registerAdmin(makeTelegramId(), "Typed Room", "TypedAdmin")).room;
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    assert.equal(getPendingRegistration(telegramId)!.step, "role");
+
+    // No deep link anywhere: the password goes in at the room_password step,
+    // exactly as a brand-new participant would send it.
+    await answer(ctx, telegramId, PARTICIPANT_CHOICE_LABEL);
+    assert.equal(getPendingRegistration(telegramId)!.step, "room_password");
+    await answer(ctx, telegramId, destination.password, "Typed Person", "TypedNick", "No", "No");
+
+    const after = getUserByTelegramId(telegramId)!;
+    assert.equal(after.current_room_id, destination.id);
+    assert.equal(after.id, userId);
+    assert.equal(after.role, "participant");
+    assert.equal(getPendingRegistration(telegramId), undefined);
+  });
+
+  it("asks everything again and carries nothing over", async () => {
+    const { telegramId } = await strandedAdmin("Old Habits", "OldNick");
+    updateUserProfile(telegramId, {
+      realName: "Old Real Name",
+      reminderEnabled: true,
+      reminderTime: "06:30",
+      fastingReminderEnabled: true,
+      fastingReminderTime: "21:00",
+      timezone: "Asia/Almaty",
+      streakDisplay: "current",
+      weekStartDay: 0,
+    });
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    await answer(
+      ctx,
+      telegramId,
+      ADMIN_CHOICE_LABEL,
+      "New Real Name",
+      "New Habits",
+      "No",
+      "NewNick",
+      "No", // daily reminder off this time
+      "No"
+    );
+
+    const after = getUserByTelegramId(telegramId)!;
+    // Every signup answer is the new one. This is the opposite of a deep-link
+    // switch, where the person moves house and their settings travel with them.
+    assert.equal(after.nickname, "NewNick");
+    assert.equal(after.real_name, "New Real Name");
+    assert.equal(after.reminder_enabled, 0);
+    assert.equal(after.fasting_reminder_enabled, 0);
+    // ...but the things signup never asks about are left exactly alone, rather
+    // than silently rearranging the app around someone who wanted a new room.
+    assert.equal(after.timezone, "Asia/Almaty");
+    assert.equal(after.streak_display, "current");
+    assert.equal(after.week_start_day, 0);
+  });
+
+  it("lets the role flip, since the question is asked again", async () => {
+    const { telegramId } = await strandedAdmin("Was Admin", "WasAdminNick");
+    const host = (await registerAdmin(makeTelegramId(), "Host Room", "HostNick")).room;
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+    await answer(
+      ctx,
+      telegramId,
+      PARTICIPANT_CHOICE_LABEL,
+      host.password,
+      "Demoted Person",
+      "DemotedNick",
+      "No",
+      "No"
+    );
+
+    const after = getUserByTelegramId(telegramId)!;
+    assert.equal(after.role, "participant");
+    assert.equal(after.current_room_id, host.id);
+    // A role is a registration answer, not a permission: being in room_admins
+    // is what makes someone an admin, and they are not.
+    assert.equal(isRoomAdmin(after.id, host.id), false);
+    assert.deepEqual(listRoomAdminUserIds(host.id).includes(after.id), false);
+  });
+
+  it("stays shut for a registered user who is still in a room", async () => {
+    const telegramId = makeTelegramId();
+    const { room } = await registerAdmin(telegramId, "Settled Down", "SettledNick");
+
+    const { ctx, replies } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+
+    assert.equal(getPendingRegistration(telegramId), undefined);
+    assert.match(replies.at(-1)!.text, /Settled Down/);
+
+    // ...and their chatter is still ordinary chatter, not a signup answer.
+    const typed = makeCtx(telegramId, ADMIN_CHOICE_LABEL);
+    await registrationTextHandler(typed.ctx);
+    assert.equal(getPendingRegistration(telegramId), undefined);
+    assert.equal(getUserByTelegramId(telegramId)!.current_room_id, room.id);
+  });
+
+  it("routes a stray message to the open question, not the menu nudge", async () => {
+    const { telegramId } = await strandedAdmin("Stray Room", "StrayNick");
+
+    const { ctx } = makeCtx(telegramId, "/start");
+    await startCommand(ctx);
+
+    const stray = makeCtx(telegramId, "what now?");
+    await registrationTextHandler(stray.ctx);
+
+    // They are mid-signup like anyone else, so they get the question again.
+    assert.match(stray.replies.at(-1)!.text, /setting up a new competition, or joining one/i);
   });
 });
 

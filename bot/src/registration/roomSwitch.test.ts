@@ -12,6 +12,7 @@ const {
   createPersonalHabit,
   createRoom,
   createUser,
+  getPendingRegistration,
   getRoomById,
   getUserByTelegramId,
   getUserTotalPoints,
@@ -28,6 +29,7 @@ const {
   startCommand,
   unsupportedMessageHandler,
 } = await import("../commands/start.js");
+const { ADMIN_CHOICE_LABEL } = await import("./flow.js");
 const { getRoomSwitchState } = await import("./roomSwitch.js");
 
 let nextTelegramId = 970000001;
@@ -102,6 +104,42 @@ describe("deep link for a user who is between rooms", () => {
     // Nothing to stay in means nothing to ask.
     assert.deepEqual(keyboardLabels(welcome.opts), []);
     assert.equal(getRoomSwitchState(user.telegram_id), undefined);
+  });
+
+  it("abandons a half-typed re-registration when an invite link arrives", async () => {
+    const { room } = makeRoom("Link Wins Room", "link-wins-room-pass");
+    const { user, chat } = makeMember("Changed Mind", null);
+
+    // A bare /start opens the whole signup again for someone between rooms...
+    await startCommand(chat.ctx("/start"));
+    assert.equal(getPendingRegistration(user.telegram_id)?.step, "role");
+
+    // ...and then they remember they have a link. The newer intent wins.
+    await startCommand(chat.ctx(`/start link-wins-room-pass`));
+
+    assert.equal(getUserByTelegramId(user.telegram_id)?.current_room_id, room.id);
+    // Left behind, that row would be resumed by some later /start and finish
+    // into a room change nobody asked for.
+    assert.equal(getPendingRegistration(user.telegram_id), undefined);
+
+    const later = makeChat(user.telegram_id);
+    await startCommand(later.ctx("/start"));
+    assert.match(later.replies.at(-1)!.text, /Link Wins Room/);
+  });
+
+  it("leaves a half-typed re-registration alone when the link opens nothing", async () => {
+    const { user, chat } = makeMember("Butterfingers", null);
+
+    await startCommand(chat.ctx("/start"));
+    await registrationTextHandler(chat.ctx(ADMIN_CHOICE_LABEL));
+    assert.equal(getPendingRegistration(user.telegram_id)?.step, "real_name");
+
+    await startCommand(chat.ctx("/start not-a-real-password"));
+
+    // A mistyped or expired link supersedes nothing, and must not cost them
+    // the answers they have already given.
+    assert.match(chat.replies.at(-1)!.text, /didn't work/i);
+    assert.equal(getPendingRegistration(user.telegram_id)?.step, "real_name");
   });
 
   it("answers an unusable link without starting a signup", async () => {
