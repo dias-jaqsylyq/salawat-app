@@ -13,6 +13,11 @@ import {
   resolveJoinPassword,
   trackRegistrationMessage,
 } from "../registration/flow.js";
+import {
+  clearRoomSwitchState,
+  handleRegisteredDeepLink,
+  handleRoomSwitchText,
+} from "../registration/roomSwitch.js";
 
 export const HELP_UNREGISTERED_TEXT =
   "🌙 <b>Habit Tracker</b>\n\n" +
@@ -49,15 +54,27 @@ function currentRoomName(telegramId: number): string | null {
   return getRoomById(user.current_room_id)?.name ?? null;
 }
 
-/** Registered users get the menu nudge; everyone else resumes or starts signup. */
+/**
+ * Registered users follow the link they tapped, or get the menu nudge for a
+ * bare /start; everyone else resumes or starts signup.
+ */
 export async function startCommand(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
-  if (getUserByTelegramId(telegramId)) {
-    // A room invite link followed by someone who is already registered is
-    // ignored entirely, payload and all (PRD §3a): switching rooms stays a
-    // deliberate action, never a side effect of tapping a link.
+  const user = getUserByTelegramId(telegramId);
+  if (user) {
+    // A fresh /start always supersedes a room-switch question left hanging.
+    clearRoomSwitchState(telegramId);
+    const linked = parseStartPayload(ctx.message?.text);
+    if (linked) {
+      // An invite link used to be dropped on the floor here, payload and all,
+      // which left anyone who had left their room with no way back into one.
+      // The payload is honoured now — but a switch out of a room they are
+      // actually in still takes an explicit yes (roomSwitch.ts).
+      await handleRegisteredDeepLink(ctx, user, linked);
+      return;
+    }
     await ctx.reply(registeredMenuText(currentRoomName(telegramId)), { parse_mode: "HTML" });
     return;
   }
@@ -95,6 +112,9 @@ export async function startCommand(ctx: MyContext) {
 export async function helpCommand(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
+
+  // Asking for help is not an answer to a room-switch question; drop it.
+  clearRoomSwitchState(telegramId);
 
   if (getUserByTelegramId(telegramId)) {
     await ctx.reply(registeredMenuText(currentRoomName(telegramId)), { parse_mode: "HTML" });
@@ -164,6 +184,12 @@ export async function registrationTextHandler(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
 
+  // First, before anything else can answer them: a registered user may have an
+  // open room-switch question, and their Yes or No belongs to it. Anything that
+  // is not an answer drops the question in there and falls through to the
+  // normal handling below, so it is never asked twice.
+  if (await handleRoomSwitchText(ctx, telegramId, ctx.message?.text ?? "")) return;
+
   // Anything sent mid-signup belongs to the signup conversation — a real answer,
   // a mistyped command, a second guess — and is swept away with it. Recorded
   // before the handlers below so an unknown command is covered too.
@@ -202,6 +228,10 @@ export async function registrationTextHandler(ctx: MyContext) {
 export async function unsupportedMessageHandler(ctx: MyContext) {
   const telegramId = ctx.from?.id;
   if (!telegramId) return;
+
+  // A sticker is "something else" too: it drops an open room-switch question
+  // rather than leaving it waiting for a Yes that is no longer coming.
+  clearRoomSwitchState(telegramId);
 
   // A sticker sent at the nickname question is as much part of the signup mess
   // as a typed answer, so it is swept away with the rest.

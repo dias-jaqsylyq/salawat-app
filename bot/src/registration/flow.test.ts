@@ -553,7 +553,7 @@ describe("/start deep links", () => {
     assert.equal(pending.real_name, null);
   });
 
-  it("ignores the payload entirely for an already-registered user, naming their room", async () => {
+  it("asks an already-registered user whether to switch, naming both rooms", async () => {
     const owner = createUser(makeTelegramId(), "AlreadyOwner");
     const room = createRoom("Home Room", "HomeRoomPass1", owner.id);
     const { setUserCurrentRoom } = await import("../db/repository.js");
@@ -564,11 +564,17 @@ describe("/start deep links", () => {
     const { ctx, replies } = makeCtx(owner.telegram_id, `/start ${otherRoom.password}`);
     await startCommand(ctx);
 
-    // No signup started, no room switch offered — just the menu nudge.
+    // A switch is never a signup, and nothing moves until they answer.
     assert.equal(getPendingRegistration(owner.telegram_id), undefined);
     assert.equal(getUserByTelegramId(owner.telegram_id)!.current_room_id, room.id);
-    assert.match(replies.at(-1)!.text, /Home Room/);
-    assert.doesNotMatch(replies.at(-1)!.text, /Someone Else/);
+
+    const asked = replies.at(-1)!;
+    assert.match(asked.text, /Home Room/);
+    assert.match(asked.text, /Someone Else/);
+    // Both names live in the text; the buttons stay a plain Yes and No.
+    const markup = JSON.stringify(asked.opts.reply_markup);
+    assert.match(markup, /"Yes"/);
+    assert.doesNotMatch(markup, /Home Room|Someone Else/);
   });
 
   it("names no room for a registered user who is between rooms", () => {

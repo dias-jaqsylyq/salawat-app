@@ -184,6 +184,41 @@ export function setRoomCategoriesEnabled(roomId: number, enabled: boolean): Room
   })();
 }
 
+export interface DeleteRoomResult {
+  deleted: boolean;
+  /** Members who were still in the room and have just been left without one. */
+  membersDetached: number;
+}
+
+/**
+ * Delete a room and everything hanging off it.
+ *
+ * This exists for exactly one case: an admin who is the *only* member of their
+ * room switching out of it (switchRoomWithKick), where leaving the room
+ * standing would strand a room nobody can reach or run. Room deletion is
+ * otherwise out of scope (MULTI ROOM PRD §6) — there is no general "delete my
+ * room" action, and nothing else calls this.
+ *
+ * One DELETE does the whole job: room_admins, habits, habit_logs,
+ * personal_habits and personal_habit_logs all cascade from rooms(id) with
+ * foreign keys on (client.ts). Deliberately no hand-written child deletes — the
+ * cascade stays the single source of truth, so a child table added later cannot
+ * be silently forgotten here.
+ *
+ * room_joined_at is cleared by hand first: users.current_room_id is
+ * ON DELETE SET NULL, but nothing nulls the stamp beside it, and a join date
+ * with no room behind it confuses every weekly view that reads it.
+ */
+export function deleteRoom(roomId: number): DeleteRoomResult {
+  const remove = db.transaction((): DeleteRoomResult => {
+    const membersDetached = getParticipantCount(roomId);
+    db.prepare("UPDATE users SET room_joined_at = NULL WHERE current_room_id = ?").run(roomId);
+    const deleted = db.prepare("DELETE FROM rooms WHERE id = ?").run(roomId).changes > 0;
+    return { deleted, membersDetached };
+  });
+  return remove();
+}
+
 /* ---------------------------------------------------- room-scoped admins */
 
 /** True when this user is an admin (owner or co-admin) of that specific room. */
@@ -236,6 +271,23 @@ export function listRoomAdminUserIds(roomId: number): number[] {
     .prepare("SELECT user_id FROM room_admins WHERE room_id = ? ORDER BY created_at ASC, user_id ASC")
     .all(roomId) as { user_id: number }[];
   return rows.map((row) => row.user_id);
+}
+
+/**
+ * True when this user is the room's only admin *and* other members are still in
+ * it — the one shape where leaving has to be refused, since it would leave a
+ * populated room with nobody able to run it (PRD §3a).
+ *
+ * A read-only pre-check, for callers that must refuse before asking the user
+ * anything else. switchRoomWithKick re-checks the same thing inside its own
+ * transaction, and that one is the source of truth.
+ */
+export function isLastAdminWithMembers(userId: number, roomId: number): boolean {
+  return (
+    isRoomAdmin(userId, roomId) &&
+    getParticipantCount(roomId) > 1 &&
+    countRoomAdmins(roomId) <= 1
+  );
 }
 
 /** How many admins a room has — the input to last-admin protection (PRD §3a). */
@@ -407,6 +459,111 @@ export function setUserCurrentRoom(userId: number, roomId: number | null): void 
     }
   });
   move();
+}
+
+export interface SwitchRoomResult {
+  switched: boolean;
+  /** Refused: they are the old room's last admin and other members remain. */
+  lastAdmin: boolean;
+  /** Refused: the room they are joining no longer exists. */
+  targetMissing: boolean;
+  /** No-op: they were already in that room. */
+  alreadyThere: boolean;
+  /** The room they were in, or null if they were between rooms. */
+  oldRoomId: number | null;
+  /** The old room was deleted — they were an admin and its only member. */
+  oldRoomDeleted: boolean;
+  habitLogsDeleted: number;
+}
+
+/**
+ * Move a user out of whatever room they are in and into another one, in a
+ * single transaction. Backs the deep-link room switch.
+ *
+ * Destructive on the way out, deliberately: the habit_logs they earned in the
+ * old room are deleted, as in a kick (kickUserFromRoom) and unlike a voluntary
+ * leave. A switch is not a pause — nothing of theirs is coming back to that
+ * room, and leaving their rows behind would keep them on its leaderboard.
+ * Personal habits and co-admin status go the same way, via setUserCurrentRoom.
+ *
+ * Nothing else on the users row is touched: nickname, real name and reminder
+ * settings follow the person, not the membership. Freeing up the nickname in
+ * the target room is the caller's job — uniqueness there is per-room and lives
+ * in application code only (isNicknameTaken).
+ *
+ * Refused for the last admin of a room that still has other people in it, the
+ * same guard leave and kick apply. An admin who is the room's *only* member is
+ * the deliberate exception: rather than trapping them, the empty room is
+ * deleted behind them (deleteRoom).
+ *
+ * A user with no current room is the degenerate case and is simply moved in —
+ * that is how someone who left a room gets back into one at all.
+ */
+export function switchRoomWithKick(userId: number, targetRoomId: number): SwitchRoomResult {
+  const refused = {
+    switched: false,
+    lastAdmin: false,
+    targetMissing: false,
+    alreadyThere: false,
+    oldRoomDeleted: false,
+    habitLogsDeleted: 0,
+  };
+
+  const move = db.transaction((): SwitchRoomResult => {
+    const row = db.prepare("SELECT current_room_id FROM users WHERE id = ?").get(userId) as
+      | { current_room_id: number | null }
+      | undefined;
+    if (!row) {
+      throw new Error(`switchRoomWithKick: user ${userId} not found`);
+    }
+    const oldRoomId = row.current_room_id;
+
+    // Both checked before anything is written: the question that led here may
+    // be minutes old, and neither case is an error worth throwing over.
+    if (!getRoomById(targetRoomId)) {
+      return { ...refused, targetMissing: true, oldRoomId };
+    }
+    if (oldRoomId === targetRoomId) {
+      return { ...refused, alreadyThere: true, oldRoomId };
+    }
+
+    let habitLogsDeleted = 0;
+    let deleteOldRoom = false;
+    if (oldRoomId !== null) {
+      const wasAdmin = isRoomAdmin(userId, oldRoomId);
+      const members = getParticipantCount(oldRoomId);
+      // Order matters: an admin alone in their room is its last admin too, and
+      // that case deletes the room rather than refusing the move.
+      if (wasAdmin && members > 1 && countRoomAdmins(oldRoomId) <= 1) {
+        return { ...refused, lastAdmin: true, oldRoomId };
+      }
+      deleteOldRoom = wasAdmin && members === 1;
+      habitLogsDeleted = db
+        .prepare("DELETE FROM habit_logs WHERE user_id = ? AND room_id = ?")
+        .run(userId, oldRoomId).changes;
+    }
+
+    // Drops the old room_admins row and the personal habits kept in that room,
+    // and stamps room_joined_at for the new one.
+    setUserCurrentRoom(userId, targetRoomId);
+
+    // After the move, so the room is already empty by the time it goes and its
+    // ON DELETE SET NULL on users.current_room_id has nobody left to touch.
+    if (deleteOldRoom && oldRoomId !== null) {
+      deleteRoom(oldRoomId);
+    }
+
+    return {
+      switched: true,
+      lastAdmin: false,
+      targetMissing: false,
+      alreadyThere: false,
+      oldRoomId,
+      oldRoomDeleted: deleteOldRoom,
+      habitLogsDeleted,
+    };
+  });
+  return move();
 }
 
 export interface DeleteUserCompletelyResult {

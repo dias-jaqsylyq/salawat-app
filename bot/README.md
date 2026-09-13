@@ -207,7 +207,7 @@ Someone else's personal habit answers `404 personal_habit_not_found`, identicall
 → `403 not_registered` · `409 nickname_taken` · `429 rate_limited`
 
 **POST /api/room/leave** — leave the room you are currently in
-- **Non-destructive**, unlike a kick: habit logs stay in the database; membership and co-admin status are dropped. Afterwards the user has no room (reminders pause) until they join another one with its password, which happens in the bot
+- **Non-destructive**, unlike a kick: habit logs stay in the database; membership and co-admin status are dropped. Afterwards the user has no room (reminders pause) until they follow another room's invite link in the bot (*Switching rooms*)
 - Refused for a room's **last admin** — promote someone else first
 → `200 { success: true, leftRoomId }`
 → `400 no_room` · `403 not_registered` · `409 last_admin`
@@ -390,8 +390,24 @@ Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on th
 
 ## Bot commands
 - `/start` — if already registered: a menu-button nudge naming the room they're in (so no separate "which room am I in" command is needed). If not: starts or **resumes** the signup conversation. Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
-- `/start <password>` — a room's invite deep link (`t.me/<bot>?start=<password>`). For a **new** user with a valid password it skips the role and password questions and opens signup straight into that room. For an **already-registered** user the payload is ignored entirely — it never offers a room switch. An unknown password falls back to the normal first question.
+- `/start <password>` — a room's invite deep link (`t.me/<bot>?start=<password>`). For a **new** user with a valid password it skips the role and password questions and opens signup straight into that room; an unknown password falls back to the normal first question. For an **already-registered** user it is the room-switch entry point (`registration/roomSwitch.ts`): with no current room they join immediately, for the room they are already in they are told so, and for any other room they get one Yes/No question. See *Switching rooms* below.
 - `/help` — registered users get the menu nudge; unregistered users with a pending signup are re-prompted at their current step; others are told to send `/start`.
+
+### Switching rooms (`registration/roomSwitch.ts`)
+
+Only reachable by tapping a room's invite deep link — there is no command and no "type a password" prompt for someone who already has an account.
+
+- **No current room** → joined on the spot, nothing asked. Before this existed, leaving a room was a one-way door: `/start` discarded the payload for anyone with a `users` row, and nothing else in the bot or the API could set `current_room_id` to a room.
+- **The room they are in** → told so, nothing changes.
+- **Any other room** → one Yes/No question naming both rooms **in the text**; the buttons stay a plain `Yes`/`No`, because room names are free text and a button reading `🌙🌙🌙` answers nothing.
+
+The question is **ephemeral in memory**, not a table: anything that is not a Yes or a No — another message, a sticker, a command, `/help`, a bare `/start` — drops it and is handled normally, and it is never re-asked. A redeploy losing one costs the user a second tap on the link. Every message of the exchange, the new-room welcome included, goes into the same `scheduled_message_deletions` queue the reminders use.
+
+A confirmed switch uses **kick semantics, not leave semantics** (`switchRoomWithKick`): the habit logs and personal habits they earned in the old room are deleted and co-admin status is dropped, because nothing of theirs is coming back to that room. Nickname, real name and reminder settings follow the person. If the nickname is already taken in the new room the bot asks for another, checking **only** uniqueness there — the real-name comparison signup makes is not repeated, since that pair was settled at registration.
+
+Two admin cases:
+- **Last admin, other members still in the room** → refused, with "assign another admin in the Mini App, then tap the same link again". Same guard as leave and kick, so a populated room can never be left with nobody able to run it.
+- **Admin who is the room's only member** → the old room is **deleted** behind them (`deleteRoom`, one `DELETE FROM rooms` relying entirely on the schema's `ON DELETE CASCADE`). This is the only room deletion anywhere in the codebase and the only caller of `deleteRoom`: room deletion is otherwise out of scope (MULTI ROOM PRD §6), and the alternative here is stranding a room with nobody in it and no way back to it.
 
 ### Registration flow (`registration/flow.ts`)
 
