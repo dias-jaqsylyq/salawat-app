@@ -23,6 +23,7 @@ import {
   updatePendingRegistration,
 } from "../db/repository.js";
 import { safeDeleteMessage } from "../utils/messages.js";
+import { showAppMenuButton } from "../utils/menuButton.js";
 import { isValidRoomPassword, roomInviteLink } from "../utils/roomPassword.js";
 import type { MyContext } from "../context.js";
 import type {
@@ -86,7 +87,7 @@ export function promptTextForStep(step: RegistrationStep): string {
         "Are you setting up a new competition, or joining one?\n\n" +
         `• <b>${escapeHtml(ADMIN_CHOICE_LABEL)}</b> — you create the room and share its password.\n` +
         `• <b>${escapeHtml(PARTICIPANT_CHOICE_LABEL)}</b> — you need the password from your room's admin.\n\n` +
-        "This can't be changed later, so pick carefully."
+        "You can leave your room later and start over if you change your mind."
       );
     case "room_password":
       return "Enter your room's password (ask the room's admin for it — it's case-sensitive).";
@@ -367,6 +368,9 @@ async function finalizeAdminRegistration(
     return;
   }
 
+  // They are in a room now, so the app has something to show them.
+  await showAppMenuButton(ctx.api, telegramId);
+
   const username = botUsername(ctx);
   const inviteLine = username
     ? `\n\nOr share this invite link — it opens the bot with the password filled in:\n` +
@@ -437,6 +441,7 @@ async function finalizeParticipantRegistration(
     return;
   }
 
+  await showAppMenuButton(ctx.api, telegramId);
   await sendConfirmation(
     ctx,
     telegramId,

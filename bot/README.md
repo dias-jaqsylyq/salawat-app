@@ -4,7 +4,7 @@ Backend for a month-long salawat counting challenge among a friend group during 
 
 ## Architecture
 One Node process runs two things side by side:
-- A grammY bot using long polling (`/start` registration conversation, `/help`, the daily reminder scheduler, sets the chat menu button to open the Mini App).
+- A grammY bot using long polling (`/start` registration conversation, `/help`, the daily reminder scheduler, and the chat menu button, which opens the Mini App only while the user is actually in a room).
 - An Express HTTP API (`/api/*`) that the Mini App frontend calls directly, authenticated via Telegram `initData` — no separate login system.
 
 Both share the same SQLite database (`db/repository.ts`) and challenge-date logic (`utils/challenge.ts`).
@@ -54,7 +54,7 @@ Open `.env` and set:
 - `REMINDER_DELETE_AFTER_MINUTES` — how long a reminder DM (daily and fasting alike) stays in the chat before the bot deletes it. Defaults to `60`. Keep it well under `2880`: Telegram refuses to delete anything older than 48 hours, so a longer window means the message is never removed. Set but not a positive whole number is a startup error, not a silent fallback.
 - `PORT` — API port (defaults to `3000` locally; Railway injects this automatically in production).
 - `CORS_ORIGIN` — origin(s) allowed to call the API. Defaults to `*` (dev only). **In production (`NODE_ENV=production`) this must be set to the real Vercel domain** (not `*`) or the process refuses to start.
-- `MINI_APP_URL` — the deployed Mini App's real HTTPS URL, used for the bot's chat menu button. If left as the placeholder, menu-button setup is skipped (process still boots).
+- `MINI_APP_URL` — the deployed Mini App's real HTTPS URL, used for the bot's chat menu button. If left as the placeholder, menu-button setup is skipped entirely — bot-wide at boot and per chat (`utils/menuButton.ts`) — rather than pointing anyone at a dead URL. The process still boots.
 - `MINI_APP_DEEP_LINK` — `t.me/salawat_challenge_bot/challenge` deep link used in the daily reminder's button. Works today independent of the Vercel deployment.
 - `INIT_DATA_MAX_AGE_SECONDS` — how old a Telegram `initData` payload can be before it's rejected as stale (replay protection). Defaults to `3600` (1h) when `NODE_ENV=production` and `86400` (24h) otherwise, so production is safe without setting it. A value that is set but not a positive whole number is a startup error rather than a silent fallback.
 - `ADMIN_EXPORT_SECRET` — optional. When set, enables `GET /api/admin/export?key=…` for prize-time CSV download.
@@ -392,6 +392,20 @@ Same idea — `npm install && npm run build`, run under `pm2`, keep `.env` on th
 - `/start` — three audiences. **Registered and in a room**: a menu-button nudge naming that room (so no separate "which room am I in" command is needed). **Registered but in no room**: the entire signup conversation opens again from the role question — see *Registering again* below. **Not registered**: starts or **resumes** signup. Partial answers live in `pending_registrations` so Railway redeploys don't lose progress.
 - `/start <password>` — a room's invite deep link (`t.me/<bot>?start=<password>`). For a **new** user with a valid password it skips the role and password questions and opens signup straight into that room; an unknown password falls back to the normal first question. For an **already-registered** user it is the room-switch entry point (`registration/roomSwitch.ts`): with no current room they join immediately, for the room they are already in they are told so, and for any other room they get one Yes/No question. See *Switching rooms* below.
 - `/help` — registered users in a room get the menu nudge; anyone with a pending signup (including a registered user between rooms) is re-prompted at their current step; others are told to send `/start`.
+
+### The chat menu button (`utils/menuButton.ts`)
+
+The blue "Open App" button follows membership rather than sitting there permanently. `setupMenuButton` (`bot.ts`, at boot) sets it bot-wide; per-chat overrides take it from there:
+
+- **joining a room** — registration finalize (both branches, first time and again), and `completeJoin` for a deep-link join or switch → `showAppMenuButton`
+- **leaving one** — `POST /api/room/leave` and the admin kick route → `hideAppMenuButton`
+- **a bare `/start` from someone between rooms** — also `hideAppMenuButton`, for self-healing: anyone who left before the button followed membership still has the bot-wide one, and their leave is long past, so this is the first chance to correct it
+
+Opening the Mini App with no room lands on `NoRoomScreen`, whose only advice is to come back to the bot and send `/start`; a button that leads there is worse than no button.
+
+Telegram gives no way to remove the button outright — the options are `web_app`, `commands` and `default` — and `default` is not it, because the bot-wide default *is* the web_app button, so resetting to it would put "Open App" straight back. Hence `commands`, which is also where the `/start` they need lives. That is why `setupCommands` publishes `/start` and `/help` at boot: without it the button they are left with opens an empty list.
+
+Every call is best-effort and never throws. Telegram refuses for reasons that have nothing to do with the membership change — blocked bot, chat gone, rate limit — and none of them is a reason to fail the leave, the kick or the signup that triggered it. That is also why `leaveRoomRoute` became `createLeaveRoomRoute(bot)`: the route needs the API to make the call, in the same shape `createKickParticipantRoute(bot)` already had.
 
 ### Registering again (`commands/start.ts`)
 

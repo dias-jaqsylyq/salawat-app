@@ -73,7 +73,13 @@ export function createBot(): Bot<MyContext> {
   return bot;
 }
 
-/** Points the chat menu button (next to the message box) at the Mini App. */
+/**
+ * Points the chat menu button (next to the message box) at the Mini App, for
+ * every chat that has no button of its own.
+ *
+ * Per-chat overrides take it from here: someone with no room has theirs swapped
+ * for the commands menu until they are in one again (utils/menuButton.ts).
+ */
 export async function setupMenuButton(bot: Bot<MyContext>): Promise<void> {
   await bot.api.setChatMenuButton({
     menu_button: {
@@ -82,4 +88,18 @@ export async function setupMenuButton(bot: Bot<MyContext>): Promise<void> {
       web_app: { url: config.miniAppUrl },
     },
   });
+}
+
+/**
+ * Publish the two commands the bot actually answers.
+ *
+ * Worth doing now that a user between rooms gets the commands menu in place of
+ * "Open App": without this the button they are left with opens an empty list,
+ * when /start is the one thing they need from it.
+ */
+export async function setupCommands(bot: Bot<MyContext>): Promise<void> {
+  await bot.api.setMyCommands([
+    { command: "start", description: "Join or create a room, or open the app" },
+    { command: "help", description: "What this bot can do" },
+  ]);
 }

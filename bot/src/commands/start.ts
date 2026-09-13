@@ -12,6 +12,7 @@ import {
   startPendingRegistrationForRoom,
 } from "../db/repository.js";
 import { config } from "../config.js";
+import { hideAppMenuButton } from "../utils/menuButton.js";
 import type { User } from "../types.js";
 import {
   handleRegistrationAnswer,
@@ -143,6 +144,12 @@ export async function startCommand(ctx: MyContext) {
       return;
     }
     if (isBetweenRooms(user)) {
+      // Self-healing, and the reason this is here rather than only on the way
+      // out: anyone who left before per-chat menu buttons existed still has the
+      // bot-wide "Open App" one, pointing at a screen that only tells them to
+      // come back here. Their next /start is the first chance to correct it,
+      // and setting it again when it is already right costs nothing.
+      await hideAppMenuButton(ctx.api, telegramId);
       // The whole signup conversation, from the role question down: they are
       // choosing a room all over again, and everything it asks is asked afresh.
       const pending = ensurePendingRegistration(telegramId);

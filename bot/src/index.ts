@@ -1,6 +1,6 @@
 import "./db/client.js";
 import { config } from "./config.js";
-import { createBot, setupMenuButton } from "./bot.js";
+import { createBot, setupCommands, setupMenuButton } from "./bot.js";
 import { startBackupScheduler } from "./scheduler/backup.js";
 import { startReminderScheduler } from "./scheduler/reminder.js";
 import { startFastingReminderScheduler } from "./scheduler/fastingReminder.js";
@@ -13,6 +13,12 @@ startReminderScheduler(bot);
 startFastingReminderScheduler(bot);
 startMessageCleanupScheduler(bot);
 startBackupScheduler();
+
+try {
+  await setupCommands(bot);
+} catch (err) {
+  console.error("Failed to publish the bot command list (continuing without it):", err);
+}
 
 if (config.miniAppUrlIsPlaceholder) {
   console.error(
