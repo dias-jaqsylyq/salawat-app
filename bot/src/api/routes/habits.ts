@@ -12,7 +12,9 @@ import { getRoomHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope
  * nothing to log against right now (PRD §3a).
  *
  * `category` is echoed as stored — the client decides whether to group by it,
- * from the room's own categoriesEnabled (GET /api/progress).
+ * from the room's own categoriesEnabled (GET /api/progress). `period` says
+ * whether a habit scores once a day or once a week; weekly habits are listed
+ * among the daily ones, in the same categories, and are not a separate section.
  */
 export function listHabitsRoute(req: Request, res: Response): void {
   const caller = resolveCallerRoom(req);
@@ -27,6 +29,8 @@ export function listHabitsRoute(req: Request, res: Response): void {
     // Retired field, echoed as a constant so a Mini App build that predates the
     // binary-only change keeps rendering. Dropped once the client stops reading it.
     type: "binary" as const,
+    description: habit.description,
+    period: habit.period,
     pointsWeight: habit.points_weight,
     category: habit.category,
   }));

@@ -175,25 +175,29 @@ describe("GET /api/progress — today's total", () => {
 });
 
 describe("GET /api/progress/week", () => {
-  it("returns the seven days of the calendar week from the chosen start day", () => {
+  it("returns Monday to Sunday, whatever the viewer's old week-start preference says", () => {
     const room = makeRoom();
-    createHabit(room.id, "Weekly habit", 5);
+    createHabit(room.id, "Daily habit", 5);
     const { telegramId } = makeMember(room.id, "Asia/Hong_Kong");
 
+    // The room's week is the one that counts now: a weekly habit scores in it
+    // and the weekly leaderboard resets on it, so the grid cannot be drawing a
+    // different one per viewer. week_start_day no longer moves any boundary.
     for (const weekStartDay of [0, 1, 6]) {
       updateUserProfile(telegramId, { weekStartDay });
       const { body } = callWeek(telegramId);
 
       assert.equal(body.days.length, 7);
       assert.equal(body.weekStart, body.days[0]);
-      assert.equal(body.weekStartDay, weekStartDay);
+      assert.equal(body.weekEnd, body.days[6]);
+      assert.equal(body.weekStartDay, 1);
       assert.equal(
         weekdayOfDate({
           year: Number(body.weekStart.slice(0, 4)),
           month: Number(body.weekStart.slice(5, 7)),
           day: Number(body.weekStart.slice(8, 10)),
         }),
-        weekStartDay
+        1
       );
       // Consecutive days, with today among them.
       for (let i = 1; i < 7; i++) {

@@ -278,7 +278,7 @@ describe("personal habits — progress", () => {
       { personalHabitId: created.body.id, logged: false, value: 0 },
     ]);
     assert.deepEqual(before.personalStreaks, [
-      { personalHabitId: created.body.id, streak: 0 },
+      { personalHabitId: created.body.id, streak: 0, unit: "days" },
     ]);
 
     log(telegramId, created.body.id);

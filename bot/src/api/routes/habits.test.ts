@@ -103,6 +103,8 @@ describe("GET /api/habits", () => {
       id: active.id,
       name: "Read Qur'an",
       type: "binary",
+      description: null,
+      period: "daily",
       pointsWeight: 2,
       category: null,
     });

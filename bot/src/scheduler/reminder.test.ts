@@ -218,14 +218,29 @@ describe("sendDueReminders — per-user timezone", () => {
 
 describe("buildReminderMessage", () => {
   it("lists unlogged habit names when there are any", () => {
-    const text = buildReminderMessage(["Fajr", "Qur'an"]);
+    const text = buildReminderMessage({ today: ["Fajr", "Qur'an"], thisWeek: [] });
     assert.match(text, /Still to log: Fajr, Qur'an/);
+    assert.doesNotMatch(text, /this week/i);
   });
 
   it("returns an all-caught-up message when nothing is left to log", () => {
-    const text = buildReminderMessage([]);
+    const text = buildReminderMessage({ today: [], thisWeek: [] });
     assert.match(text, /all caught up/i);
     assert.doesNotMatch(text, /Still to log/);
+  });
+
+  it("adds a separate line for weekly habits still open this week", () => {
+    const text = buildReminderMessage({ today: ["Fajr"], thisWeek: ["Weekly khatm"] });
+    assert.match(text, /Still to log: Fajr/);
+    assert.match(text, /Still open this week: Weekly khatm/);
+  });
+
+  it("leads with the good news when only a weekly habit is outstanding", () => {
+    const text = buildReminderMessage({ today: [], thisWeek: ["Weekly khatm"] });
+    // Today really is done, so it must not open by telling them off for it.
+    assert.doesNotMatch(text, /Don't forget/);
+    assert.match(text, /Today's habits are all logged/);
+    assert.match(text, /Still open this week: Weekly khatm/);
   });
 });
 
@@ -308,5 +323,38 @@ describe("sendDueReminders — message content", () => {
     await sendDueReminders(bot, AT_20);
 
     assert.match(captured, /all caught up/i);
+  });
+});
+
+describe("sendDueReminders — weekly habits", () => {
+  it("mentions a weekly habit not yet done this week, on its own line", async () => {
+    const telegramId = makeUser(true, "20:00");
+    const user = getUserByTelegramId(telegramId)!;
+    const weekly = createHabit(room.id, uniqueHabitName("Weekly reminder"), 30, null, "weekly");
+    const daily = makeHabit("Daily reminder");
+
+    // Everyone in this room shares the habit list, so capture only the DM that
+    // went to this user.
+    const captureFor = async (): Promise<string> => {
+      let captured = "";
+      await sendDueReminders(
+        mockBot(async (id, text) => {
+          if (id === telegramId) captured = text;
+        }),
+        AT_20
+      );
+      return captured;
+    };
+
+    const before = await captureFor();
+    assert.match(before, new RegExp(`Still to log:[^\\n]*${daily.name}`));
+    assert.match(before, new RegExp(`Still open this week:[^\\n]*${weekly.name}`));
+
+    // Marking it today satisfies the whole week, so the next nudge drops it —
+    // while the daily habit, a different deadline, keeps being mentioned.
+    upsertHabitLog(user.id, weekly.id, 1, todayKey);
+    const after = await captureFor();
+    assert.doesNotMatch(after, new RegExp(weekly.name));
+    assert.match(after, new RegExp(`Still to log:[^\\n]*${daily.name}`));
   });
 });

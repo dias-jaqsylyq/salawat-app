@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { config } from "../../config.js";
 import { getExportRows } from "../../db/repository.js";
+import { rankRows } from "../rank.js";
 import { requireAdminSecret } from "../adminAuth.js";
 import { formatDateParts, getTodayInTimezone } from "../../utils/challenge.js";
 import { requireCallerRoom } from "../roomScope.js";
@@ -61,13 +62,7 @@ function sendCsv(res: Response, roomId: number | undefined, filenameStem: string
 /** One room's rows, or — for the owner-only secret-gated export — every room's. */
 export function buildExportCsv(roomId?: number): string {
   const rows = getExportRows(roomId);
-  let rank = 1;
-  const ranked = rows.map((row, i) => {
-    if (i > 0 && row.total < rows[i - 1]!.total) {
-      rank = i + 1;
-    }
-    return { ...row, rank };
-  });
+  const ranked = rankRows(rows, (row) => row.total).map(({ row, rank }) => ({ ...row, rank }));
 
   const lines = [
     "rank,nickname,real_name,telegram_id,telegram_username,telegram_first_name,telegram_last_name,total_points",

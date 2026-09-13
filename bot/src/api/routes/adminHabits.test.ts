@@ -174,3 +174,72 @@ describe("PATCH /api/admin/habits/:id", () => {
     assert.equal(body.error, "invalid_body");
   });
 });
+
+describe("period and description", () => {
+  it("defaults to daily and no goal line", () => {
+    const { body } = callCreate({ name: "Plain habit", pointsWeight: 3 });
+    assert.equal(body.period, "daily");
+    assert.equal(body.description, null);
+  });
+
+  it("creates a weekly habit with a goal line, trimming it", () => {
+    const { status, body } = callCreate({
+      name: "Weekly khatm",
+      pointsWeight: 30,
+      period: "weekly",
+      description: "  min 30 min  ",
+    });
+    assert.equal(status, 201);
+    assert.equal(body.period, "weekly");
+    assert.equal(body.description, "min 30 min");
+  });
+
+  it("rejects a period that is neither daily nor weekly", () => {
+    const { status, body } = callCreate({
+      name: "Fortnightly",
+      pointsWeight: 1,
+      period: "fortnightly",
+    });
+    assert.equal(status, 400);
+    assert.equal(body.error, "invalid_period");
+  });
+
+  it("rejects a description that is not a string, or is too long", () => {
+    assert.equal(
+      callCreate({ name: "Bad goal", pointsWeight: 1, description: 42 }).body.error,
+      "invalid_description"
+    );
+    assert.equal(
+      callCreate({ name: "Long goal", pointsWeight: 1, description: "x".repeat(201) }).body.error,
+      "invalid_description"
+    );
+  });
+
+  it("treats a blank description as no description at all", () => {
+    const { body } = callCreate({ name: "Blank goal", pointsWeight: 1, description: "   " });
+    assert.equal(body.description, null);
+  });
+
+  it("edits and clears the goal line", () => {
+    const created = callCreate({ name: "Editable", pointsWeight: 2, description: "before" });
+    assert.equal(callPatch(created.body.id, { description: "after" }).body.description, "after");
+    assert.equal(callPatch(created.body.id, { description: null }).body.description, null);
+    // A description on its own is a valid patch — it must not read as an empty body.
+    assert.equal(callPatch(created.body.id, { description: "again" }).status, 200);
+  });
+
+  it("refuses to change a habit's period after creation", () => {
+    const created = callCreate({ name: "Fixed cadence", pointsWeight: 2, period: "weekly" });
+
+    // `period` alone is not a patch at all: nothing else in the body means there
+    // is nothing to change.
+    const { status, body } = callPatch(created.body.id, { period: "daily" });
+    assert.equal(status, 400);
+    assert.equal(body.error, "invalid_body");
+
+    // And sending it alongside a real change leaves the cadence alone.
+    const renamed = callPatch(created.body.id, { name: "Still weekly", period: "daily" });
+    assert.equal(renamed.body.name, "Still weekly");
+    assert.equal(renamed.body.period, "weekly");
+  });
+});

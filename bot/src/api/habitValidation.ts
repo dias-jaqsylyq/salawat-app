@@ -8,6 +8,35 @@ import { HABIT_CATEGORIES, type HabitCategory } from "../types.js";
 
 export const NAME_MAX_LENGTH = 100;
 
+/**
+ * The admin's free-text goal line ("min 30 min", "2 pages"). Long enough for a
+ * sentence, short enough to sit under a habit name on a phone without becoming
+ * a second description field nobody reads.
+ */
+export const DESCRIPTION_MAX_LENGTH = 200;
+
+/**
+ * Normalise a `description` from a request body.
+ *
+ * An omitted field means "leave it alone" (undefined); null, an empty string
+ * and whitespace all mean "there is no goal line" and land as null, so an admin
+ * clearing the box gets the same stored value as one who never filled it in.
+ */
+export type DescriptionCheck =
+  | { ok: true; description: string | null | undefined }
+  | { ok: false; error: string };
+
+export function checkDescription(raw: unknown, provided: boolean): DescriptionCheck {
+  if (!provided || raw === undefined) return { ok: true, description: undefined };
+  if (raw === null) return { ok: true, description: null };
+  if (typeof raw !== "string") return { ok: false, error: "invalid_description" };
+  const trimmed = raw.trim();
+  if (trimmed.length > DESCRIPTION_MAX_LENGTH) {
+    return { ok: false, error: "invalid_description" };
+  }
+  return { ok: true, description: trimmed.length === 0 ? null : trimmed };
+}
+
 export function isValidHabitName(value: unknown): value is string {
   return (
     typeof value === "string" &&
