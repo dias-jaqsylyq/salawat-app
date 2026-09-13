@@ -226,9 +226,9 @@ describe("deep link for a user who is already in a room", () => {
     const from = makeRoom("Abandoned Room", "abandoned-room-pass");
     const to = makeRoom("Chosen Room", "chosen-room-pass");
     const { user, chat } = makeMember("Switcher", from.room.id);
-    const habit = createHabit(from.room.id, "Old habit", "quantity", 2);
-    upsertHabitLog(user.id, habit.id, 5, "2026-09-01");
-    createPersonalHabit(user.id, from.room.id, "Old personal", "binary", null);
+    const habit = createHabit(from.room.id, "Old habit",  2);
+    upsertHabitLog(user.id, habit.id, 1, "2026-09-01");
+    createPersonalHabit(user.id, from.room.id, "Old personal",  null);
 
     await startCommand(chat.ctx("/start chosen-room-pass"));
     await registrationTextHandler(chat.ctx("Yes"));
@@ -252,7 +252,7 @@ describe("deep link for a user who is already in a room", () => {
     const from = makeRoom("One Man Room", "one-man-room-pass");
     const to = makeRoom("Somewhere Busier", "somewhere-busier-pass");
     const chat = makeChat(from.owner.telegram_id);
-    createHabit(from.room.id, "Lonely habit", "binary", 1);
+    createHabit(from.room.id, "Lonely habit",  1);
 
     await startCommand(chat.ctx("/start somewhere-busier-pass"));
     await registrationTextHandler(chat.ctx("Yes"));

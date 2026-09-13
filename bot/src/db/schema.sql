@@ -88,7 +88,20 @@ CREATE TABLE IF NOT EXISTS habits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+  -- Free text for a goal the app deliberately does not measure — "min 30 min",
+  -- "2 pages". Shown to members beside the name and read by nothing else: it
+  -- never reaches computePoints, a streak, a total or the leaderboard.
+  description TEXT,
+  -- The unit of time one completion scores for. 'daily' scores once per
+  -- calendar day; 'weekly' scores once per calendar week (Monday-Sunday,
+  -- resolved in TIMEZONE) however many days of that week carry a log — see the
+  -- carrier-row rule on points_earned below.
+  --
+  -- Create-only: PATCH /api/admin/habits refuses it, because the points_earned
+  -- of rows already written cannot be reinterpreted under the other rule. The
+  -- CHECK cannot come along on an ALTER TABLE ADD COLUMN, so a migrated DB
+  -- enforces the two values in the application layer (same as streak_display).
+  period TEXT NOT NULL DEFAULT 'daily' CHECK (period IN ('daily','weekly')),
   points_weight INTEGER NOT NULL,
   -- Only meaningful while the room's categories_enabled = 1. Kept (not cleared)
   -- when categories are switched off, so nothing is lost — but a re-enable asks
@@ -112,8 +125,19 @@ CREATE TABLE IF NOT EXISTS habit_logs (
   -- keep pointing at the room it was earned in after the user switches rooms.
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   log_date TEXT NOT NULL,              -- TIMEZONE-local day, 'YYYY-MM-DD'
-  value INTEGER NOT NULL,              -- quantity: entered number; binary: 1
-  points_earned INTEGER NOT NULL,      -- frozen at log time, see computePoints
+  -- Always 1. Every habit is done-or-not; the column survives the retired
+  -- 'quantity' type only because dropping it would rewrite the table for no
+  -- gain, and row *presence* is what streaks and "today" actually read.
+  value INTEGER NOT NULL,
+  -- Frozen at log time, never recomputed on read — see computePoints.
+  --
+  -- For a habit with period = 'weekly' exactly one row per (user, habit,
+  -- calendar week) carries the weight and every other row in that week carries
+  -- 0, so the week is worth points_weight however many days of it are marked.
+  -- upsertHabitLog picks that carrier and deleteHabitLog hands the weight to
+  -- the earliest surviving row of the week, so unmarking one day never silently
+  -- erases a week that is still marked elsewhere.
+  points_earned INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (user_id, habit_id, log_date)
@@ -141,7 +165,8 @@ CREATE TABLE IF NOT EXISTS personal_habits (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('quantity','binary')),
+  -- No `period` and no `description`, unlike habits: a personal habit is always
+  -- a daily done-or-not, and there is no admin to write a goal line for it.
   -- Same rule as habits.category and enforced in the same place (the
   -- application layer): required while the room has categories_enabled = 1,
   -- rejected while it does not.
@@ -167,7 +192,7 @@ CREATE TABLE IF NOT EXISTS personal_habit_logs (
   personal_habit_id INTEGER NOT NULL REFERENCES personal_habits(id) ON DELETE CASCADE,
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   log_date TEXT NOT NULL,              -- the owner's local day, 'YYYY-MM-DD'
-  value INTEGER NOT NULL,              -- quantity: entered number; binary: 1
+  value INTEGER NOT NULL,              -- always 1; presence is what matters
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (user_id, personal_habit_id, log_date)

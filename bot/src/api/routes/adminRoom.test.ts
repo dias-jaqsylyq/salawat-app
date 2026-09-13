@@ -76,7 +76,7 @@ describe("GET /api/admin/room", () => {
 describe("PATCH /api/admin/room", () => {
   it("toggles categories on and back off, preserving stored habit categories", () => {
     const { room, ownerTelegramId } = makeRoom("Toggle room", "toggle-room-pass");
-    const habit = createHabit(room.id, "Categorised", "binary", 1, "SQ");
+    const habit = createHabit(room.id, "Categorised",  1, "SQ");
 
     const on = call(patchAdminRoomRoute, {
       telegramId: ownerTelegramId,

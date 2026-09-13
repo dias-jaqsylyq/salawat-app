@@ -64,18 +64,18 @@ function needsMultiRoomReset(): boolean {
 }
 
 /**
- * Snapshot the DB file next to itself before the destructive reset. Returns the
- * path, or null when there is nothing on disk to copy (`:memory:` in tests, or
- * a first boot). Deliberately NOT the rolling scheduler backup path — that one
- * gets overwritten every few hours, and this snapshot is the only copy of the
- * pre-pivot data.
+ * Snapshot the DB file next to itself before a destructive migration. Returns
+ * the path, or null when there is nothing on disk to copy (`:memory:` in tests,
+ * or a first boot). Deliberately NOT the rolling scheduler backup path — that
+ * one gets overwritten every few hours, and this snapshot is the only copy of
+ * the data the migration is about to rewrite.
  */
-function snapshotBeforeReset(): string | null {
+function snapshotDb(label: string): string | null {
   if (config.dbPath === ":memory:" || !existsSync(config.dbPath)) return null;
   // Fold the WAL into the main file first, so the plain file copy is complete.
   db.pragma("wal_checkpoint(TRUNCATE)");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dest = join(dirname(config.dbPath), `salawat.pre-multiroom-${stamp}.db`);
+  const dest = join(dirname(config.dbPath), `salawat.${label}-${stamp}.db`);
   copyFileSync(config.dbPath, dest);
   return dest;
 }
@@ -94,7 +94,7 @@ function snapshotBeforeReset(): string | null {
 export function resetForMultiRoom(): boolean {
   if (!needsMultiRoomReset()) return false;
 
-  const snapshot = snapshotBeforeReset();
+  const snapshot = snapshotDb("pre-multiroom");
   console.warn(
     `db migration: pre-multi-room DB detected — DROPPING all app tables and recreating them ` +
       `from schema.sql (no data is migrated). ` +
@@ -156,6 +156,12 @@ const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
     column: "week_start_day",
     definition: "INTEGER NOT NULL DEFAULT 1",
   },
+  // The admin's free-text goal line, and the day-or-week scoring unit. Normally
+  // created by dropQuantityHabits()'s table rebuild or by schema.sql on a fresh
+  // DB; listed here as the additive path for a DB that somehow has neither.
+  // period's CHECK cannot come along (see below) — createHabitRoute validates it.
+  { table: "habits", column: "description", definition: "TEXT" },
+  { table: "habits", column: "period", definition: "TEXT NOT NULL DEFAULT 'daily'" },
   // Backfilled from created_at for everyone already in a room — see
   // backfillRoomJoinedAt().
   { table: "users", column: "room_joined_at", definition: "TEXT" },
@@ -190,6 +196,141 @@ export function addMissingColumns(): string[] {
   return added;
 }
 
+/**
+ * The CREATE TABLE statement schema.sql carries for one table, verbatim. Used
+ * by the rebuild below so the new table can never drift from the schema file —
+ * there is exactly one definition of `habits`, and it lives in schema.sql.
+ */
+function createTableStatement(table: string): string {
+  const match = schema.match(
+    new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?\\n\\);`)
+  );
+  if (!match) {
+    throw new Error(`schema.sql has no CREATE TABLE for ${table}`);
+  }
+  return match[0];
+}
+
+/**
+ * Rebuild one table from its current schema.sql definition, carrying over every
+ * column the two shapes share and letting the rest take their declared default.
+ * The SQLite "12-step ALTER TABLE" procedure, which is what dropping a column
+ * mentioned in a CHECK constraint requires — plain ALTER TABLE DROP COLUMN
+ * refuses those outright.
+ *
+ * Caller holds `foreign_keys = OFF` and `legacy_alter_table = ON`: the first so
+ * the DROP does not cascade into habit_logs, the second so the RENAME is a
+ * plain rename instead of rewriting references in other tables (habit_logs
+ * already says REFERENCES habits(id), which is exactly where we want it to
+ * point once the rename lands).
+ */
+function rebuildTableFromSchema(table: string): void {
+  const tmp = `${table}__rebuild`;
+  const before = columnNames(table);
+
+  db.exec(
+    createTableStatement(table).replace(
+      `CREATE TABLE IF NOT EXISTS ${table} (`,
+      `CREATE TABLE ${tmp} (`
+    )
+  );
+  // Columns only the new shape has (period, description) are left out of the
+  // INSERT so they take their DEFAULT; columns only the old shape has (type)
+  // are dropped on the floor, which is the whole point.
+  const carried = columnNames(tmp).filter((column) => before.includes(column));
+  const list = carried.join(", ");
+  db.exec(`INSERT INTO ${tmp} (${list}) SELECT ${list} FROM ${table}`);
+  db.exec(`DROP TABLE ${table}`);
+  db.exec(`ALTER TABLE ${tmp} RENAME TO ${table}`);
+}
+
+/**
+ * Retire the 'quantity' habit type (every habit is done-or-not now).
+ *
+ * Quantity habits and their logs are deleted rather than converted: a count is
+ * not a yes/no, so there is no honest binary reading of "7 pages", and the only
+ * rooms that ever created one were testing. Their *points* go with them, which
+ * is why this snapshots the file first.
+ *
+ * Then `type` itself is dropped from habits and personal_habits, by rebuilding
+ * both from schema.sql — which is also what gives already-live rooms the new
+ * `period` and `description` columns.
+ *
+ * Idempotent: keyed on `type` still existing, so it no-ops on a fresh DB (where
+ * schema.sql never created the column) and on every boot after the first.
+ * Returns true when it actually rewrote something.
+ */
+export function dropQuantityHabits(): boolean {
+  const habitsHasType = tableExists("habits") && columnNames("habits").includes("type");
+  const personalHasType =
+    tableExists("personal_habits") && columnNames("personal_habits").includes("type");
+  if (!habitsHasType && !personalHasType) return false;
+
+  const snapshot = snapshotDb("pre-binary-only");
+  console.warn(
+    `db migration: retiring the 'quantity' habit type — DELETING every quantity ` +
+      `habit and its logs, then dropping habits.type/personal_habits.type. ` +
+      (snapshot ? `Snapshot of the old data: ${snapshot}` : `No file snapshot taken (${config.dbPath}).`)
+  );
+
+  // PRAGMA foreign_keys is a no-op inside a transaction, so both toggles have to
+  // happen out here. See rebuildTableFromSchema for why each one is needed.
+  db.pragma("foreign_keys = OFF");
+  db.pragma("legacy_alter_table = ON");
+  let deletedHabits = 0;
+  let deletedLogs = 0;
+  try {
+    const migrate = db.transaction(() => {
+      if (habitsHasType) {
+        deletedLogs += db
+          .prepare(
+            `DELETE FROM habit_logs
+             WHERE habit_id IN (SELECT id FROM habits WHERE type = 'quantity')`
+          )
+          .run().changes;
+        deletedHabits += db.prepare(`DELETE FROM habits WHERE type = 'quantity'`).run().changes;
+        rebuildTableFromSchema("habits");
+      }
+      if (personalHasType) {
+        // Explicit, even though the FK says ON DELETE CASCADE: foreign keys are
+        // off for the rebuild, so nothing would cascade.
+        deletedLogs += db
+          .prepare(
+            `DELETE FROM personal_habit_logs
+             WHERE personal_habit_id IN (SELECT id FROM personal_habits WHERE type = 'quantity')`
+          )
+          .run().changes;
+        deletedHabits += db
+          .prepare(`DELETE FROM personal_habits WHERE type = 'quantity'`)
+          .run().changes;
+        rebuildTableFromSchema("personal_habits");
+      }
+      // Every index the DROPs took with them is `IF NOT EXISTS`, so replaying
+      // the schema puts them back and touches nothing else.
+      db.exec(schema);
+
+      const violations = db.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        // Inside the transaction on purpose: throwing rolls the whole rebuild
+        // back rather than leaving a half-migrated file behind.
+        throw new Error(
+          `foreign_key_check found ${violations.length} violation(s) after the rebuild`
+        );
+      }
+    });
+    migrate();
+  } finally {
+    db.pragma("legacy_alter_table = OFF");
+    db.pragma("foreign_keys = ON");
+  }
+
+  console.warn(
+    `db migration: 'quantity' retired — deleted ${deletedHabits} habit(s) and ` +
+      `${deletedLogs} log(s); habits/personal_habits rebuilt without \`type\`.`
+  );
+  return true;
+}
+
 try {
   resetForMultiRoom();
 } catch (err) {
@@ -207,6 +348,25 @@ try {
 
 // No-op right after a reset; creates the tables on a brand-new DB file.
 db.exec(schema);
+
+// Then retire 'quantity'. Has to come after db.exec(schema) (it reads the file
+// for the table definitions it rebuilds from) and before addMissingColumns()
+// (its rebuild is what gives a live DB `period` and `description`, so the
+// additive path below finds them already there).
+try {
+  dropQuantityHabits();
+} catch (err) {
+  // Fatal, like resetForMultiRoom: the app assumes binary-only habits, so
+  // booting on a DB that still has quantity rows would score them wrong. The
+  // transaction has already rolled the rebuild back, and the pre-migration
+  // snapshot is on disk either way.
+  console.error(
+    `db migration: dropQuantityHabits failed, database left unchanged ` +
+      `(transaction rolled back): ${err instanceof Error ? err.message : String(err)}`,
+    err
+  );
+  throw err;
+}
 
 /**
  * Give every current room member a room_joined_at. Members who predate the

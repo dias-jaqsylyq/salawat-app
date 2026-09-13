@@ -26,8 +26,12 @@ const room = (() => {
 const ROOMLESS_TELEGRAM_ID = 940000002;
 createUser(ROOMLESS_TELEGRAM_ID, "admin-habits-roomless");
 
-function makeHabit(name: string, type: "quantity" | "binary", pointsWeight: number) {
-  return createHabit(room.id, name, type, pointsWeight);
+function makeHabit(
+  name: string,
+  pointsWeight: number,
+  period: "daily" | "weekly" = "daily"
+) {
+  return createHabit(room.id, name, pointsWeight, null, period);
 }
 
 function capture(): { res: Response; status: () => number; body: () => any } {
@@ -76,8 +80,8 @@ function callPatch(
 
 describe("GET /api/admin/habits", () => {
   it("lists all habits, including inactive ones", () => {
-    const active = makeHabit("Admin-visible active", "quantity", 1);
-    const inactive = makeHabit("Admin-visible inactive", "binary", 1);
+    const active = makeHabit("Admin-visible active", 1);
+    const inactive = makeHabit("Admin-visible inactive", 1);
     callPatch(inactive.id, { isActive: false });
 
     const { body } = callList();
@@ -89,16 +93,15 @@ describe("GET /api/admin/habits", () => {
 
 describe("POST /api/admin/habits", () => {
   it("creates a habit and returns it", () => {
-    const { status, body } = callCreate({ name: "New habit", type: "quantity", pointsWeight: 4 });
+    const { status, body } = callCreate({ name: "New habit", pointsWeight: 4 });
     assert.equal(status, 201);
     assert.equal(body.name, "New habit");
-    assert.equal(body.type, "quantity");
     assert.equal(body.pointsWeight, 4);
     assert.equal(body.isActive, true);
   });
 
   it("puts the habit in the calling admin's room", () => {
-    const { status, body } = callCreate({ name: "Room-scoped", type: "binary", pointsWeight: 1 });
+    const { status, body } = callCreate({ name: "Room-scoped", pointsWeight: 1 });
     assert.equal(status, 201);
     assert.deepEqual(
       listHabits({ roomId: room.id }).map((h) => h.id).includes(body.id),
@@ -108,27 +111,28 @@ describe("POST /api/admin/habits", () => {
 
   it("400s when the caller is not in a room", () => {
     const { status, body } = callCreate(
-      { name: "Homeless habit", type: "binary", pointsWeight: 1 },
+      { name: "Homeless habit", pointsWeight: 1 },
       ROOMLESS_TELEGRAM_ID
     );
     assert.equal(status, 400);
     assert.equal(body.error, "no_room");
   });
 
-  it("rejects an invalid type", () => {
-    const { status, body } = callCreate({ name: "Bad type", type: "counter", pointsWeight: 1 });
-    assert.equal(status, 400);
-    assert.equal(body.error, "invalid_type");
+  it("ignores a `type` a stale client still sends", () => {
+    // The field is retired. An older Mini App build posting it must not 400 —
+    // it simply has no say in what gets created.
+    const { status } = callCreate({ name: "Stale client", type: "counter", pointsWeight: 1 });
+    assert.equal(status, 201);
   });
 
   it("rejects a non-positive points weight", () => {
-    const { status, body } = callCreate({ name: "Bad weight", type: "binary", pointsWeight: 0 });
+    const { status, body } = callCreate({ name: "Bad weight", pointsWeight: 0 });
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_points_weight");
   });
 
   it("rejects an empty name", () => {
-    const { status, body } = callCreate({ name: "  ", type: "binary", pointsWeight: 1 });
+    const { status, body } = callCreate({ name: "  ", pointsWeight: 1 });
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_name");
   });
@@ -136,7 +140,7 @@ describe("POST /api/admin/habits", () => {
 
 describe("PATCH /api/admin/habits/:id", () => {
   it("is non-destructive: deactivating and reactivating a habit round-trips", () => {
-    const habit = makeHabit("Toggle me", "binary", 5);
+    const habit = makeHabit("Toggle me", 5);
 
     const off = callPatch(habit.id, { isActive: false });
     assert.equal(off.body.isActive, false);
@@ -146,7 +150,7 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("edits name and pointsWeight without touching the other", () => {
-    const habit = makeHabit("Original name", "quantity", 2);
+    const habit = makeHabit("Original name", 2);
 
     const renamed = callPatch(habit.id, { name: "Renamed" });
     assert.equal(renamed.body.name, "Renamed");
@@ -164,7 +168,7 @@ describe("PATCH /api/admin/habits/:id", () => {
   });
 
   it("400s when the body has none of the recognized fields", () => {
-    const habit = makeHabit("Empty patch", "binary", 1);
+    const habit = makeHabit("Empty patch", 1);
     const { status, body } = callPatch(habit.id, {});
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_body");

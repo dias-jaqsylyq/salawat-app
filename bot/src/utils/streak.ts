@@ -3,6 +3,7 @@ import {
   addOneCalendarDay,
   formatDateParts,
   parseDateKey,
+  shiftWeekStart,
   subtractOneCalendarDay,
 } from "./dates.js";
 
@@ -20,6 +21,37 @@ export function streakFromLoggedDays(loggedDays: Set<string>, asOfDate: string):
   while (loggedDays.has(cursor)) {
     streak += 1;
     cursor = formatDateParts(subtractOneCalendarDay(parseDateKey(cursor)));
+  }
+  return streak;
+}
+
+/**
+ * Consecutive weeks met, walking backward from the week starting at
+ * `currentWeekStart`. The weekly twin of streakFromLoggedDays, with one
+ * deliberate difference: the current week gets grace.
+ *
+ * A daily streak may show 0 because today is still in progress and the member
+ * can fix that in the same sitting. A weekly streak cannot — a week is met or
+ * not for up to seven days — so the strict rule would park a five-week streak
+ * at 0 every Monday and leave it there until the member happens to log. Instead
+ * an unmet current week is simply not counted and the walk starts at last week,
+ * exactly as computeStreak already does for an unfinished today. Logging this
+ * week then turns 5 into 6 rather than 0 into 1.
+ *
+ * `metWeekStarts` holds the Monday of every week the habit was marked in.
+ */
+export function streakFromLoggedWeeks(
+  metWeekStarts: Set<string>,
+  currentWeekStart: string
+): number {
+  let cursor = metWeekStarts.has(currentWeekStart)
+    ? currentWeekStart
+    : shiftWeekStart(currentWeekStart, -1);
+
+  let streak = 0;
+  while (metWeekStarts.has(cursor)) {
+    streak += 1;
+    cursor = shiftWeekStart(cursor, -1);
   }
   return streak;
 }

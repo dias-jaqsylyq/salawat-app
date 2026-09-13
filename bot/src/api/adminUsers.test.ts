@@ -57,8 +57,8 @@ describe("deleteUserCompletely", () => {
     const user = getUserByTelegramId(telegramId)!;
     const room = createRoom("Wipe room", "wipe-room-pass", user.id);
     setUserCurrentRoom(user.id, room.id);
-    const habit = createHabit(room.id, "Test habit", "quantity", 1);
-    upsertHabitLog(user.id, habit.id, 25, "2026-08-01");
+    const habit = createHabit(room.id, "Test habit",  1);
+    upsertHabitLog(user.id, habit.id, 1, "2026-08-01");
     assert.equal(isRoomAdmin(user.id, room.id), true);
 
     const result = deleteUserCompletely(telegramId);

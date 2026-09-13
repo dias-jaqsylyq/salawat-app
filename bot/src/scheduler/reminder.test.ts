@@ -67,7 +67,7 @@ function makeUser(reminderEnabled: boolean, reminderTime = "20:00"): number {
 }
 
 function makeHabit(label: string) {
-  return createHabit(room.id, uniqueHabitName(label), "binary", 5);
+  return createHabit(room.id, uniqueHabitName(label),  5);
 }
 
 let nextHabitSuffix = 1;
@@ -255,14 +255,14 @@ describe("sendDueReminders — message content", () => {
       user.id,
       room.id,
       uniqueHabitName("My unlogged habit"),
-      "binary",
+      
       null
     );
     const loggedPersonal = createPersonalHabit(
       user.id,
       room.id,
       uniqueHabitName("My logged habit"),
-      "binary",
+      
       null
     );
     upsertPersonalHabitLog(loggedPersonal.id, 1, todayKey);

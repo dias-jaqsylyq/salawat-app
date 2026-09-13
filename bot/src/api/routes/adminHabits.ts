@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { createHabit, listHabits, updateHabit } from "../../db/repository.js";
-import type { Habit, HabitType } from "../../types.js";
+import type { Habit } from "../../types.js";
 import {
   categoryForCreate,
   checkCategory,
@@ -15,7 +15,9 @@ function habitResponse(habit: Habit) {
   return {
     id: habit.id,
     name: habit.name,
-    type: habit.type,
+    // Retired field, echoed as a constant so a Mini App build that predates the
+    // binary-only change keeps rendering. Dropped once the client stops reading it.
+    type: "binary" as const,
     pointsWeight: habit.points_weight,
     category: habit.category,
     isActive: habit.is_active === 1,
@@ -38,7 +40,7 @@ export function listAdminHabitsRoute(req: Request, res: Response): void {
 
 /**
  * POST /api/admin/habits — create a habit in the caller's own room.
- * Body: `{name, type, pointsWeight, category?}`, where `category` is required
+ * Body: `{name, pointsWeight, category?}`, where `category` is required
  * when the room has categories enabled and rejected when it does not.
  */
 export function createHabitRoute(req: Request, res: Response): void {
@@ -49,12 +51,6 @@ export function createHabitRoute(req: Request, res: Response): void {
 
   if (!isValidHabitName(body.name)) {
     res.status(400).json({ success: false, error: "invalid_name" });
-    return;
-  }
-
-  const type: unknown = body.type;
-  if (type !== "quantity" && type !== "binary") {
-    res.status(400).json({ success: false, error: "invalid_type" });
     return;
   }
 
@@ -76,13 +72,7 @@ export function createHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const habit = createHabit(
-    caller.roomId,
-    body.name.trim(),
-    type as HabitType,
-    body.pointsWeight,
-    category
-  );
+  const habit = createHabit(caller.roomId, body.name.trim(), body.pointsWeight, category);
   res.status(201).json(habitResponse(habit));
 }
 
