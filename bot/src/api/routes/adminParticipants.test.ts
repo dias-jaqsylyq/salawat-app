@@ -27,22 +27,33 @@ const {
   kickNotificationText,
   promoteParticipantRoute,
 } = await import("./adminParticipants.js");
-const { leaveRoomRoute } = await import("./room.js");
+const { createLeaveRoomRoute } = await import("./room.js");
 
 const TODAY = formatDateParts(getTodayInTimezone(config.timezone));
 
 /** Records the DMs a kick sends, and can be told to fail like Telegram would. */
 const sentMessages: { chatId: number; text: string }[] = [];
 let sendShouldFail = false;
+/** Records every chat menu button change, so leaving can be checked to drop it. */
+const menuButtons: { chatId: number; type: string }[] = [];
 const bot = {
   api: {
     async sendMessage(chatId: number, text: string) {
       if (sendShouldFail) throw new Error("bot was blocked by the user");
       sentMessages.push({ chatId, text });
     },
+    async setChatMenuButton(args: { chat_id?: number; menu_button: { type: string } }) {
+      menuButtons.push({ chatId: args.chat_id!, type: args.menu_button.type });
+    },
   },
 } as unknown as Bot<MyContext>;
 const kickParticipantRoute = createKickParticipantRoute(bot);
+const leaveRoomRoute = createLeaveRoomRoute(bot);
+
+/** The menu button type this chat was last set to, or undefined if untouched. */
+function lastMenuButton(chatId: number): string | undefined {
+  return menuButtons.filter((entry) => entry.chatId === chatId).at(-1)?.type;
+}
 
 function capture(): { res: Response; status: () => number; body: () => any } {
   let status = 200;
@@ -88,6 +99,14 @@ async function callKick(
     } as unknown as Request,
     result.res
   );
+  return { status: result.status(), body: result.body() };
+}
+
+async function callLeave(
+  callerTelegramId: number
+): Promise<{ status: number; body: any }> {
+  const result = capture();
+  await leaveRoomRoute({ telegramId: callerTelegramId } as unknown as Request, result.res);
   return { status: result.status(), body: result.body() };
 }
 
@@ -208,6 +227,8 @@ describe("DELETE /api/admin/participants/:telegramId", () => {
     assert.deepEqual(sentMessages, [
       { chatId: member.telegram_id, text: kickNotificationText(room.name) },
     ]);
+    // Out of the room means out of the app: the button goes with the room.
+    assert.equal(lastMenuButton(member.telegram_id), "commands");
   });
 
   it("leaves the kicked member's logs in other rooms alone", async () => {
@@ -285,47 +306,60 @@ describe("DELETE /api/admin/participants/:telegramId", () => {
 });
 
 describe("POST /api/room/leave", () => {
-  it("detaches membership but keeps the logs (PRD §1)", () => {
+  it("detaches membership but keeps the logs (PRD §1)", async () => {
     const { room, habit, members } = makeRoom();
     const member = members[0]!;
     upsertHabitLog(member.id, habit.id, 4, TODAY);
 
-    const { status, body } = call(leaveRoomRoute, member.telegram_id);
+    const { status, body } = await callLeave(member.telegram_id);
     assert.equal(status, 200);
     assert.equal(body.leftRoomId, room.id);
     assert.equal(getUserByTelegramId(member.telegram_id)?.current_room_id, null);
     // Unlike a kick, a voluntary leave deletes nothing.
     assert.equal(getUserTotalPoints(member.id, room.id), 8);
+    // The app has nothing to show them now, so the button that opens it goes.
+    assert.equal(lastMenuButton(member.telegram_id), "commands");
   });
 
-  it("strips co-admin status on the way out (PRD §3a)", () => {
+  it("leaves the menu button alone when the leave was refused", async () => {
+    const { owner } = makeRoom();
+
+    const { status } = await callLeave(owner.telegram_id);
+
+    assert.equal(status, 409);
+    // Still in their room, so still holding the app button.
+    assert.equal(lastMenuButton(owner.telegram_id), undefined);
+  });
+
+  it("strips co-admin status on the way out (PRD §3a)", async () => {
     const { room, owner, members } = makeRoom();
     const coAdmin = members[0]!;
     addRoomAdmin(room.id, coAdmin.id);
 
-    const { status } = call(leaveRoomRoute, coAdmin.telegram_id);
+    const { status } = await callLeave(coAdmin.telegram_id);
     assert.equal(status, 200);
     assert.equal(isRoomAdmin(coAdmin.id, room.id), false);
     assert.equal(isRoomAdmin(owner.id, room.id), true);
   });
 
-  it("refuses to let the room's last admin leave", () => {
+  it("refuses to let the room's last admin leave", async () => {
     const { room, owner } = makeRoom();
-    const { status, body } = call(leaveRoomRoute, owner.telegram_id);
+    const { status, body } = await callLeave(owner.telegram_id);
     assert.equal(status, 409);
     assert.equal(body.error, "last_admin");
     assert.equal(getUserByTelegramId(owner.telegram_id)?.current_room_id, room.id);
   });
 
-  it("400s for a user who is already between rooms", () => {
+  it("400s for a user who is already between rooms", async () => {
     const stray = createUser(nextTelegramId++, "already-roomless");
-    const { status, body } = call(leaveRoomRoute, stray.telegram_id);
+    const { status, body } = await callLeave(stray.telegram_id);
     assert.equal(status, 400);
     assert.equal(body.error, "no_room");
+    assert.equal(lastMenuButton(stray.telegram_id), undefined);
   });
 
-  it("403s for an unregistered telegram id", () => {
-    const { status, body } = call(leaveRoomRoute, 999_999_999);
+  it("403s for an unregistered telegram id", async () => {
+    const { status, body } = await callLeave(999_999_999);
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");
   });

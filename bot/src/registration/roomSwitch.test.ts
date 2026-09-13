@@ -5,6 +5,8 @@ import type { MyContext } from "../context.js";
 process.env.BOT_TOKEN ??= "room-switch-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
+// The app menu button is skipped entirely while MINI_APP_URL is a placeholder.
+process.env.MINI_APP_URL ??= "https://miniapp.test/app";
 
 const {
   addRoomAdmin,
@@ -35,6 +37,13 @@ const { getRoomSwitchState } = await import("./roomSwitch.js");
 let nextTelegramId = 970000001;
 let nextMessageId = 1;
 
+/** Every chat menu button change any test made, newest last. */
+const menuButtons: { chatId: number; type: string }[] = [];
+
+function lastMenuButton(chatId: number): string | undefined {
+  return menuButtons.filter((entry) => entry.chatId === chatId).at(-1)?.type;
+}
+
 interface Chat {
   ctx: (text?: string) => MyContext;
   replies: Array<{ text: string; opts: any }>;
@@ -54,6 +63,11 @@ function makeChat(telegramId: number): Chat {
       chat: { id: telegramId, type: "private" },
       message: text === undefined ? undefined : { text, message_id: nextMessageId++ },
       me: { username: "test_habit_bot" },
+      api: {
+        async setChatMenuButton(args: { chat_id?: number; menu_button: { type: string } }) {
+          menuButtons.push({ chatId: args.chat_id!, type: args.menu_button.type });
+        },
+      },
       reply: async (replyText: string, opts?: any) => {
         replies.push({ text: replyText, opts });
         return { message_id: nextMessageId++ } as any;
@@ -142,6 +156,16 @@ describe("deep link for a user who is between rooms", () => {
     assert.equal(getPendingRegistration(user.telegram_id)?.step, "real_name");
   });
 
+  it("hands back the app button along with the room", async () => {
+    const { room } = makeRoom("Button Back Room", "button-back-room-pass");
+    const { user, chat } = makeMember("Rejoiner", null);
+
+    await startCommand(chat.ctx("/start button-back-room-pass"));
+
+    assert.equal(getUserByTelegramId(user.telegram_id)?.current_room_id, room.id);
+    assert.equal(lastMenuButton(user.telegram_id), "web_app");
+  });
+
   it("answers an unusable link without starting a signup", async () => {
     const { user, chat } = makeMember("Mistyper", null);
 
@@ -212,6 +236,9 @@ describe("deep link for a user who is already in a room", () => {
     assert.equal(getUserByTelegramId(user.telegram_id)?.current_room_id, to.room.id);
     assert.equal(getUserTotalPoints(user.id, from.room.id), 0);
     assert.equal(listPersonalHabits(user.id, from.room.id).length, 0);
+
+    // Still in a room, so the app button stays put across a switch.
+    assert.equal(lastMenuButton(user.telegram_id), "web_app");
 
     const welcome = chat.replies.at(-1)!;
     assert.match(welcome.text, /Chosen Room/);

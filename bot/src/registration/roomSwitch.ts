@@ -18,6 +18,7 @@ import {
   roomWelcomePlain,
   sendConfirmation,
 } from "./flow.js";
+import { showAppMenuButton } from "../utils/menuButton.js";
 import type { MyContext } from "../context.js";
 import type { Room, User } from "../types.js";
 
@@ -244,6 +245,10 @@ async function completeJoin(ctx: MyContext, user: User, room: Room): Promise<voi
     await replyEphemeral(ctx, `You're already in <b>${escapeHtml(room.name)}</b>.`, REMOVE_KEYBOARD);
     return;
   }
+
+  // Back in a room, so the app button comes back with them. Whether they were
+  // between rooms or switching, this is the moment it becomes useful again.
+  await showAppMenuButton(ctx.api, telegramId);
 
   // The nickname may have been changed a moment ago, on the way in.
   const nickname = getUserByTelegramId(telegramId)?.nickname ?? user.nickname;
