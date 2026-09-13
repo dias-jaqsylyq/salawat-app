@@ -42,7 +42,6 @@ export default function ProgressScreen({
     streaks,
     personalStreaks,
     streakDisplay,
-    weekStartDay,
     room,
   } = progress;
 
@@ -58,6 +57,9 @@ export default function ProgressScreen({
       key: `r-${s.habitId}`,
       name: habitLabel(habits, s.habitId),
       streak: s.streak,
+      // Weeks for a weekly habit, days for the rest — the badge says which, so
+      // a 3-week run is never read as three days.
+      unit: s.unit,
     })),
     ...personalStreaks.map((s) => ({
       key: `p-${s.personalHabitId}`,
@@ -65,6 +67,7 @@ export default function ProgressScreen({
         personalHabits?.find((h) => h.id === s.personalHabitId)?.name ??
         `Habit #${s.personalHabitId}`,
       streak: s.streak,
+      unit: s.unit,
     })),
   ];
   const hijriLabel = formatHijriDate();
@@ -89,7 +92,7 @@ export default function ProgressScreen({
     return () => {
       cancelled = true;
     };
-  }, [initData, streakDisplay, weekStartDay]);
+  }, [initData, streakDisplay]);
 
   return (
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
@@ -164,7 +167,12 @@ export default function ProgressScreen({
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 {allStreaks.map((s) => (
-                  <StreakBadge key={s.key} habitName={s.name} streak={s.streak} />
+                  <StreakBadge
+                    key={s.key}
+                    habitName={s.name}
+                    streak={s.streak}
+                    unit={s.unit}
+                  />
                 ))}
               </div>
             )}

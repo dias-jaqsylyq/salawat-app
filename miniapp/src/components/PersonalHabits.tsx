@@ -10,15 +10,13 @@ import {
 import { messageForApiError } from "../api/errors.ts";
 import type {
   HabitCategory,
-  HabitType,
   PersonalHabit,
   TodayPersonalHabitEntry,
 } from "../api/types.ts";
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
-import { BinaryHabitRow, QuantityHabitRow } from "./HabitLogRow.tsx";
-import HabitTypePicker from "./HabitTypePicker.tsx";
+import { BinaryHabitRow } from "./HabitLogRow.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -49,7 +47,6 @@ function findEntry(
 
 interface FormValues {
   name: string;
-  type: HabitType;
   category: HabitCategory | null;
 }
 
@@ -76,7 +73,6 @@ function HabitForm({
   onCancel,
 }: HabitFormProps) {
   const [name, setName] = useState(initial.name);
-  const [type, setType] = useState<HabitType>(initial.type);
   const [category, setCategory] = useState<HabitCategory | null>(initial.category);
 
   const nameValid = name.trim().length > 0 && name.trim().length <= NAME_MAX_LENGTH;
@@ -85,7 +81,7 @@ function HabitForm({
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (busy || !nameValid || !categoryValid) return;
-    onSubmit({ name: name.trim(), type, category });
+    onSubmit({ name: name.trim(), category });
   }
 
   return (
@@ -101,8 +97,6 @@ function HabitForm({
           placeholder="e.g. Read 10 pages"
         />
       </div>
-
-      <HabitTypePicker value={type} disabled={busy} onChange={setType} />
 
       {categoriesEnabled && (
         <CategoryPicker
@@ -151,22 +145,11 @@ interface PersonalHabitRowProps {
   onLogged: () => void;
 }
 
-/** The same two row shapes the room's habits use, minus the points line. */
+/**
+ * The same row the room's habits use, minus the points line — and never the
+ * weekly badge: a personal habit is always a daily yes/no.
+ */
 function PersonalHabitRow({ initData, habit, entry, onLogged }: PersonalHabitRowProps) {
-  if (habit.type === "quantity") {
-    return (
-      <QuantityHabitRow
-        name={habit.name}
-        value={entry?.value ?? 0}
-        logged={entry?.logged ?? false}
-        onSave={async (value) => {
-          await logPersonalHabit(initData, habit.id, value);
-          hapticMedium();
-          onLogged();
-        }}
-      />
-    );
-  }
   return (
     <BinaryHabitRow
       name={habit.name}
@@ -210,7 +193,7 @@ export default function PersonalHabits({
     try {
       await action();
       onListChanged();
-      // A type change or a delete moves what counts as logged today, so the
+      // A rename or a delete moves what counts as logged today, so the
       // shared progress state has to come along.
       onLogged();
       return true;
@@ -227,7 +210,6 @@ export default function PersonalHabits({
       () =>
         createPersonalHabit(initData, {
           name: values.name,
-          type: values.type,
           ...(categoriesEnabled ? { category: values.category } : {}),
         }),
       "Couldn't add that habit.",
@@ -241,7 +223,6 @@ export default function PersonalHabits({
       () =>
         updatePersonalHabit(initData, personalHabitId, {
           name: values.name,
-          type: values.type,
           ...(categoriesEnabled ? { category: values.category } : {}),
         }),
       "Couldn't save that habit.",
@@ -285,7 +266,7 @@ export default function PersonalHabits({
               <HabitForm
                 key={habit.id}
                 idPrefix={`personal-habit-${habit.id}`}
-                initial={{ name: habit.name, type: habit.type, category: habit.category }}
+                initial={{ name: habit.name, category: habit.category }}
                 categoriesEnabled={categoriesEnabled}
                 submitLabel="Save"
                 busy={busy}
@@ -350,7 +331,7 @@ export default function PersonalHabits({
           {adding && (
             <HabitForm
               idPrefix="new-personal-habit"
-              initial={{ name: "", type: "binary", category: null }}
+              initial={{ name: "", category: null }}
               categoriesEnabled={categoriesEnabled}
               submitLabel="Add habit"
               busy={busy}

@@ -1,112 +1,53 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { messageForApiError } from "../api/errors.ts";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 
-/** Must stay in sync with salawat-bot MAX_HABIT_VALUE. */
-export const MAX_HABIT_VALUE = 10_000;
-
-interface CommonProps {
+interface Props {
   name: string;
   /**
-   * The room habit's weight, used for the points preview. Omitted for a
-   * personal habit, which has no points at all — and then no points line is
-   * drawn rather than a zero being shown.
+   * The admin's free-text goal line ("min 30 min"), or null/omitted. Purely
+   * informational: nothing about it is checked, scored or enforced — the member
+   * still just ticks the switch. Personal habits never have one.
+   */
+  description?: string | null;
+  /**
+   * The room habit's weight, used for the points line. Omitted for a personal
+   * habit, which has no points at all — and then no points line is drawn rather
+   * than a zero being shown.
    */
   pointsWeight?: number;
+  /** Weekly habits pay once a week; the row says so. */
+  weekly?: boolean;
+  /**
+   * Weekly habits only: the week's points are already banked, on this day or an
+   * earlier one. Lets the row explain why ticking it again adds nothing,
+   * instead of looking broken.
+   */
+  countedThisWeek?: boolean;
   logged: boolean;
-}
-
-interface QuantityProps extends CommonProps {
-  value: number;
-  onSave: (value: number) => Promise<void>;
-}
-
-/** A number plus an explicit Save — the same row for a room and a personal habit. */
-export function QuantityHabitRow({
-  name,
-  pointsWeight,
-  value: savedValue,
-  logged,
-  onSave,
-}: QuantityProps) {
-  const [value, setValue] = useState(String(savedValue));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setValue(String(savedValue));
-  }, [savedValue]);
-
-  const parsed = Number(value);
-  const isValid =
-    value.trim().length > 0 &&
-    Number.isInteger(parsed) &&
-    parsed >= 0 &&
-    parsed <= MAX_HABIT_VALUE;
-  const unchanged = isValid && parsed === savedValue;
-
-  async function handleSave() {
-    if (saving || !isValid || unchanged) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(parsed);
-    } catch (err) {
-      setError(messageForApiError(err, "Couldn't save that — please try again."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const hints: string[] = [];
-  if (!isValid) hints.push("Enter a whole number");
-  else if (pointsWeight !== undefined) {
-    hints.push(`= ${(parsed * pointsWeight).toLocaleString()} pts`);
-  }
-  if (logged) hints.push("logged today");
-
-  return (
-    <div className="space-y-2 px-4 py-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-sm font-medium text-foreground">{name}</span>
-        {pointsWeight !== undefined && (
-          <span className="text-xs text-muted-foreground">× {pointsWeight} pts</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <Input
-          type="text"
-          inputMode="numeric"
-          pattern="[0-9]*"
-          value={value}
-          disabled={saving}
-          onChange={(e) => setValue(e.target.value)}
-          className="h-11 flex-1 text-base tabular-nums"
-          aria-label={`${name} value`}
-        />
-        <Button
-          type="button"
-          onClick={() => void handleSave()}
-          disabled={saving || !isValid || unchanged}
-          className="shrink-0"
-        >
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">{hints.join(" · ")}</p>
-      {error && <p className="text-sm text-destructive">{error}</p>}
-    </div>
-  );
-}
-
-interface BinaryProps extends CommonProps {
   onToggle: (checked: boolean) => Promise<void>;
 }
 
-/** A switch, both ways — log on, unlog off. */
-export function BinaryHabitRow({ name, pointsWeight, logged, onToggle }: BinaryProps) {
+/**
+ * One habit on the Log screen: a switch, both ways — tick to log today, untick
+ * to unlog it. The same row for daily and weekly habits, and for the member's
+ * own private ones.
+ *
+ * A weekly habit's switch is today's state, exactly like a daily one's: it is
+ * *this day* the member is marking, and unticking it clears this day only. What
+ * differs is the payout, which happens once a week — so the row carries a
+ * "once a week" badge and, once the week is banked, says so. Without that line
+ * a second tick later in the week would look like it silently failed to score.
+ */
+export function BinaryHabitRow({
+  name,
+  description,
+  pointsWeight,
+  weekly,
+  countedThisWeek,
+  logged,
+  onToggle,
+}: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,10 +67,26 @@ export function BinaryHabitRow({ name, pointsWeight, logged, onToggle }: BinaryP
   return (
     <div className="space-y-1.5 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-foreground">{name}</p>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="text-sm font-medium text-foreground">{name}</p>
+            {weekly && (
+              <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
+                Once a week
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+          )}
           {pointsWeight !== undefined && (
-            <p className="text-xs text-muted-foreground">{pointsWeight} pts when done</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {weekly && countedThisWeek
+                ? `${pointsWeight} pts — already counted this week`
+                : weekly
+                  ? `${pointsWeight} pts once a week`
+                  : `${pointsWeight} pts when done`}
+            </p>
           )}
         </div>
         <Switch
