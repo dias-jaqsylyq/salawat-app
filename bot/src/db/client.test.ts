@@ -455,3 +455,52 @@ describe("dropQuantityHabits", () => {
     assert.deepEqual(habits, [{ name: "Fasted" }]);
   });
 });
+
+describe("dropQuantityHabits — a database that already has orphaned rows", () => {
+  /**
+   * The production failure this guards against. A long-lived database can hold
+   * rows whose parent is gone — written while foreign_keys was off, which this
+   * app's own migrations do. `PRAGMA foreign_key_check` with no argument audits
+   * the *whole* file, so an unconditional "no violations" assertion made those
+   * databases impossible to migrate and crash-looped the bot on a failure that
+   * had nothing to do with the rebuild.
+   */
+  function seedOrphans(count: number): void {
+    db.pragma("foreign_keys = OFF");
+    const insert = db.prepare(
+      `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+       VALUES (?, 2, 1, ?, 1, 10)`
+    );
+    // user 999 does not exist, and habit_logs.user_id has no ON DELETE clause.
+    for (let i = 0; i < count; i++) insert.run(999, `orphan-${i}`);
+    db.pragma("foreign_keys = ON");
+  }
+
+  it("migrates anyway, and leaves the orphans exactly as it found them", () => {
+    seedQuantityEraDatabase();
+    seedOrphans(12);
+
+    const before = (db.pragma("foreign_key_check") as unknown[]).length;
+    assert.equal(before, 12, "the seed should start out with orphans");
+
+    // The whole point: this must not throw.
+    assert.equal(dropQuantityHabits(), true);
+
+    // The rebuild still did its job...
+    assert.ok(!columnNames("habits").includes("type"));
+    assert.ok(columnNames("habits").includes("period"));
+    const survivors = db.prepare("SELECT name FROM habits").all() as { name: string }[];
+    assert.deepEqual(survivors, [{ name: "Fasted" }]);
+
+    // ...and the pre-existing orphans are neither repaired nor deleted. Quietly
+    // dropping member history as a side effect of a schema change is not a call
+    // a migration gets to make, and they are inert: every read joins or filters
+    // by a live user, so nothing in the app can see them.
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM habit_logs WHERE user_id = 999").get() as { n: number })
+        .n,
+      12
+    );
+    assert.equal((db.pragma("foreign_key_check") as unknown[]).length, 12);
+  });
+});

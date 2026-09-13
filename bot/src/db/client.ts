@@ -211,6 +211,25 @@ function createTableStatement(table: string): string {
   return match[0];
 }
 
+interface FkViolation {
+  table: string;
+  rowid: number | null;
+  parent: string;
+  fkid: number;
+}
+
+/**
+ * Every foreign-key violation currently in the database, keyed so two runs can
+ * be compared. `PRAGMA foreign_key_check` with no argument audits the *whole*
+ * file, not just the tables a migration touched — which is the point here: the
+ * question is whether the rebuild made anything worse, and that can only be
+ * answered by looking at the same scope before and after.
+ */
+function foreignKeyViolations(): Set<string> {
+  const rows = db.pragma("foreign_key_check") as FkViolation[];
+  return new Set(rows.map((r) => `${r.table}|${r.rowid}|${r.parent}|${r.fkid}`));
+}
+
 /**
  * Rebuild one table from its current schema.sql definition, carrying over every
  * column the two shapes share and letting the rest take their declared default.
@@ -279,6 +298,12 @@ export function dropQuantityHabits(): boolean {
   db.pragma("legacy_alter_table = ON");
   let deletedHabits = 0;
   let deletedLogs = 0;
+  // Taken before anything is touched. A long-lived database can already hold
+  // rows whose parent is gone — writes made while foreign_keys was off, which
+  // this app has historically done during its own migrations. Those are real
+  // debt, but they are not this migration's to fix and must not stop the bot
+  // from booting: what matters is only that the rebuild adds none.
+  const violationsBefore = foreignKeyViolations();
   try {
     const migrate = db.transaction(() => {
       if (habitsHasType) {
@@ -309,12 +334,20 @@ export function dropQuantityHabits(): boolean {
       // the schema puts them back and touches nothing else.
       db.exec(schema);
 
-      const violations = db.pragma("foreign_key_check") as unknown[];
-      if (violations.length > 0) {
+      // Only violations the rebuild introduced are a reason to abort — a
+      // pre-existing orphan is not evidence that copying habits into a new
+      // table went wrong. Checking `> 0` instead of `is new` is what took
+      // production down: a database carrying old orphans could never migrate,
+      // and the bot crash-looped on a failure that had nothing to do with it.
+      const introduced = [...foreignKeyViolations()].filter(
+        (key) => !violationsBefore.has(key)
+      );
+      if (introduced.length > 0) {
         // Inside the transaction on purpose: throwing rolls the whole rebuild
         // back rather than leaving a half-migrated file behind.
         throw new Error(
-          `foreign_key_check found ${violations.length} violation(s) after the rebuild`
+          `the rebuild introduced ${introduced.length} foreign-key violation(s): ` +
+            `${introduced.slice(0, 5).join(", ")}${introduced.length > 5 ? ", …" : ""}`
         );
       }
     });
@@ -328,6 +361,18 @@ export function dropQuantityHabits(): boolean {
     `db migration: 'quantity' retired — deleted ${deletedHabits} habit(s) and ` +
       `${deletedLogs} log(s); habits/personal_habits rebuilt without \`type\`.`
   );
+  if (violationsBefore.size > 0) {
+    // Reported, deliberately not repaired: these rows predate this migration,
+    // and silently deleting member history as a side effect of an unrelated
+    // schema change is not a call a migration gets to make. They are inert —
+    // every read joins or filters by a live user — so the app is correct with
+    // them in place.
+    console.warn(
+      `db migration: note — this database already held ${violationsBefore.size} row(s) ` +
+        `whose parent record is gone (written while foreign_keys was off). The rebuild ` +
+        `neither created nor removed them; they are invisible to every query the app makes.`
+    );
+  }
   return true;
 }
 
