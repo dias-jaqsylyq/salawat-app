@@ -105,8 +105,9 @@ describe("personal habits — CRUD", () => {
     assert.equal(created.body.category, null);
     // Nothing about points is exposed, because there is nothing to expose.
     assert.equal("pointsWeight" in created.body, false);
-    // And no period either: a personal habit is always a daily done-or-not.
+    // And no period or type either: a personal habit is always a daily yes/no.
     assert.equal("period" in created.body, false);
+    assert.equal("type" in created.body, false);
 
     assert.equal(list(telegramId).body.length, 1);
 

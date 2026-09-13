@@ -126,9 +126,21 @@ export default function LeaderboardMemberRow({
             {tied && <span className="text-xs font-normal text-muted-foreground">tied</span>}
           </span>
         </span>
-        <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
-          {entry.totalPoints.toLocaleString()}
-        </span>
+        {/* A member sees no figure for anyone but themselves, so there is
+            nothing to draw here — a dash, not a 0, which would be a claim about
+            someone else's week that the server never made. */}
+        {entry.points === undefined ? (
+          <span
+            className="shrink-0 text-sm text-muted-foreground/50"
+            aria-label="Points hidden"
+          >
+            —
+          </span>
+        ) : (
+          <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+            {entry.points.toLocaleString()}
+          </span>
+        )}
       </div>
 
       {editing && entry.telegramId !== undefined && (

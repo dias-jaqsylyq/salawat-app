@@ -16,9 +16,6 @@ function habitResponse(habit: Habit) {
   return {
     id: habit.id,
     name: habit.name,
-    // Retired field, echoed as a constant so a Mini App build that predates the
-    // binary-only change keeps rendering. Dropped once the client stops reading it.
-    type: "binary" as const,
     description: habit.description,
     period: habit.period,
     pointsWeight: habit.points_weight,

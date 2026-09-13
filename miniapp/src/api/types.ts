@@ -234,16 +234,31 @@ export interface RegisteredProgress {
   needsRealName: boolean;
 }
 
+/**
+ * One row of the member-facing weekly board.
+ *
+ * `points` is present on the viewer's own row and **absent** on everyone
+ * else's — not zero, not null. A member sees the whole room in rank order and
+ * only their own figure, so a missing key is the shape the server actually
+ * sends and the one this type has to admit.
+ */
 export interface LeaderboardEntry {
   nickname: string;
-  totalPoints: number;
   rank: number;
   /** Server-computed: true when this row is the authenticated viewer. */
   isYou: boolean;
+  /** Only ever set when `isYou`. */
+  points?: number;
 }
+
+/** Which window a board covers. Members only ever get "weekly". */
+export type LeaderboardPeriod = "weekly" | "all-time";
 
 export interface LeaderboardResponse {
   leaderboard: LeaderboardEntry[];
+  /** The Monday-Sunday week this board covers, for the header. */
+  weekStart: string;
+  weekEnd: string;
 }
 
 /**
@@ -256,11 +271,17 @@ export interface LeaderboardResponse {
  * optional here precisely because a participant's rows never have them — the
  * server does not send a member's real name to their room-mates.
  */
+/**
+ * The union of what the two boards return, as the screen renders them.
+ *
+ * `points` is optional because a member may not see other people's, and the
+ * admin-only fields are optional because a member never receives them at all.
+ */
 export interface LeaderboardMember {
   rank: number;
   nickname: string;
-  totalPoints: number;
   isYou: boolean;
+  points?: number;
   realName?: string | null;
   telegramId?: number;
   isRoomAdmin?: boolean;
@@ -342,6 +363,10 @@ export interface AdminLeaderboardEntry {
 
 export interface AdminLeaderboardResponse {
   leaderboard: AdminLeaderboardEntry[];
+  period: LeaderboardPeriod;
+  /** The current week, echoed in both periods so the header never has to guess. */
+  weekStart: string;
+  weekEnd: string;
 }
 
 /** Response of promote/demote — the target's admin status after the change. */

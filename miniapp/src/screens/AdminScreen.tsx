@@ -6,6 +6,7 @@ import {
   Megaphone,
   MessageSquareText,
   Settings2,
+  Trophy,
   Users,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -31,13 +32,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import AdminHabits from "../components/AdminHabits.tsx";
 import AdminRoom from "../components/AdminRoom.tsx";
+import LeaderboardScreen from "./LeaderboardScreen.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
 /**
- * Three tabs, all about the room rather than its people: members are managed on
- * the Leaderboard screen everybody shares, not in a second list only admins see.
+ * Four tabs. Three are about the room itself; the fourth is the same shared
+ * Leaderboard screen everybody sees, mounted here in its admin mode.
+ *
+ * It is a second door onto one screen, not a second members list: members are
+ * still promoted and kicked from the board everyone shares. The door exists
+ * because the admin view of it now has two periods and real points, which is
+ * admin work, and an admin looking for admin work looks here.
  */
-type AdminSection = "broadcasts" | "habits" | "room";
+type AdminSection = "broadcasts" | "habits" | "leaderboard" | "room";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MODES: {
@@ -52,6 +59,8 @@ const MODES: {
 
 interface Props {
   initData: string;
+  /** Names the CSV on the Leaderboard tab; the app already holds it. */
+  roomName: string | null;
 }
 
 function validHttpUrl(value: string): boolean {
@@ -67,7 +76,7 @@ function fileSizeLabel(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function AdminScreen({ initData }: Props) {
+export default function AdminScreen({ initData, roomName }: Props) {
   // Habits is the tab an admin opens on (MULTI ROOM PRD §3) — managing what the
   // room tracks is the routine visit; broadcasts are the occasional one.
   const [section, setSection] = useState<AdminSection>("habits");
@@ -262,11 +271,12 @@ export default function AdminScreen({ initData }: Props) {
       <div
         role="tablist"
         aria-label="Admin section"
-        className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-1"
       >
         {([
           { id: "broadcasts" as const, label: "Posts", icon: Megaphone },
           { id: "habits" as const, label: "Habits", icon: ListChecks },
+          { id: "leaderboard" as const, label: "Board", icon: Trophy },
           { id: "room" as const, label: "Room", icon: Settings2 },
         ]).map((item) => {
           const Icon = item.icon;
@@ -510,6 +520,10 @@ export default function AdminScreen({ initData }: Props) {
         </Card>
       </form>
         </>
+      ) : section === "leaderboard" ? (
+        // The very same component the bottom-nav Leaderboard tab mounts, in the
+        // same admin mode — not a copy of it, so the two can never drift.
+        <LeaderboardScreen initData={initData} isAdmin roomName={roomName} />
       ) : section === "habits" ? (
         <AdminHabits
           initData={initData}

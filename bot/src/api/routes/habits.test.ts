@@ -102,7 +102,6 @@ describe("GET /api/habits", () => {
     assert.deepEqual(listed, {
       id: active.id,
       name: "Read Qur'an",
-      type: "binary",
       description: null,
       period: "daily",
       pointsWeight: 2,

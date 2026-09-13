@@ -11,6 +11,7 @@ import type {
   HabitCategory,
   HabitPeriod,
   KickParticipantResponse,
+  LeaderboardPeriod,
   LeaderboardResponse,
   LeaveRoomResponse,
   LogHabitResponse,
@@ -160,6 +161,10 @@ export function getProgressWeek(initData: string): Promise<WeeklyProgressRespons
   return request(initData, "/api/progress/week");
 }
 
+/**
+ * The member-facing board: this week only, and everyone's name and place but
+ * only the caller's own points. There is no member-facing all-time board.
+ */
 export function getLeaderboard(initData: string): Promise<LeaderboardResponse> {
   return request(initData, "/api/leaderboard");
 }
@@ -299,8 +304,15 @@ export function kickParticipant(
   });
 }
 
-export function getAdminLeaderboard(initData: string): Promise<AdminLeaderboardResponse> {
-  return request(initData, "/api/admin/leaderboard");
+/**
+ * Admins see real points in both periods. The server defaults to all-time when
+ * `period` is omitted, so passing it is what makes the weekly view happen.
+ */
+export function getAdminLeaderboard(
+  initData: string,
+  period: LeaderboardPeriod = "all-time"
+): Promise<AdminLeaderboardResponse> {
+  return request(initData, `/api/admin/leaderboard?period=${period}`);
 }
 
 export async function downloadAdminExport(initData: string): Promise<Blob> {
