@@ -1122,6 +1122,16 @@ export function getUsersWithFastingRemindersEnabled(): User[] {
     .all() as User[];
 }
 
+/**
+ * Every current room member, with no opt-in filter — the weekly backfill-window
+ * nudge (BACKFILL PRD) is not opt-out like the daily reminder, so it is not
+ * gated by reminder_enabled. Room-scoped for the same reason as the other two:
+ * a user between rooms has no habits to check.
+ */
+export function getAllRoomMembers(): User[] {
+  return db.prepare("SELECT * FROM users WHERE current_room_id IS NOT NULL").all() as User[];
+}
+
 export interface UserProfileUpdate {
   nickname?: string;
   reminderEnabled?: boolean;

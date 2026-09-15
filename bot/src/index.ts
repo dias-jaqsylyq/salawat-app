@@ -4,6 +4,7 @@ import { createBot, setupCommands, setupMenuButton } from "./bot.js";
 import { startBackupScheduler } from "./scheduler/backup.js";
 import { startReminderScheduler } from "./scheduler/reminder.js";
 import { startFastingReminderScheduler } from "./scheduler/fastingReminder.js";
+import { startBackfillReminderScheduler } from "./scheduler/backfillReminder.js";
 import { startMessageCleanupScheduler } from "./scheduler/messageCleanup.js";
 import { createApiServer } from "./api/server.js";
 
@@ -11,6 +12,7 @@ const bot = createBot();
 
 startReminderScheduler(bot);
 startFastingReminderScheduler(bot);
+startBackfillReminderScheduler(bot);
 startMessageCleanupScheduler(bot);
 startBackupScheduler();
 
