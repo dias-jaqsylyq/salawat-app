@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, Download, Pencil, RefreshCw, Trophy } from "lucide-react";
 import { downloadAdminExport, getAdminLeaderboard, getLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
+import { adminLeaderboardToMembers } from "../api/leaderboardAdapters.ts";
 import type { LeaderboardMember, LeaderboardPeriod } from "../api/types.ts";
 import LeaderboardMemberRow from "../components/LeaderboardMemberRow.tsx";
 import { Card, CardContent } from "@/components/ui/card";
@@ -75,7 +76,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
     setError(null);
     setEntries(null);
     const fetched = isAdmin
-      ? getAdminLeaderboard(initData, period)
+      ? getAdminLeaderboard(initData, period).then(adminLeaderboardToMembers)
       : getLeaderboard(initData);
     fetched
       .then((response) => {
