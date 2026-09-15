@@ -14,7 +14,12 @@ import { requireAdmin } from "./adminAuth.js";
 import { telegramAuth } from "./authMiddleware.js";
 import { rateLimited, rateLimitedByIp } from "./rateLimit.js";
 import { registerRoute } from "./routes/register.js";
-import { deleteHabitLogRoute, listHabitsRoute, logHabitRoute } from "./routes/habits.js";
+import {
+  deleteHabitLogRoute,
+  habitLogWindowRoute,
+  listHabitsRoute,
+  logHabitRoute,
+} from "./routes/habits.js";
 import {
   createPersonalHabitRoute,
   deletePersonalHabitLogRoute,
@@ -95,6 +100,7 @@ export function createApiServer(bot: Bot<MyContext>) {
 
   app.post("/api/register", telegramAuth, registerRoute);
   app.get("/api/habits", telegramAuth, listHabitsRoute);
+  app.get("/api/habits/log", telegramAuth, habitLogWindowRoute);
   app.post("/api/habits/:id/log", telegramAuth, logHabitRoute);
   app.delete("/api/habits/:id/log", telegramAuth, deleteHabitLogRoute);
   // Personal habits: telegramAuth only, no requireAdmin. These belong to the

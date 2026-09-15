@@ -75,6 +75,7 @@ const UNLIMITED_BY_DESIGN = new Set([
   "GET /health",
   "POST /api/register",
   "GET /api/habits",
+  "GET /api/habits/log",
   "GET /api/personal-habits",
   "GET /api/progress",
   "GET /api/progress/week",

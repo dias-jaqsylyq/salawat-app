@@ -107,12 +107,15 @@ export interface LogHabitResponse {
   habitId: number;
   value: number;
   points: number;
+  /** The day actually written — the caller's today unless `date` was passed. */
+  date: string;
   logged: true;
 }
 
 export interface UnlogHabitResponse {
   success: true;
   habitId: number;
+  date: string;
   logged: false;
 }
 
@@ -121,6 +124,38 @@ export interface TodayHabitEntry {
   logged: boolean;
   value: number;
   points: number;
+}
+
+/**
+ * One DAILY habit's state on whichever day GET /api/habits/log describes.
+ * `editable` is false when `date` precedes this particular habit's own
+ * creation day, even though the day itself is inside the screen's window —
+ * a habit created mid-week cannot be backfilled into days before it existed.
+ */
+export interface HabitLogWindowEntry {
+  habitId: number;
+  logged: boolean;
+  value: number;
+  points: number;
+  editable: boolean;
+}
+
+/**
+ * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker (`today`,
+ * `minDate`, `maxDate`) plus every daily habit's state on `date`. Weekly
+ * habits are never included: they are not backfillable, so the Log screen
+ * keeps reading their state from GET /api/progress regardless of which day is
+ * selected here.
+ */
+export interface HabitLogWindowResponse {
+  /** The day this response describes — `today` when the request omitted `date`. */
+  date: string;
+  /** The caller's own today — also the window's upper bound. */
+  today: string;
+  /** Inclusive lower bound of the whole screen's day picker. */
+  minDate: string;
+  maxDate: string;
+  habits: HabitLogWindowEntry[];
 }
 
 export interface HabitStreak {

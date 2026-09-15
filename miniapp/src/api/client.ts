@@ -9,6 +9,7 @@ import type {
   DeletePersonalHabitResponse,
   Habit,
   HabitCategory,
+  HabitLogWindowResponse,
   HabitPeriod,
   KickParticipantResponse,
   LeaderboardPeriod,
@@ -77,21 +78,45 @@ export function getHabits(initData: string): Promise<Habit[]> {
   return request(initData, "/api/habits");
 }
 
-/** POST /api/habits/:id/log — upsert today's value. Omit `value` for a binary habit. */
+/**
+ * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker plus every
+ * daily habit's state on `date` (today when omitted). Weekly habits are never
+ * included — the caller keeps reading their state from getProgress().
+ */
+export function getHabitLogWindow(
+  initData: string,
+  date?: string
+): Promise<HabitLogWindowResponse> {
+  return request(initData, date === undefined ? "/api/habits/log" : `/api/habits/log?date=${date}`);
+}
+
+/**
+ * POST /api/habits/:id/log — upsert one day's value (today when `date` is
+ * omitted). Omit `value` for a binary habit. A DAILY habit may also target any
+ * earlier day of the current week the server's backfill window allows
+ * (BACKFILL PRD); a WEEKLY habit accepts no `date` but today's.
+ */
 export function logHabit(
   initData: string,
   habitId: number,
-  value?: number
+  value?: number,
+  date?: string
 ): Promise<LogHabitResponse> {
-  return request(initData, `/api/habits/${habitId}/log`, {
+  const path = date === undefined ? `/api/habits/${habitId}/log` : `/api/habits/${habitId}/log?date=${date}`;
+  return request(initData, path, {
     method: "POST",
     body: JSON.stringify(value === undefined ? {} : { value }),
   });
 }
 
-/** DELETE /api/habits/:id/log — remove today's log, if any. Idempotent. */
-export function deleteHabitLog(initData: string, habitId: number): Promise<UnlogHabitResponse> {
-  return request(initData, `/api/habits/${habitId}/log`, { method: "DELETE" });
+/** DELETE /api/habits/:id/log — remove one day's log, if any (today when `date` is omitted). Idempotent. */
+export function deleteHabitLog(
+  initData: string,
+  habitId: number,
+  date?: string
+): Promise<UnlogHabitResponse> {
+  const path = date === undefined ? `/api/habits/${habitId}/log` : `/api/habits/${habitId}/log?date=${date}`;
+  return request(initData, path, { method: "DELETE" });
 }
 
 /* --- Personal habits: the member's own private list ---------------------- */

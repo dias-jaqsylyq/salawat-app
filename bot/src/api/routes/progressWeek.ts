@@ -46,9 +46,11 @@ const DAYS_IN_WEEK = 7;
  * done at all (`met`), and the run of consecutive weeks behind it
  * (`streakWeeks`).
  *
- * Read-only by construction: there is no matching write endpoint, because the
- * weekly view is not tappable and logging still happens only for today, through
- * POST /api/habits/:id/log (day-override stays out of scope, PIVOT_PLAN §7).
+ * Read-only by construction: there is no matching write endpoint. A DAILY
+ * habit is backfillable within the current week (BACKFILL PRD), but through
+ * GET/POST/DELETE /api/habits/log and /api/habits/:id/log on the Log screen's
+ * own day picker, not by tapping a cell here — this grid stays a read-only
+ * summary of the same week.
  *
  * The caller's personal habits are appended to the same `habits` array rather
  * than given one of their own: on the Progress screen a streak is a streak, and
