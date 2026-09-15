@@ -25,6 +25,12 @@ interface Props {
    */
   countedThisWeek?: boolean;
   logged: boolean;
+  /**
+   * The selected day predates this habit's own creation — not a permission
+   * question, just nothing to mark: the habit did not exist yet. The switch is
+   * inert and says so, rather than silently doing nothing on tap.
+   */
+  disabled?: boolean;
   onToggle: (checked: boolean) => Promise<void>;
 }
 
@@ -46,6 +52,7 @@ export function BinaryHabitRow({
   weekly,
   countedThisWeek,
   logged,
+  disabled,
   onToggle,
 }: Props) {
   const [saving, setSaving] = useState(false);
@@ -81,17 +88,19 @@ export function BinaryHabitRow({
           )}
           {pointsWeight !== undefined && (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {weekly && countedThisWeek
-                ? `${pointsWeight} pts — already counted this week`
-                : weekly
-                  ? `${pointsWeight} pts once a week`
-                  : `${pointsWeight} pts when done`}
+              {disabled
+                ? "Not tracked yet on this day"
+                : weekly && countedThisWeek
+                  ? `${pointsWeight} pts — already counted this week`
+                  : weekly
+                    ? `${pointsWeight} pts once a week`
+                    : `${pointsWeight} pts when done`}
             </p>
           )}
         </div>
         <Switch
           checked={logged}
-          disabled={saving}
+          disabled={saving || disabled}
           onCheckedChange={(checked) => void handleToggle(checked)}
         />
       </div>
