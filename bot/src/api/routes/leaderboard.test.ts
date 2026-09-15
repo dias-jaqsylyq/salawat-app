@@ -6,9 +6,14 @@ process.env.BOT_TOKEN ??= "test-token";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
-const { createHabit, createRoom, createUser, setUserCurrentRoom, upsertHabitLog } = await import(
-  "../../db/repository.js"
-);
+const {
+  addRoomAdmin,
+  createHabit,
+  createRoom,
+  createUser,
+  setUserCurrentRoom,
+  upsertHabitLog,
+} = await import("../../db/repository.js");
 const { getCurrentWeekBounds, shiftWeekStart } = await import("../../utils/challenge.js");
 const { leaderboardRoute } = await import("./leaderboard.js");
 const { adminLeaderboardRoute } = await import("./adminLeaderboard.js");
@@ -61,12 +66,18 @@ const leader = member("board-leader");
 const tiedA = member("board-tied-a");
 const tiedB = member("board-tied-b");
 const idler = member("board-idler");
+// A co-admin, promoted rather than the room's owner — an admin who is also a
+// scoring participant, same as the owner, but reached through a different
+// path (room_admins via promotion instead of room creation).
+const coAdmin = member("board-co-admin");
+addRoomAdmin(room.id, coAdmin.id);
 
 upsertHabitLog(leader.id, daily.id, 1, weekStart);
 upsertHabitLog(leader.id, weekly.id, 1, weekEnd);
 upsertHabitLog(tiedA.id, daily.id, 1, weekStart);
 upsertHabitLog(tiedB.id, daily.id, 1, weekStart);
 upsertHabitLog(idler.id, daily.id, 1, LAST_WEEK);
+upsertHabitLog(coAdmin.id, daily.id, 1, weekStart);
 
 describe("GET /api/leaderboard — what a member may see", () => {
   it("covers this week only: daily and weekly points together, nothing from last week", () => {
@@ -113,10 +124,11 @@ describe("GET /api/leaderboard — what a member may see", () => {
       body.leaderboard.find((row: any) => row.nickname === nickname).rank;
 
     assert.equal(rankOf("board-leader"), 1);
-    // Both on 5 — both second, and the next member is fourth, not third.
+    // All three on 5 — all second, and the next member is fifth, not third.
     assert.equal(rankOf("board-tied-a"), 2);
     assert.equal(rankOf("board-tied-b"), 2);
-    assert.equal(rankOf("board-idler"), 4);
+    assert.equal(rankOf("board-co-admin"), 2);
+    assert.equal(rankOf("board-idler"), 5);
   });
 
   it("is empty, but still names the week, for a user between rooms", () => {
@@ -124,6 +136,17 @@ describe("GET /api/leaderboard — what a member may see", () => {
     const { body } = call(leaderboardRoute, { telegramId: wanderer.telegram_id });
     assert.deepEqual(body.leaderboard, []);
     assert.equal(body.weekStart, weekStart);
+  });
+
+  // Regression: a live-prod report claimed an admin saw no points anywhere on
+  // this board, theirs included. An admin is a participant of their own room
+  // like anyone else here — isYou/points must not special-case the role.
+  it("an admin caller sees their own points too, same as any other participant", () => {
+    const { body } = call(leaderboardRoute, { telegramId: coAdmin.telegram_id });
+
+    const you = body.leaderboard.find((row: any) => row.isYou);
+    assert.equal(you.nickname, "board-co-admin");
+    assert.equal(you.points, 5);
   });
 });
 
@@ -164,5 +187,32 @@ describe("GET /api/admin/leaderboard — what an admin may see", () => {
     });
     assert.equal(status, 400);
     assert.equal(body.error, "invalid_period");
+  });
+
+  // Regression: a live-prod report claimed an admin saw no points anywhere,
+  // including here. A promoted co-admin (room_admins via promotion, not room
+  // creation) must see everyone's real totalPoints, their own row included,
+  // and be flagged isRoomAdmin themselves — in both periods.
+  it("a co-admin caller sees everyone's real points, their own row included, in both periods", () => {
+    const allTime = call(adminLeaderboardRoute, { telegramId: coAdmin.telegram_id });
+    const youAllTime = allTime.body.leaderboard.find((row: any) => row.isYou);
+    assert.equal(youAllTime.nickname, "board-co-admin");
+    assert.equal(youAllTime.totalPoints, 5);
+    assert.equal(youAllTime.isRoomAdmin, true);
+
+    const weekly = call(adminLeaderboardRoute, {
+      telegramId: coAdmin.telegram_id,
+      query: { period: "weekly" },
+    });
+    const youWeekly = weekly.body.leaderboard.find((row: any) => row.isYou);
+    assert.equal(youWeekly.nickname, "board-co-admin");
+    assert.equal(youWeekly.totalPoints, 5);
+    assert.equal(youWeekly.isRoomAdmin, true);
+
+    // Not just their own row — a co-admin must see the whole room's real
+    // figures too, same as the owner does.
+    const pointsOf = (body: any, nickname: string) =>
+      body.leaderboard.find((row: any) => row.nickname === nickname).totalPoints;
+    assert.equal(pointsOf(weekly.body, "board-leader"), 35);
   });
 });
