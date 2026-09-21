@@ -14,6 +14,7 @@ import NoRoomScreen from "./screens/NoRoomScreen.tsx";
 import RealNamePromptScreen from "./screens/RealNamePromptScreen.tsx";
 import LogHabitsScreen from "./screens/LogHabitsScreen.tsx";
 import ProgressScreen from "./screens/ProgressScreen.tsx";
+import HistoryScreen from "./screens/HistoryScreen.tsx";
 import LeaderboardScreen from "./screens/LeaderboardScreen.tsx";
 import SettingsScreen from "./screens/SettingsScreen.tsx";
 import AdminScreen from "./screens/AdminScreen.tsx";
@@ -49,6 +50,7 @@ export default function App() {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [activeTab, setActiveTab] = useState<Tab>("progress");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   /** null = not loaded yet, distinct from a genuinely empty active-habit list. */
   const [habits, setHabits] = useState<Habit[] | null>(null);
@@ -67,6 +69,14 @@ export default function App() {
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+
+  const openHistory = useCallback(() => setHistoryOpen(true), []);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  /** The History empty state's CTA: leaves History and switches to where a habit gets added. */
+  const navigateAwayFromHistory = useCallback((tab: Tab) => {
+    setHistoryOpen(false);
+    setActiveTab(tab);
+  }, []);
 
   const loadProgress = useCallback(async () => {
     try {
@@ -184,12 +194,12 @@ export default function App() {
   // loading flash) — picks up habits an admin created/toggled without a full reload.
   useEffect(() => {
     if (state.status !== "ready") return;
-    if (settingsOpen) return;
+    if (settingsOpen || historyOpen) return;
     if (activeTab !== "progress" && activeTab !== "log") return;
     void loadProgress();
     void loadHabits();
     void loadPersonalHabits();
-  }, [activeTab, settingsOpen, state.status, loadProgress, loadHabits, loadPersonalHabits]);
+  }, [activeTab, settingsOpen, historyOpen, state.status, loadProgress, loadHabits, loadPersonalHabits]);
 
   if (!available) {
     return (
@@ -261,6 +271,16 @@ export default function App() {
             }}
           />
         </div>
+      ) : historyOpen ? (
+        // Same full-screen, no-TabBar pattern as Settings above.
+        <div className="min-h-screen bg-background pb-[env(safe-area-inset-bottom)]">
+          <HistoryScreen
+            initData={initData}
+            isAdmin={isAdmin}
+            onBack={closeHistory}
+            onNavigateAway={navigateAwayFromHistory}
+          />
+        </div>
       ) : (
         // Room for the fixed TabBar: its own height (pb-16) *plus* the safe-area
         // inset the bar itself adds. A flat 4rem left the last ~25px of every
@@ -273,6 +293,7 @@ export default function App() {
               habits={habits}
               personalHabits={personalHabits}
               onOpenSettings={openSettings}
+              onOpenHistory={openHistory}
             />
           )}
           {activeTab === "log" && (

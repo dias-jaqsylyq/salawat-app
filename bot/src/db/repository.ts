@@ -1241,9 +1241,12 @@ export function computePoints(
 /**
  * The row of this habit's week that currently carries the points, if any.
  * At most one exists — that is the invariant upsertHabitLog and deleteHabitLog
- * maintain between them.
+ * maintain between them. Exported (beyond its use inside this file) so a
+ * read route can tell whether a given day of a weekly habit's week is the one
+ * that banked the points, e.g. to show "already counted this week" for a day
+ * other than the carrier.
  */
-function weekCarrierRow(
+export function weekCarrierRow(
   userId: number,
   habitId: number,
   logDate: string
@@ -1459,6 +1462,29 @@ export function getUserTotalPoints(userId: number, roomId?: number): number {
           )
           .get(userId, roomId)
   ) as { total: number };
+  return row.total;
+}
+
+/**
+ * Points this user earned from one specific habit within [fromDate, toDate]
+ * inclusive — the History screen's monthly total for the habit currently
+ * selected. Attributes a weekly habit's points to whichever day actually
+ * carries them (points_earned lives on a log_date row, same as everywhere
+ * else), not to "the week" as a unit.
+ */
+export function getHabitPointsInRange(
+  userId: number,
+  habitId: number,
+  fromDate: string,
+  toDate: string
+): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(points_earned), 0) AS total
+       FROM habit_logs
+       WHERE user_id = ? AND habit_id = ? AND log_date >= ? AND log_date <= ?`
+    )
+    .get(userId, habitId, fromDate, toDate) as { total: number };
   return row.total;
 }
 

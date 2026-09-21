@@ -5,6 +5,7 @@ import {
   getUserHabitLogsForDate,
   listHabits,
   upsertHabitLog,
+  weekCarrierRow,
 } from "../../db/repository.js";
 import type { Habit, User } from "../../types.js";
 import { dailyLogWindow } from "../habitLogWindow.js";
@@ -42,17 +43,20 @@ export function listHabitsRoute(req: Request, res: Response): void {
 
 /**
  * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker (`today`,
- * `minDate`, `maxDate`) plus every DAILY habit's state on whichever day is
- * requested (today when `date` is omitted).
+ * `minDate`, `maxDate`) plus every active habit's state on whichever day is
+ * requested (today when `date` is omitted) — daily and weekly alike, both now
+ * backfillable within the same window (BACKFILL PRD).
  *
- * Weekly habits are left out entirely: they are not backfillable (BACKFILL PRD),
- * so the client keeps reading their state from GET /api/progress, which is
- * always "today" regardless of what is selected here.
+ * A weekly habit's entry describes *this exact day*, not "this week's status":
+ * `logged` mirrors row presence on `date` the same way a daily habit's does,
+ * and `countedThisWeek` says whether some *other* day of `date`'s week already
+ * carries the points — the write side's weekCarrierRow, read rather than
+ * decided. A day can be logged (marked) without being the carrier.
  *
  * `editable` is false when `date` precedes that particular habit's own
  * creation day, even though the day itself is inside the screen's window —
  * the picker is one control for the whole screen, but a habit created
- * mid-week cannot be backfilled into days before it existed.
+ * mid-window cannot be backfilled into days before it existed.
  */
 export function habitLogWindowRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
@@ -78,19 +82,23 @@ export function habitLogWindowRoute(req: Request, res: Response): void {
     return;
   }
 
-  const dailyHabits = listHabits({ activeOnly: true, roomId: caller.roomId }).filter(
-    (habit) => habit.period === "daily"
-  );
+  const activeHabits = listHabits({ activeOnly: true, roomId: caller.roomId });
   const logs = getUserHabitLogsForDate(caller.user.id, date);
 
-  const habits = dailyHabits.map((habit) => {
+  const habits = activeHabits.map((habit) => {
     const log = logs.get(habit.id);
-    return {
+    const entry = {
       habitId: habit.id,
       logged: log !== undefined,
       value: log?.value ?? 0,
       points: log?.points_earned ?? 0,
       editable: date >= dailyLogWindow(caller.user, habit).minDate,
+    };
+    if (habit.period !== "weekly") return entry;
+    const carrier = weekCarrierRow(caller.user.id, habit.id, date);
+    return {
+      ...entry,
+      countedThisWeek: carrier !== undefined && carrier.log_date !== date,
     };
   });
 
@@ -109,6 +117,12 @@ export function habitLogWindowRoute(req: Request, res: Response): void {
  * the error response itself and returning null when the request cannot
  * proceed. Omitted `date` always resolves to the caller's own today, exactly
  * the previous (pre-backfill) behavior of both routes.
+ *
+ * Weekly habits accept any date inside the window, exactly like daily ones
+ * (BACKFILL PRD) — the carrier-row logic in upsertHabitLog/deleteHabitLog
+ * already keys off whichever logDate it is given, not "today", so a marked
+ * day earlier in the window banks or releases the week's points correctly
+ * without any special-casing here.
  */
 function resolveLogDate(req: Request, res: Response, user: User, habit: Habit): string | null {
   const window = dailyLogWindow(user, habit);
@@ -119,13 +133,6 @@ function resolveLogDate(req: Request, res: Response, user: User, habit: Habit): 
   const parsed = parseDateParam(requestedRaw);
   if (parsed === null) {
     res.status(400).json({ success: false, error: "invalid_date" });
-    return null;
-  }
-  // Weekly habits score once for the whole week (upsertHabitLog's carrier
-  // logic), which only makes sense pinned to the day the member actually
-  // marked it on — backfill is daily-only by design (BACKFILL PRD).
-  if (habit.period === "weekly" && parsed !== window.today) {
-    res.status(400).json({ success: false, error: "habit_not_backfillable" });
     return null;
   }
   if (parsed < window.minDate || parsed > window.maxDate) {
@@ -142,10 +149,13 @@ function resolveLogDate(req: Request, res: Response, user: User, habit: Habit): 
  *
  * `date` is optional and defaults to the caller's own today (their personal
  * timezone, falling back to TIMEZONE until the Mini App has detected one).
- * For a DAILY habit it may also target any earlier day of the room's current
- * week, back to whichever is later of that week's Monday, the day the caller
- * joined the room, or the day the habit itself was created (BACKFILL PRD) —
- * see dailyLogWindow. A WEEKLY habit accepts no date but today's.
+ * It may also target any earlier day within the backfill window — the room's
+ * current week plus the BACKFILL_WEEKS_BACK weeks before it — back to
+ * whichever is later of that window's start, the day the caller joined the
+ * room, or the day the habit itself was created (BACKFILL PRD); see
+ * dailyLogWindow. DAILY and WEEKLY habits share the same window: a WEEKLY
+ * habit's carrier-row bookkeeping (upsertHabitLog) already keys off whichever
+ * date it is given, not "today".
  */
 export function logHabitRoute(req: Request, res: Response): void {
   const habitId = parseIdParam(req.params.id);
@@ -200,15 +210,21 @@ export function logHabitRoute(req: Request, res: Response): void {
 /**
  * DELETE /api/habits/:id/log?date=YYYY-MM-DD — remove one day's log for a
  * habit of the caller's own room, if any. Idempotent (no log on that day is
- * still a 200), and allowed even against a deactivated habit — this corrects
- * an existing entry rather than logging new engagement, so it isn't gated by
- * habit_inactive like POST is.
+ * still a 200).
+ *
+ * Blocked against a deactivated habit, same as POST — once a habit is
+ * deactivated, editing it is closed entirely, including correcting a mistaken
+ * past entry. (This used to be allowed, on the theory that a delete only
+ * corrects existing engagement rather than logging new engagement; that
+ * carve-out is gone now that backfill reaches three weeks back, wide enough
+ * that "editing" and "logging new engagement" against a retired habit are no
+ * longer practically distinguishable.)
  *
  * `date` follows the same rules as POST: optional (defaults to today), and
- * for a DAILY habit reaches back to dailyLogWindow's minDate. Un-marking a
- * backfilled day is exactly as allowed as marking one, within the same window
- * — a week that has since closed is no more editable for a delete than for a
- * write.
+ * reaches back to dailyLogWindow's minDate for daily and weekly habits alike.
+ * Un-marking a backfilled day is exactly as allowed as marking one, within
+ * the same window — a week older than the window is no more editable for a
+ * delete than for a write.
  */
 export function deleteHabitLogRoute(req: Request, res: Response): void {
   const habitId = parseIdParam(req.params.id);
@@ -223,6 +239,10 @@ export function deleteHabitLogRoute(req: Request, res: Response): void {
   const habit = getRoomHabit(habitId, caller.roomId);
   if (!habit) {
     res.status(404).json({ success: false, error: "habit_not_found" });
+    return;
+  }
+  if (habit.is_active !== 1) {
+    res.status(400).json({ success: false, error: "habit_inactive" });
     return;
   }
 

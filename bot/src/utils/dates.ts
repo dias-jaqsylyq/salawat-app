@@ -78,3 +78,40 @@ export function weekBoundsOfDateKey(dateKey: string): { weekStart: string; weekE
 export function shiftWeekStart(weekStart: string, weeks: number): string {
   return formatDateParts(addCalendarDays(parseDateKey(weekStart), weeks * 7));
 }
+
+/**
+ * Inclusive first and last day of the calendar month `year`-`month`
+ * (1-indexed, like DateParts.month). Pure calendar arithmetic, no timezone —
+ * the caller decides which timezone's Y/M/D to pass in, the same split
+ * responsibility as weekBounds/getCurrentWeekBounds.
+ */
+export function monthBounds(year: number, month: number): { monthStart: string; monthEnd: string } {
+  const monthStart = formatDateParts({ year, month, day: 1 });
+  // Day 0 of next month = last day of this month (Date.UTC normalizes it).
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const monthEnd = formatDateParts({ year, month, day: lastDay });
+  return { monthStart, monthEnd };
+}
+
+/** "YYYY-MM" for a calendar month, the key HistoryMonthResponse is requested by. */
+export function formatMonthKey(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
+/** Parse a "YYYY-MM" key into {year, month}, or null when it isn't one. */
+export function parseMonthKey(key: string): { year: number; month: number } | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(key);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+/** The calendar month before `year`-`month`, wrapping across a year boundary. */
+export function shiftMonth(year: number, month: number, months: number): { year: number; month: number } {
+  const zeroIndexed = (month - 1) + months;
+  const newYear = year + Math.floor(zeroIndexed / 12);
+  const newMonth = ((zeroIndexed % 12) + 12) % 12 + 1;
+  return { year: newYear, month: newMonth };
+}

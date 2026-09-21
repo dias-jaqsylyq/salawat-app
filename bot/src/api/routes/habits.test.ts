@@ -143,8 +143,12 @@ function makeBackfillableHabit(
 }
 
 const { weekStart } = getCurrentWeekBounds();
-/** A day inside the week before this one — always outside the backfill window. */
+/** A day inside the week just before this one — inside the 3-week backfill window. */
 const LAST_WEEK = shiftWeekStart(weekStart, -1);
+/** A day inside the oldest week the window reaches — still inside it. */
+const TWO_WEEKS_AGO = shiftWeekStart(weekStart, -2);
+/** A day inside the week just outside the window — one week too old. */
+const TOO_OLD_WEEK = shiftWeekStart(weekStart, -3);
 
 describe("GET /api/habits", () => {
   it("lists only active habits", () => {
@@ -260,11 +264,21 @@ describe("POST /api/habits/:id/log", () => {
     assert.equal(callLogWindow(telegramId).body.habits[0].logged, false);
   });
 
-  it("rejects backfilling into a week that has already closed", () => {
+  it("backfills a daily habit into either of the two weeks before this one", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Backfilled two weeks", 8);
+    const user = getUserByTelegramId(telegramId)!;
+
+    assert.equal(callLog(telegramId, habit.id, {}, LAST_WEEK).status, 200);
+    assert.equal(callLog(telegramId, habit.id, {}, TWO_WEEKS_AGO).status, 200);
+    assert.equal(getUserTotalPoints(user.id), 16);
+  });
+
+  it("rejects backfilling into a week older than the 3-week window", () => {
     const telegramId = makeBackfillableUser();
     const habit = makeBackfillableHabit("Too late now", 5);
 
-    const { status, body } = callLog(telegramId, habit.id, {}, LAST_WEEK);
+    const { status, body } = callLog(telegramId, habit.id, {}, TOO_OLD_WEEK);
     assert.equal(status, 400);
     assert.equal(body.error, "date_out_of_window");
   });
@@ -280,13 +294,29 @@ describe("POST /api/habits/:id/log", () => {
     }
   });
 
-  it("rejects a weekly habit backfilled onto any day but today", () => {
+  it("backfills a weekly habit onto an earlier day within the window, banking that week's points", () => {
     const telegramId = makeBackfillableUser();
-    const habit = makeBackfillableHabit("Weekly, today only", 20, "weekly");
+    const habit = makeBackfillableHabit("Weekly, backfilled", 20, "weekly");
+    const user = getUserByTelegramId(telegramId)!;
 
     const { status, body } = callLog(telegramId, habit.id, {}, LAST_WEEK);
+    assert.equal(status, 200);
+    assert.equal(body.points, 20);
+    assert.equal(getUserTotalPoints(user.id), 20);
+
+    // Today's row for the same habit belongs to a different week (this week),
+    // so it independently banks its own points too.
+    assert.equal(callLog(telegramId, habit.id, {}).body.points, 20);
+    assert.equal(getUserTotalPoints(user.id), 40);
+  });
+
+  it("rejects a weekly habit backfilled into a week older than the 3-week window", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Weekly, too old", 20, "weekly");
+
+    const { status, body } = callLog(telegramId, habit.id, {}, TOO_OLD_WEEK);
     assert.equal(status, 400);
-    assert.equal(body.error, "habit_not_backfillable");
+    assert.equal(body.error, "date_out_of_window");
   });
 
   it("cannot backfill before the caller joined the room", () => {
@@ -347,15 +377,18 @@ describe("DELETE /api/habits/:id/log", () => {
     assert.deepEqual(body, { success: true, habitId: habit.id, date: today, logged: false });
   });
 
-  it("succeeds even against a deactivated habit", () => {
+  it("rejects deleting against a deactivated habit — editing is closed entirely once retired", () => {
     const telegramId = makeUser();
     const habit = makeHabit("Soon retired", 5);
     callLog(telegramId, habit.id, {});
+    const user = getUserByTelegramId(telegramId)!;
     updateHabit(habit.id, { isActive: false });
 
     const { status, body } = callDeleteLog(telegramId, habit.id);
-    assert.equal(status, 200);
-    assert.deepEqual(body, { success: true, habitId: habit.id, date: today, logged: false });
+    assert.equal(status, 400);
+    assert.equal(body.error, "habit_inactive");
+    // The existing log is untouched.
+    assert.equal(getUserTotalPoints(user.id), 5);
   });
 
   it("404s for an unknown habit id", () => {
@@ -395,11 +428,25 @@ describe("DELETE /api/habits/:id/log", () => {
     assert.equal(getUserTotalPoints(user.id), 6);
   });
 
-  it("rejects un-marking a day from a week that has already closed", () => {
+  it("un-marks a day from a week within the 3-week window", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Backfilled delete", 5);
+    const user = getUserByTelegramId(telegramId)!;
+
+    callLog(telegramId, habit.id, {}, LAST_WEEK);
+    assert.equal(getUserTotalPoints(user.id), 5);
+
+    const { status, body } = callDeleteLog(telegramId, habit.id, LAST_WEEK);
+    assert.equal(status, 200);
+    assert.deepEqual(body, { success: true, habitId: habit.id, date: LAST_WEEK, logged: false });
+    assert.equal(getUserTotalPoints(user.id), 0);
+  });
+
+  it("rejects un-marking a day from a week older than the 3-week window", () => {
     const telegramId = makeBackfillableUser();
     const habit = makeBackfillableHabit("Closed week delete", 5);
 
-    const { status, body } = callDeleteLog(telegramId, habit.id, LAST_WEEK);
+    const { status, body } = callDeleteLog(telegramId, habit.id, TOO_OLD_WEEK);
     assert.equal(status, 400);
     assert.equal(body.error, "date_out_of_window");
   });
@@ -415,7 +462,7 @@ describe("GET /api/habits/log", () => {
     assert.equal(status, 200);
     assert.equal(body.date, today);
     assert.equal(body.today, today);
-    assert.equal(body.minDate, weekStart);
+    assert.equal(body.minDate, TWO_WEEKS_AGO);
     assert.equal(body.maxDate, today);
 
     const row = body.habits.find((h: any) => h.habitId === habit.id);
@@ -429,6 +476,10 @@ describe("GET /api/habits/log", () => {
   });
 
   it("reports an earlier day's own state, independent of today's", () => {
+    // Pre-existing, unrelated to backfill width: when the suite happens to run
+    // on a real Monday, weekStart === today and there is no "earlier day" left
+    // to distinguish from today in this test.
+    if (weekStart === today) return;
     const telegramId = makeBackfillableUser();
     const habit = makeBackfillableHabit("Log window past day", 9);
     callLog(telegramId, habit.id, {}, weekStart);
@@ -444,15 +495,43 @@ describe("GET /api/habits/log", () => {
     assert.equal(presentRow.logged, false);
   });
 
-  it("leaves weekly habits out — the client keeps reading those from GET /api/progress", () => {
+  it("includes weekly habits with their own day-specific state, alongside daily ones", () => {
     const telegramId = makeBackfillableUser();
-    const weekly = makeBackfillableHabit("Weekly, not here", 20, "weekly");
+    const weekly = makeBackfillableHabit("Weekly, included", 20, "weekly");
     const daily = makeBackfillableHabit("Daily, here", 3);
 
     const { body } = callLogWindow(telegramId);
     const ids = body.habits.map((h: any) => h.habitId);
     assert.ok(ids.includes(daily.id));
-    assert.ok(!ids.includes(weekly.id));
+    assert.ok(ids.includes(weekly.id));
+
+    const weeklyRow = body.habits.find((h: any) => h.habitId === weekly.id);
+    assert.equal(weeklyRow.logged, false);
+    assert.equal(weeklyRow.countedThisWeek, false);
+  });
+
+  it("reports countedThisWeek for a weekly habit's day once another day of the same week carries the points", () => {
+    const telegramId = makeBackfillableUser();
+    const weekly = makeBackfillableHabit("Weekly, counted", 20, "weekly");
+
+    callLog(telegramId, weekly.id, {}, weekStart);
+
+    const carrierDay = callLogWindow(telegramId, weekStart).body.habits.find(
+      (h: any) => h.habitId === weekly.id
+    );
+    assert.equal(carrierDay.logged, true);
+    assert.equal(carrierDay.points, 20);
+    assert.equal(carrierDay.countedThisWeek, false);
+
+    // A different, still-unmarked day of the same week: not logged on this
+    // exact day, but the week's points already have a home elsewhere.
+    if (weekStart !== today) {
+      const otherDay = callLogWindow(telegramId, today).body.habits.find(
+        (h: any) => h.habitId === weekly.id
+      );
+      assert.equal(otherDay.logged, false);
+      assert.equal(otherDay.countedThisWeek, true);
+    }
   });
 
   it("rejects a malformed date", () => {
@@ -462,9 +541,12 @@ describe("GET /api/habits/log", () => {
     assert.equal(body.error, "invalid_date");
   });
 
-  it("rejects a date outside the current week", () => {
+  it("accepts a date within the 3-week window and rejects one older", () => {
     const telegramId = makeBackfillableUser();
-    const { status, body } = callLogWindow(telegramId, LAST_WEEK);
+    assert.equal(callLogWindow(telegramId, LAST_WEEK).status, 200);
+    assert.equal(callLogWindow(telegramId, TWO_WEEKS_AGO).status, 200);
+
+    const { status, body } = callLogWindow(telegramId, TOO_OLD_WEEK);
     assert.equal(status, 400);
     assert.equal(body.error, "date_out_of_window");
   });

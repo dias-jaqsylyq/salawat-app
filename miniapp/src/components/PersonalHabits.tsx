@@ -11,7 +11,7 @@ import { messageForApiError } from "../api/errors.ts";
 import type {
   HabitCategory,
   PersonalHabit,
-  TodayPersonalHabitEntry,
+  PersonalHabitLogWindowEntry,
 } from "../api/types.ts";
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
@@ -29,7 +29,13 @@ const NAME_MAX_LENGTH = 100;
 interface Props {
   initData: string;
   habits: PersonalHabit[] | null;
-  today: TodayPersonalHabitEntry[];
+  /** This habit's state on `date` — logged, unlogged, and whether it can be
+   *  edited at all (a day before the habit existed). Independent of "today":
+   *  a member may be viewing an earlier day of the backfill window. */
+  entries: PersonalHabitLogWindowEntry[];
+  /** The day `entries` describes and the day a toggle here writes to
+   *  (BACKFILL PRD — the same window room habits get). */
+  date: string;
   /** The room's setting: when on, a personal habit needs a category too. */
   categoriesEnabled: boolean;
   /** A log/unlog landed — refresh the shared progress state. */
@@ -39,10 +45,10 @@ interface Props {
 }
 
 function findEntry(
-  today: TodayPersonalHabitEntry[],
+  entries: PersonalHabitLogWindowEntry[],
   personalHabitId: number
-): TodayPersonalHabitEntry | undefined {
-  return today.find((entry) => entry.personalHabitId === personalHabitId);
+): PersonalHabitLogWindowEntry | undefined {
+  return entries.find((entry) => entry.personalHabitId === personalHabitId);
 }
 
 interface FormValues {
@@ -141,22 +147,26 @@ function HabitForm({
 interface PersonalHabitRowProps {
   initData: string;
   habit: PersonalHabit;
-  entry: TodayPersonalHabitEntry | undefined;
+  entry: PersonalHabitLogWindowEntry | undefined;
+  date: string;
   onLogged: () => void;
 }
 
 /**
  * The same row the room's habits use, minus the points line — and never the
- * weekly badge: a personal habit is always a daily yes/no.
+ * weekly badge: a personal habit is always a daily yes/no. `disabled` mirrors
+ * a room habit's: the selected day precedes this habit's own creation, so
+ * there is nothing to mark yet.
  */
-function PersonalHabitRow({ initData, habit, entry, onLogged }: PersonalHabitRowProps) {
+function PersonalHabitRow({ initData, habit, entry, date, onLogged }: PersonalHabitRowProps) {
   return (
     <BinaryHabitRow
       name={habit.name}
       logged={entry?.logged ?? false}
+      disabled={entry !== undefined && !entry.editable}
       onToggle={async (checked) => {
-        if (checked) await logPersonalHabit(initData, habit.id);
-        else await deletePersonalHabitLog(initData, habit.id);
+        if (checked) await logPersonalHabit(initData, habit.id, undefined, date);
+        else await deletePersonalHabitLog(initData, habit.id, date);
         hapticMedium();
         onLogged();
       }}
@@ -167,7 +177,8 @@ function PersonalHabitRow({ initData, habit, entry, onLogged }: PersonalHabitRow
 export default function PersonalHabits({
   initData,
   habits,
-  today,
+  entries,
+  date,
   categoriesEnabled,
   onLogged,
   onListChanged,
@@ -282,7 +293,8 @@ export default function PersonalHabits({
                 <PersonalHabitRow
                   initData={initData}
                   habit={habit}
-                  entry={findEntry(today, habit.id)}
+                  entry={findEntry(entries, habit.id)}
+                  date={date}
                   onLogged={onLogged}
                 />
                 <div className="flex items-center justify-between gap-2 px-4 pb-3">

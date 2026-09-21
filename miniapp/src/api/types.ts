@@ -67,13 +67,44 @@ export interface LogPersonalHabitResponse {
   success: true;
   personalHabitId: number;
   value: number;
+  /** The day actually written — the caller's today unless `date` was passed. */
+  date: string;
   logged: true;
 }
 
 export interface UnlogPersonalHabitResponse {
   success: true;
   personalHabitId: number;
+  date: string;
   logged: false;
+}
+
+/**
+ * One personal habit's state on whichever day GET /api/personal-habits/log
+ * describes. `editable` is false when `date` precedes this habit's own
+ * creation day, even though the day itself is inside the screen's window.
+ */
+export interface PersonalHabitLogWindowEntry {
+  personalHabitId: number;
+  logged: boolean;
+  value: number;
+  editable: boolean;
+}
+
+/**
+ * GET /api/personal-habits/log?date=YYYY-MM-DD — mirrors HabitLogWindowResponse
+ * for the caller's own private list (BACKFILL PRD extends to personal habits
+ * too, daily-only — there is no weekly period for these).
+ */
+export interface PersonalHabitLogWindowResponse {
+  /** The day this response describes — `today` when the request omitted `date`. */
+  date: string;
+  /** The caller's own today — also the window's upper bound. */
+  today: string;
+  /** Inclusive lower bound of the whole screen's day picker. */
+  minDate: string;
+  maxDate: string;
+  habits: PersonalHabitLogWindowEntry[];
 }
 
 export interface DeletePersonalHabitResponse {
@@ -127,10 +158,16 @@ export interface TodayHabitEntry {
 }
 
 /**
- * One DAILY habit's state on whichever day GET /api/habits/log describes.
+ * One habit's state on whichever day GET /api/habits/log describes — daily
+ * and weekly alike, both backfillable within the same window (BACKFILL PRD).
  * `editable` is false when `date` precedes this particular habit's own
  * creation day, even though the day itself is inside the screen's window —
- * a habit created mid-week cannot be backfilled into days before it existed.
+ * a habit created mid-window cannot be backfilled into days before it
+ * existed.
+ *
+ * `countedThisWeek` only appears on a weekly habit's entry: whether some
+ * *other* day of `date`'s week already carries the points (the carrier-row
+ * rule) — a day can be logged (marked) without being that carrier.
  */
 export interface HabitLogWindowEntry {
   habitId: number;
@@ -138,14 +175,13 @@ export interface HabitLogWindowEntry {
   value: number;
   points: number;
   editable: boolean;
+  countedThisWeek?: boolean;
 }
 
 /**
  * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker (`today`,
- * `minDate`, `maxDate`) plus every daily habit's state on `date`. Weekly
- * habits are never included: they are not backfillable, so the Log screen
- * keeps reading their state from GET /api/progress regardless of which day is
- * selected here.
+ * `minDate`, `maxDate`) plus every active habit's state on `date`, daily and
+ * weekly alike.
  */
 export interface HabitLogWindowResponse {
   /** The day this response describes — `today` when the request omitted `date`. */
@@ -239,6 +275,82 @@ export interface WeeklyProgressResponse {
   /** The room's weekly habits, one badge each rather than a row of seven. */
   weeklyHabits: WeeklyHabitSummary[];
 }
+
+/**
+ * One row of the History screen's habit switcher — GET
+ * /api/progress/history/habits. Covers every room habit (active *and*
+ * inactive — a deactivated one stays visible as historical data) plus the
+ * caller's own personal habits, which `kind` tells apart since the two id
+ * spaces overlap.
+ */
+export interface HistoryHabitListEntry {
+  id: number;
+  kind: "room" | "personal";
+  name: string;
+  category: HabitCategory | null;
+  period: HabitPeriod;
+  /** Always true for a personal habit — there is no deactivation concept for those. */
+  isActive: boolean;
+}
+
+/** One day of a History month's daily grid. */
+export interface HistoryDay {
+  date: string;
+  logged: boolean;
+  /** Before the caller joined the room, or before the habit itself was created. */
+  locked: boolean;
+  /** Later than the caller's own today. */
+  future: boolean;
+  /** A leading/trailing day from an adjacent month, kept only for grid alignment. */
+  outOfMonth: boolean;
+}
+
+/** One week badge of a History month's weekly view. */
+export interface HistoryWeek {
+  weekStart: string;
+  weekEnd: string;
+  /** Days of this week marked — usually 0 or 1, sometimes more. */
+  count: number;
+  met: boolean;
+}
+
+interface HistoryMonthBase {
+  habit: HistoryHabitListEntry;
+  /** The month this response describes, "YYYY-MM". */
+  month: string;
+  monthStart: string;
+  monthEnd: string;
+  /** The caller's own today, in their own timezone. */
+  today: string;
+  /** Earliest month the caller may navigate to — the month they joined the room. */
+  earliestMonth: string;
+  /** False when nothing at all was logged this month — the screen shows
+   *  "No data this month" instead of an empty-looking grid or badge list. */
+  hasData: boolean;
+  /** Points earned from this habit within the month. Omitted for a personal
+   *  habit, which never carries points at all. */
+  totalPoints?: number;
+}
+
+export interface HistoryMonthDaily extends HistoryMonthBase {
+  period: "daily";
+  /** A full calendar grid: the month's own days plus leading/trailing padding. */
+  days: HistoryDay[];
+  /** Logged days among `applicableDays` — the "23 of 30" summary. Daily only. */
+  completedCount: number;
+  /** Days in the month that were neither locked nor future. */
+  applicableDays: number;
+}
+
+export interface HistoryMonthWeekly extends HistoryMonthBase {
+  period: "weekly";
+  /** One badge per week overlapping the month; a week that began before the
+   *  caller joined the room is omitted entirely, never shown partial. */
+  weeks: HistoryWeek[];
+}
+
+/** GET /api/progress/history?kind=&habitId=&month=YYYY-MM — one habit, one month. */
+export type HistoryMonthResponse = HistoryMonthDaily | HistoryMonthWeekly;
 
 export type ProgressResponse = { registered: false } | RegisteredProgress;
 
