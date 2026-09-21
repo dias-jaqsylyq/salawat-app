@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { Layers } from "lucide-react";
-import { deleteHabitLog, getHabitLogWindow, logHabit } from "../api/client.ts";
+import {
+  deleteHabitLog,
+  getHabitLogWindow,
+  getPersonalHabitLogWindow,
+  logHabit,
+} from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type {
   Habit,
   HabitCategory,
   HabitLogWindowResponse,
   PersonalHabit,
+  PersonalHabitLogWindowResponse,
   RegisteredProgress,
 } from "../api/types.ts";
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META, groupHabitsByCategory } from "../lib/habitCategories.ts";
 import { BinaryHabitRow } from "../components/HabitLogRow.tsx";
-import DaySelector from "../components/DaySelector.tsx";
+import BackfillDayList from "../components/BackfillDayList.tsx";
 import PersonalHabits from "../components/PersonalHabits.tsx";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,45 +37,30 @@ interface Props {
 
 interface RowState {
   logged: boolean;
-  /** A DAILY habit on a day before it existed — nothing to mark, not a permission question. */
+  /** The selected day precedes this habit's own creation — nothing to mark, not a permission question. */
   disabled: boolean;
   countedThisWeek: boolean;
 }
 
 /**
- * Resolves each habit's row state for whichever day is selected.
- *
- * WEEKLY habits are never date-scoped (BACKFILL PRD is daily-only), so their
- * state always comes from GET /api/progress's real today regardless of what
- * is selected here — the caller keeps them out of the list entirely on a
- * past day rather than show a switch that would silently do the wrong thing.
- * DAILY habits read from the day-specific GET /api/habits/log response.
+ * Resolves each habit's row state for whichever day is selected — daily and
+ * weekly alike, both backfillable within the same window now (BACKFILL PRD),
+ * both read from the same day-specific GET /api/habits/log response.
  */
 function buildRowStates(
   habits: Habit[],
-  logWindow: HabitLogWindowResponse,
-  progress: RegisteredProgress
+  logWindow: HabitLogWindowResponse
 ): Map<number, RowState> {
-  const dailyEntries = new Map(logWindow.habits.map((entry) => [entry.habitId, entry]));
+  const entries = new Map(logWindow.habits.map((entry) => [entry.habitId, entry]));
   const states = new Map<number, RowState>();
 
   for (const habit of habits) {
-    if (habit.period === "weekly") {
-      const entry = progress.today.find((e) => e.habitId === habit.id);
-      const streak = progress.streaks.find((s) => s.habitId === habit.id);
-      states.set(habit.id, {
-        logged: entry?.logged ?? false,
-        disabled: false,
-        countedThisWeek: (streak?.weekCount ?? 0) > 0,
-      });
-    } else {
-      const entry = dailyEntries.get(habit.id);
-      states.set(habit.id, {
-        logged: entry?.logged ?? false,
-        disabled: entry !== undefined && !entry.editable,
-        countedThisWeek: false,
-      });
-    }
+    const entry = entries.get(habit.id);
+    states.set(habit.id, {
+      logged: entry?.logged ?? false,
+      disabled: entry !== undefined && !entry.editable,
+      countedThisWeek: entry?.countedThisWeek ?? false,
+    });
   }
   return states;
 }
@@ -159,13 +150,21 @@ export default function LogHabitsScreen({
   onPersonalHabitsChanged,
 }: Props) {
   const [logWindow, setLogWindow] = useState<HabitLogWindowResponse | null>(null);
+  const [personalLogWindow, setPersonalLogWindow] =
+    useState<PersonalHabitLogWindowResponse | null>(null);
   const [windowError, setWindowError] = useState<string | null>(null);
 
+  // Both windows describe the same day and share the same backfill bounds
+  // (BACKFILL PRD), so they are always loaded together — one date picker
+  // drives room habits and the member's own list alike.
   const loadLogWindow = useCallback(
     (date?: string) => {
       setWindowError(null);
-      getHabitLogWindow(initData, date)
-        .then(setLogWindow)
+      Promise.all([getHabitLogWindow(initData, date), getPersonalHabitLogWindow(initData, date)])
+        .then(([habitsWindow, personalWindow]) => {
+          setLogWindow(habitsWindow);
+          setPersonalLogWindow(personalWindow);
+        })
         .catch((err) => {
           setWindowError(messageForApiError(err, "Couldn't load that day."));
         });
@@ -182,24 +181,21 @@ export default function LogHabitsScreen({
   const isToday = logWindow !== null && logWindow.date === logWindow.today;
 
   async function handleToggle(habit: Habit, checked: boolean) {
-    // Weekly habits are never backfilled — always today, whatever day the
-    // picker shows (in practice they are hidden except on today anyway).
-    const date = habit.period === "daily" ? logWindow?.date : undefined;
+    const date = logWindow?.date;
     if (checked) await logHabit(initData, habit.id, undefined, date);
     else await deleteHabitLog(initData, habit.id, date);
     hapticMedium();
     onLogged();
-    if (habit.period === "daily") loadLogWindow(logWindow?.date);
+    loadLogWindow(date);
   }
 
   // Grouping is the room's choice, not the habit's: a room with categories off
   // shows the same flat list it always did, even though the habits may still
   // carry a stored category (PRD §0).
   const categoriesEnabled = progress.room?.categoriesEnabled ?? false;
-  // Weekly habits are not backfillable, so a past day drops them from the list
-  // entirely rather than show a switch that would silently do the wrong thing.
-  const visibleHabits =
-    habits === null ? null : isToday ? habits : habits.filter((h) => h.period !== "weekly");
+  // Daily and weekly habits alike are backfillable within the window now
+  // (BACKFILL PRD), so every active habit stays in the list on any day.
+  const visibleHabits = habits;
   const groups =
     categoriesEnabled && visibleHabits !== null ? groupHabitsByCategory(visibleHabits) : null;
 
@@ -215,7 +211,7 @@ export default function LogHabitsScreen({
       </div>
 
       {logWindow !== null && (
-        <DaySelector
+        <BackfillDayList
           minDate={logWindow.minDate}
           today={logWindow.today}
           selected={logWindow.date}
@@ -252,7 +248,7 @@ export default function LogHabitsScreen({
               <CategoryHeading category={group.category} />
               <HabitRows
                 habits={group.habits}
-                rowStates={buildRowStates(group.habits, logWindow!, progress)}
+                rowStates={buildRowStates(group.habits, logWindow!)}
                 onToggle={handleToggle}
               />
             </section>
@@ -263,20 +259,21 @@ export default function LogHabitsScreen({
       {!loading && visibleHabits !== null && visibleHabits.length > 0 && groups === null && (
         <HabitRows
           habits={visibleHabits}
-          rowStates={buildRowStates(visibleHabits, logWindow!, progress)}
+          rowStates={buildRowStates(visibleHabits, logWindow!)}
           onToggle={handleToggle}
         />
       )}
 
       {/* The member's own list, always last and always one block — even in a
           categories-enabled room, where the room's habits above are grouped.
-          Personal habits are today-only regardless of which day is picked
-          above (BACKFILL PRD scopes daily room habits only). */}
-      {isToday && (
+          Backfillable on any day of the same window room habits get
+          (BACKFILL PRD), reading and writing the same selected day. */}
+      {logWindow !== null && (
         <PersonalHabits
           initData={initData}
           habits={personalHabits}
-          today={progress.personalToday}
+          entries={personalLogWindow?.habits ?? []}
+          date={logWindow.date}
           categoriesEnabled={categoriesEnabled}
           onLogged={onLogged}
           onListChanged={onPersonalHabitsChanged}

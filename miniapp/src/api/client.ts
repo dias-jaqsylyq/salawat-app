@@ -11,6 +11,8 @@ import type {
   HabitCategory,
   HabitLogWindowResponse,
   HabitPeriod,
+  HistoryHabitListEntry,
+  HistoryMonthResponse,
   KickParticipantResponse,
   LeaderboardPeriod,
   LeaderboardResponse,
@@ -19,6 +21,7 @@ import type {
   LogPersonalHabitResponse,
   ParticipantAdminResponse,
   PersonalHabit,
+  PersonalHabitLogWindowResponse,
   ProfileResponse,
   ProfileUpdate,
   ProgressResponse,
@@ -80,8 +83,7 @@ export function getHabits(initData: string): Promise<Habit[]> {
 
 /**
  * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker plus every
- * daily habit's state on `date` (today when omitted). Weekly habits are never
- * included — the caller keeps reading their state from getProgress().
+ * active habit's state on `date` (today when omitted), daily and weekly alike.
  */
 export function getHabitLogWindow(
   initData: string,
@@ -92,9 +94,9 @@ export function getHabitLogWindow(
 
 /**
  * POST /api/habits/:id/log — upsert one day's value (today when `date` is
- * omitted). Omit `value` for a binary habit. A DAILY habit may also target any
- * earlier day of the current week the server's backfill window allows
- * (BACKFILL PRD); a WEEKLY habit accepts no `date` but today's.
+ * omitted). Omit `value` for a binary habit. May target any earlier day
+ * within the backfill window the server allows (BACKFILL PRD) — daily and
+ * weekly habits share the same window.
  */
 export function logHabit(
   initData: string,
@@ -154,26 +156,80 @@ export function deletePersonalHabit(
   return request(initData, `/api/personal-habits/${personalHabitId}`, { method: "DELETE" });
 }
 
+/**
+ * GET /api/personal-habits/log?date=YYYY-MM-DD — the day picker's own bounds
+ * plus every personal habit's state on `date` (today when omitted). Mirrors
+ * getHabitLogWindow; personal habits carry no points to report.
+ */
+export function getPersonalHabitLogWindow(
+  initData: string,
+  date?: string
+): Promise<PersonalHabitLogWindowResponse> {
+  return request(
+    initData,
+    date === undefined ? "/api/personal-habits/log" : `/api/personal-habits/log?date=${date}`
+  );
+}
+
+/**
+ * POST /api/personal-habits/:id/log — upsert one day's value (today when
+ * `date` is omitted). May target any earlier day within the same backfill
+ * window room habits get (BACKFILL PRD).
+ */
 export function logPersonalHabit(
   initData: string,
   personalHabitId: number,
-  value?: number
+  value?: number,
+  date?: string
 ): Promise<LogPersonalHabitResponse> {
-  return request(initData, `/api/personal-habits/${personalHabitId}/log`, {
+  const path =
+    date === undefined
+      ? `/api/personal-habits/${personalHabitId}/log`
+      : `/api/personal-habits/${personalHabitId}/log?date=${date}`;
+  return request(initData, path, {
     method: "POST",
     body: JSON.stringify(value === undefined ? {} : { value }),
   });
 }
 
+/** DELETE /api/personal-habits/:id/log — remove one day's log, if any (today when `date` is omitted). Idempotent. */
 export function deletePersonalHabitLog(
   initData: string,
-  personalHabitId: number
+  personalHabitId: number,
+  date?: string
 ): Promise<UnlogPersonalHabitResponse> {
-  return request(initData, `/api/personal-habits/${personalHabitId}/log`, { method: "DELETE" });
+  const path =
+    date === undefined
+      ? `/api/personal-habits/${personalHabitId}/log`
+      : `/api/personal-habits/${personalHabitId}/log?date=${date}`;
+  return request(initData, path, { method: "DELETE" });
 }
 
 export function getProgress(initData: string): Promise<ProgressResponse> {
   return request(initData, "/api/progress");
+}
+
+/**
+ * GET /api/progress/history/habits — the History screen's switcher list:
+ * every room habit (active and inactive) plus the caller's own personal
+ * habits. Read-only, always the caller's own — there is no other-user
+ * parameter anywhere in the History endpoints.
+ */
+export function getHistoryHabits(initData: string): Promise<HistoryHabitListEntry[]> {
+  return request(initData, "/api/progress/history/habits");
+}
+
+/** GET /api/progress/history?kind=&habitId=&month=YYYY-MM — one habit, one month. */
+export function getHistoryMonth(
+  initData: string,
+  kind: "room" | "personal",
+  habitId: number,
+  month: string
+): Promise<HistoryMonthResponse> {
+  return request(
+    initData,
+    `/api/progress/history?kind=${kind}&habitId=${habitId}&month=${month}`
+  );
 }
 
 /**

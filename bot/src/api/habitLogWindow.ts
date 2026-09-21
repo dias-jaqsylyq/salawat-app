@@ -1,23 +1,37 @@
-import type { Habit, User } from "../types.js";
-import { dayKeyFromSqliteUtc, getCurrentWeekBounds, getUserTimezone, getUserTodayKey } from "../utils/challenge.js";
+import type { User } from "../types.js";
+import {
+  dayKeyFromSqliteUtc,
+  getCurrentWeekBounds,
+  getUserTimezone,
+  getUserTodayKey,
+  shiftWeekStart,
+} from "../utils/challenge.js";
+
+/**
+ * How many weeks back of the room's current week the backfill window opens:
+ * this week plus this many previous ones (BACKFILL PRD). One constant so the
+ * window, the day-picker UI and any test fixture agree on the same span.
+ */
+export const BACKFILL_WEEKS_BACK = 2;
 
 export interface DailyLogWindow {
   /** The caller's own today (their timezone) — also the window's upper bound. */
   today: string;
-  /** Inclusive lower bound: the later of the room's current week's Monday, the
-   *  day the caller joined the room, and (when `habit` was given) the day the
-   *  habit itself was created. */
+  /** Inclusive lower bound: the later of the Monday BACKFILL_WEEKS_BACK weeks
+   *  before the room's current week, the day the caller joined the room, and
+   *  (when `habit` was given) the day the habit itself was created. */
   minDate: string;
   maxDate: string;
 }
 
 /**
- * The inclusive range of days a DAILY habit's log may target (backfill PRD):
- * the room's current Monday-Sunday week (the same week weekly habits and the
- * leaderboard use), capped below by whichever is later — that Monday or the
- * day the caller joined the room — and above by the caller's own today. A
- * week that has already turned over is not reachable through this window,
- * even for a day that was legitimately logged while it was still current.
+ * The inclusive range of days a habit's log may target (backfill PRD): the
+ * room's current Monday-Sunday week plus the BACKFILL_WEEKS_BACK weeks before
+ * it (the same weeks weekly habits and the leaderboard use for each of those
+ * weeks), capped below by whichever is later — that Monday or the day the
+ * caller joined the room — and above by the caller's own today. A week older
+ * than the window is not reachable through this window, even for a day that
+ * was legitimately logged while it was still current.
  *
  * Passing `habit` narrows the lower bound further to the day the habit itself
  * was created, so a member cannot backfill a habit into days before it
@@ -33,13 +47,23 @@ export interface DailyLogWindow {
  * and getUserToday underneath it — routes never pass it, only tests, to pin
  * "today" instead of a suite's behavior depending on which real weekday it runs
  * on.
+ *
+ * `habit` only needs a `created_at` — both `Habit` and `PersonalHabit` satisfy
+ * that structurally, so this one function serves the personal-habit log
+ * routes too (personal habits have no `is_active`/`period` concerns for this
+ * window to care about; those are checked separately by their own route, the
+ * same way habit_inactive is checked outside dailyLogWindow for room habits).
  */
-export function dailyLogWindow(user: User, habit?: Habit, now: Date = new Date()): DailyLogWindow {
+export function dailyLogWindow(
+  user: User,
+  habit?: { created_at: string },
+  now: Date = new Date()
+): DailyLogWindow {
   const timeZone = getUserTimezone(user);
   const today = getUserTodayKey(user, now);
   const { weekStart } = getCurrentWeekBounds(now);
 
-  let minDate = weekStart;
+  let minDate = shiftWeekStart(weekStart, -BACKFILL_WEEKS_BACK);
   if (user.room_joined_at !== null) {
     const joinedDay = dayKeyFromSqliteUtc(user.room_joined_at, timeZone);
     if (joinedDay > minDate) minDate = joinedDay;

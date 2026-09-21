@@ -12,11 +12,18 @@ const REMINDER_KEYBOARD = new InlineKeyboard().url("Open app", config.miniAppDee
 
 /**
  * Deliberately generic (BACKFILL PRD): no per-habit detail, unlike the daily
- * reminder's "still to log" list — this is a once-a-week heads-up that the
- * window is closing, not a status report.
+ * reminder's "still to log" list — this is a once-a-week heads-up, not a
+ * status report.
+ *
+ * Says "the last few weeks" rather than naming a hard cutoff: the backfill
+ * window is a rolling 3 weeks (this one plus the two before it,
+ * BACKFILL_WEEKS_BACK in habitLogWindow.ts), so there is never a single
+ * "starting next week" deadline the way there was when the window was one
+ * week wide — a week only closes for good once it falls off the back of that
+ * rolling span.
  */
 export const BACKFILL_REMINDER_TEXT =
-  "Reminder: check all your habits for this week — starting next week, you won't be able to change them.";
+  "Reminder: you can still catch up on the last few weeks' habits — check and fill in anything you missed.";
 
 let sending = false;
 

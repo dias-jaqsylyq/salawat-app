@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MoonStar, Settings, Users } from "lucide-react";
+import { CalendarDays, MoonStar, Settings, Users } from "lucide-react";
 import { getProgressWeek } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type {
@@ -22,6 +22,8 @@ interface Props {
   /** The viewer's own private list, for naming their streaks. */
   personalHabits: PersonalHabit[] | null;
   onOpenSettings: () => void;
+  /** Opens the read-only History sub-screen (HISTORY PRD). */
+  onOpenHistory: () => void;
 }
 
 function habitLabel(habits: Habit[] | null, habitId: number): string {
@@ -34,6 +36,7 @@ export default function ProgressScreen({
   habits,
   personalHabits,
   onOpenSettings,
+  onOpenHistory,
 }: Props) {
   const {
     nickname,
@@ -100,16 +103,26 @@ export default function ProgressScreen({
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
             <CardTitle className="text-2xl font-bold tracking-tight">Progress</CardTitle>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={onOpenSettings}
-              aria-label="Open settings"
-              className="-mr-2 -mt-1"
-            >
-              <Settings className="h-5 w-5" />
-            </Button>
+            <div className="-mr-2 -mt-1 flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onOpenHistory}
+                aria-label="Open history"
+              >
+                <CalendarDays className="h-5 w-5" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onOpenSettings}
+                aria-label="Open settings"
+              >
+                <Settings className="h-5 w-5" />
+              </Button>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-[#854d0e] dark:bg-accent/15 dark:text-[#e6bf6a]">

@@ -26,10 +26,15 @@ const {
   listPersonalHabitsRoute,
   logPersonalHabitRoute,
   patchPersonalHabitRoute,
+  personalHabitLogWindowRoute,
 } = await import("./personalHabits.js");
 const { listAdminHabitsRoute } = await import("./adminHabits.js");
 const { progressRoute } = await import("./progress.js");
 const { progressWeekRoute } = await import("./progressWeek.js");
+const { getCurrentWeekBounds, getDayKeyInTimezone, shiftWeekStart } = await import(
+  "../../utils/challenge.js"
+);
+const { db } = await import("../../db/client.js");
 
 function capture(): { res: Response; status: () => number; body: () => any } {
   let status = 200;
@@ -51,7 +56,12 @@ type Handler = (req: Request, res: Response) => void;
 
 function call(
   handler: Handler,
-  req: { telegramId: number; params?: Record<string, string>; body?: unknown }
+  req: {
+    telegramId: number;
+    params?: Record<string, string>;
+    body?: unknown;
+    query?: Record<string, string>;
+  }
 ): { status: number; body: any } {
   const result = capture();
   handler(req as unknown as Request, result.res);
@@ -65,10 +75,29 @@ const patch = (telegramId: number, id: number | string, body: unknown) =>
   call(patchPersonalHabitRoute, { telegramId, params: { id: String(id) }, body });
 const remove = (telegramId: number, id: number | string) =>
   call(deletePersonalHabitRoute, { telegramId, params: { id: String(id) } });
-const log = (telegramId: number, id: number | string, body: unknown = {}) =>
-  call(logPersonalHabitRoute, { telegramId, params: { id: String(id) }, body });
-const unlog = (telegramId: number, id: number | string) =>
-  call(deletePersonalHabitLogRoute, { telegramId, params: { id: String(id) } });
+const log = (telegramId: number, id: number | string, body: unknown = {}, date?: string) =>
+  call(logPersonalHabitRoute, {
+    telegramId,
+    params: { id: String(id) },
+    body,
+    query: date === undefined ? {} : { date },
+  });
+const unlog = (telegramId: number, id: number | string, date?: string) =>
+  call(deletePersonalHabitLogRoute, {
+    telegramId,
+    params: { id: String(id) },
+    query: date === undefined ? {} : { date },
+  });
+const logWindow = (telegramId: number, date?: string) =>
+  call(personalHabitLogWindowRoute, { telegramId, query: date === undefined ? {} : { date } });
+
+/** These test users carry no timezone, so they fall back to TIMEZONE. */
+const today = getDayKeyInTimezone();
+const { weekStart } = getCurrentWeekBounds();
+/** A day inside the week just before this one — inside the 3-week backfill window. */
+const LAST_WEEK = shiftWeekStart(weekStart, -1);
+/** A day inside the week just outside the window — one week too old. */
+const TOO_OLD_WEEK = shiftWeekStart(weekStart, -3);
 
 let nextTelegramId = 980000001;
 let nextRoomSuffix = 1;
@@ -85,11 +114,39 @@ function makeRoom(categoriesEnabled = false) {
   return { room, ownerTelegramId: owner.telegram_id };
 }
 
+/**
+ * A member whose room_joined_at is backdated well before the backfill
+ * window — a fresh makeMember() joins "now", which would itself narrow the
+ * window to today alone. Tests that need real headroom to backfill into use
+ * this instead.
+ */
+function makeBackfillableMember(roomId: number): number {
+  const telegramId = makeMember(roomId);
+  db.prepare("UPDATE users SET room_joined_at = '2000-01-01 00:00:00' WHERE telegram_id = ?").run(
+    telegramId
+  );
+  return telegramId;
+}
+
 function makeMember(roomId: number): number {
   const telegramId = nextTelegramId++;
   const user = createUser(telegramId, `ph-member-${telegramId}`);
   setUserCurrentRoom(user.id, roomId);
   return telegramId;
+}
+
+/**
+ * Creates a personal habit and backdates its own created_at, the same way
+ * makeBackfillableMember backdates room_joined_at — a habit created "now"
+ * would otherwise narrow its own window to today alone, same as a fresh room
+ * habit does in habits.test.ts's makeBackfillableHabit.
+ */
+function createBackfillable(telegramId: number, body: { name: string; category?: string }) {
+  const created = create(telegramId, body);
+  db.prepare("UPDATE personal_habits SET created_at = '2000-01-01 00:00:00' WHERE id = ?").run(
+    created.body.id
+  );
+  return created;
 }
 
 describe("personal habits — CRUD", () => {
@@ -265,6 +322,131 @@ describe("personal habits — logging", () => {
     const progress = call(progressRoute, { telegramId });
     assert.deepEqual(progress.body.personalToday, []);
     assert.deepEqual(progress.body.personalStreaks, []);
+  });
+});
+
+describe("personal habits — backfill", () => {
+  it("backfills into either of the two weeks before this one, within the window", () => {
+    const { room } = makeRoom();
+    const telegramId = makeBackfillableMember(room.id);
+    const created = createBackfillable(telegramId, { name: "Walk" });
+
+    const backfilled = log(telegramId, created.body.id, {}, LAST_WEEK);
+    assert.equal(backfilled.status, 200);
+    assert.equal(backfilled.body.date, LAST_WEEK);
+    assert.equal(backfilled.body.logged, true);
+
+    // Today's own row is untouched — the two days are independent.
+    const present = logWindow(telegramId).body.habits.find(
+      (h: any) => h.personalHabitId === created.body.id
+    );
+    assert.equal(present.logged, false);
+  });
+
+  it("rejects backfilling into a week older than the 3-week window", () => {
+    const { room } = makeRoom();
+    const telegramId = makeBackfillableMember(room.id);
+    const created = createBackfillable(telegramId, { name: "Walk" });
+
+    const { status, body } = log(telegramId, created.body.id, {}, TOO_OLD_WEEK);
+    assert.equal(status, 400);
+    assert.equal(body.error, "date_out_of_window");
+  });
+
+  it("edits an already-backfilled earlier day — off, then back on, within the same window", () => {
+    const { room } = makeRoom();
+    const telegramId = makeBackfillableMember(room.id);
+    const created = createBackfillable(telegramId, { name: "Walk" });
+
+    log(telegramId, created.body.id, {}, LAST_WEEK);
+    const off = unlog(telegramId, created.body.id, LAST_WEEK);
+    assert.equal(off.status, 200);
+    assert.equal(off.body.logged, false);
+
+    const on = log(telegramId, created.body.id, {}, LAST_WEEK);
+    assert.equal(on.status, 200);
+    assert.equal(on.body.logged, true);
+  });
+
+  it("rejects un-marking a day from a week older than the 3-week window", () => {
+    const { room } = makeRoom();
+    const telegramId = makeBackfillableMember(room.id);
+    const created = createBackfillable(telegramId, { name: "Walk" });
+
+    const { status, body } = unlog(telegramId, created.body.id, TOO_OLD_WEEK);
+    assert.equal(status, 400);
+    assert.equal(body.error, "date_out_of_window");
+  });
+
+  it("cannot backfill before the caller joined the room", () => {
+    const { room } = makeRoom();
+    const telegramId = makeMember(room.id); // joined "now" — never before this week
+    const created = createBackfillable(telegramId, { name: "Walk" });
+
+    if (weekStart === today) return; // nothing earlier than today to test against, this week
+    const { status, body } = log(telegramId, created.body.id, {}, weekStart);
+    assert.equal(status, 400);
+    assert.equal(body.error, "date_out_of_window");
+  });
+
+  it("cannot backfill before the personal habit itself was created", () => {
+    const { room } = makeRoom();
+    const telegramId = makeBackfillableMember(room.id);
+    const created = create(telegramId, { name: "Brand new" }); // created_at left at "now"
+
+    if (weekStart === today) return; // nothing earlier than today to test against, this week
+    const { status, body } = log(telegramId, created.body.id, {}, weekStart);
+    assert.equal(status, 400);
+    assert.equal(body.error, "date_out_of_window");
+  });
+
+  describe("GET /api/personal-habits/log", () => {
+    it("defaults to today, and reports maxDate for the 3-week window", () => {
+      const { room } = makeRoom();
+      const telegramId = makeBackfillableMember(room.id);
+      const created = createBackfillable(telegramId, { name: "Walk" });
+      log(telegramId, created.body.id);
+
+      const { status, body } = logWindow(telegramId);
+      assert.equal(status, 200);
+      assert.equal(body.date, today);
+      assert.equal(body.today, today);
+      assert.equal(body.maxDate, today);
+
+      const row = body.habits.find((h: any) => h.personalHabitId === created.body.id);
+      assert.deepEqual(row, {
+        personalHabitId: created.body.id,
+        logged: true,
+        value: 1,
+        editable: true,
+      });
+    });
+
+    it("reports an earlier day's own state, independent of today's", () => {
+      const { room } = makeRoom();
+      const telegramId = makeBackfillableMember(room.id);
+      const created = createBackfillable(telegramId, { name: "Walk" });
+      log(telegramId, created.body.id, {}, LAST_WEEK);
+
+      const past = logWindow(telegramId, LAST_WEEK);
+      const pastRow = past.body.habits.find((h: any) => h.personalHabitId === created.body.id);
+      assert.equal(pastRow.logged, true);
+
+      const present = logWindow(telegramId);
+      const presentRow = present.body.habits.find(
+        (h: any) => h.personalHabitId === created.body.id
+      );
+      assert.equal(presentRow.logged, false);
+    });
+
+    it("rejects a date older than the 3-week window", () => {
+      const { room } = makeRoom();
+      const telegramId = makeBackfillableMember(room.id);
+
+      const { status, body } = logWindow(telegramId, TOO_OLD_WEEK);
+      assert.equal(status, 400);
+      assert.equal(body.error, "date_out_of_window");
+    });
   });
 });
 

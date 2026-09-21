@@ -8,14 +8,15 @@ import {
   createPersonalHabit,
   deletePersonalHabit,
   deletePersonalHabitLog,
+  getUserPersonalHabitLogsForDate,
   listPersonalHabits,
   updatePersonalHabit,
   upsertPersonalHabitLog,
 } from "../../db/repository.js";
-import type { PersonalHabit } from "../../types.js";
-import { getUserTodayKey } from "../../utils/challenge.js";
+import type { PersonalHabit, User } from "../../types.js";
+import { dailyLogWindow } from "../habitLogWindow.js";
 import { categoryForCreate, checkCategory, isValidHabitName } from "../habitValidation.js";
-import { parseIdParam } from "../params.js";
+import { parseDateParam, parseIdParam } from "../params.js";
 import { allowRequest } from "../rateLimit.js";
 import { getOwnPersonalHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope.js";
 
@@ -176,9 +177,82 @@ export function deletePersonalHabitRoute(req: Request, res: Response): void {
 }
 
 /**
- * POST /api/personal-habits/:id/log — upsert today's value, in the caller's own
- * timezone-local day, exactly like POST /api/habits/:id/log. The response has no
- * `points` field because there are none to report.
+ * Shared by GET /api/personal-habits/log and POST/DELETE .../:id/log:
+ * resolves and validates the `?date=` query param against this caller and
+ * (when given) this specific personal habit, using the same window
+ * dailyLogWindow already gives room habits (BACKFILL PRD) — a personal habit
+ * has no is_active/period to narrow it further, only room_joined_at and its
+ * own created_at. Writes the error response itself and returns null when the
+ * request cannot proceed. Omitted `date` resolves to the caller's own today.
+ */
+function resolvePersonalLogDate(
+  req: Request,
+  res: Response,
+  user: User,
+  habit?: PersonalHabit
+): string | null {
+  const window = dailyLogWindow(user, habit);
+
+  const requestedRaw = req.query?.date;
+  if (requestedRaw === undefined) return window.today;
+
+  const parsed = parseDateParam(requestedRaw);
+  if (parsed === null) {
+    res.status(400).json({ success: false, error: "invalid_date" });
+    return null;
+  }
+  if (parsed < window.minDate || parsed > window.maxDate) {
+    res.status(400).json({ success: false, error: "date_out_of_window" });
+    return null;
+  }
+  return parsed;
+}
+
+/**
+ * GET /api/personal-habits/log?date=YYYY-MM-DD — the day picker's own bounds
+ * (`today`, `minDate`, `maxDate`) plus every personal habit's state on
+ * whichever day is requested (today when `date` is omitted). Mirrors
+ * GET /api/habits/log; the two are separate endpoints because personal
+ * habits carry no points and live in their own table.
+ */
+export function personalHabitLogWindowRoute(req: Request, res: Response): void {
+  const caller = requireCallerRoom(req, res);
+  if (!caller) return;
+
+  const screenWindow = dailyLogWindow(caller.user);
+  const date = resolvePersonalLogDate(req, res, caller.user);
+  if (date === null) return;
+
+  const habits = listPersonalHabits(caller.user.id, caller.roomId);
+  const logs = getUserPersonalHabitLogsForDate(caller.user.id, date);
+
+  const entries = habits.map((habit) => {
+    const log = logs.get(habit.id);
+    return {
+      personalHabitId: habit.id,
+      logged: log !== undefined,
+      value: log?.value ?? 0,
+      editable: date >= dailyLogWindow(caller.user, habit).minDate,
+    };
+  });
+
+  res.json({
+    date,
+    today: screenWindow.today,
+    minDate: screenWindow.minDate,
+    maxDate: screenWindow.maxDate,
+    habits: entries,
+  });
+}
+
+/**
+ * POST /api/personal-habits/:id/log?date=YYYY-MM-DD — upsert one day's value,
+ * in the caller's own timezone-local day, exactly like POST
+ * /api/habits/:id/log. `date` is optional (defaults to today) and, like the
+ * room-habit route, may target any earlier day within the backfill window —
+ * back to whichever is later of the window's start, the day the caller
+ * joined the room, or the day this personal habit was created (BACKFILL PRD).
+ * The response has no `points` field because there are none to report.
  */
 export function logPersonalHabitRoute(req: Request, res: Response): void {
   const id = parseIdParam(req.params.id);
@@ -205,16 +279,28 @@ export function logPersonalHabitRoute(req: Request, res: Response): void {
   }
   const value = 1;
 
+  const date = resolvePersonalLogDate(req, res, caller.user, habit);
+  if (date === null) return;
+
   if (!allowRequest(req.telegramId, HABIT_LOG_RATE_LIMIT_PER_MINUTE)) {
     res.status(429).json({ success: false, error: "rate_limited" });
     return;
   }
 
-  const log = upsertPersonalHabitLog(habit.id, value, getUserTodayKey(caller.user));
-  res.json({ success: true, personalHabitId: habit.id, value: log.value, logged: true });
+  const log = upsertPersonalHabitLog(habit.id, value, date);
+  res.json({
+    success: true,
+    personalHabitId: habit.id,
+    value: log.value,
+    date: log.log_date,
+    logged: true,
+  });
 }
 
-/** DELETE /api/personal-habits/:id/log — idempotent, like its room-habit twin. */
+/**
+ * DELETE /api/personal-habits/:id/log?date=YYYY-MM-DD — idempotent, like its
+ * room-habit twin. `date` follows the same rules as POST.
+ */
 export function deletePersonalHabitLogRoute(req: Request, res: Response): void {
   const id = parseIdParam(req.params.id);
   if (id === null) {
@@ -231,11 +317,14 @@ export function deletePersonalHabitLogRoute(req: Request, res: Response): void {
     return;
   }
 
+  const date = resolvePersonalLogDate(req, res, caller.user, habit);
+  if (date === null) return;
+
   if (!allowRequest(req.telegramId, HABIT_LOG_RATE_LIMIT_PER_MINUTE)) {
     res.status(429).json({ success: false, error: "rate_limited" });
     return;
   }
 
-  deletePersonalHabitLog(caller.user.id, habit.id, getUserTodayKey(caller.user));
-  res.json({ success: true, personalHabitId: habit.id, logged: false });
+  deletePersonalHabitLog(caller.user.id, habit.id, date);
+  res.json({ success: true, personalHabitId: habit.id, date, logged: false });
 }

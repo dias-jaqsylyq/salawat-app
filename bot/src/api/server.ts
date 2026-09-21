@@ -27,10 +27,12 @@ import {
   listPersonalHabitsRoute,
   logPersonalHabitRoute,
   patchPersonalHabitRoute,
+  personalHabitLogWindowRoute,
 } from "./routes/personalHabits.js";
 import { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } from "./routes/adminHabits.js";
 import { progressRoute } from "./routes/progress.js";
 import { progressWeekRoute } from "./routes/progressWeek.js";
+import { historyHabitsRoute, historyMonthRoute } from "./routes/progressHistory.js";
 import { leaderboardRoute } from "./routes/leaderboard.js";
 import { adminExportCsvRoute, exportRoute } from "./routes/export.js";
 import { resetRoute } from "./routes/reset.js";
@@ -107,6 +109,7 @@ export function createApiServer(bot: Bot<MyContext>) {
   // member, and there is deliberately no admin-facing counterpart — an admin has
   // no route that can read or touch someone else's personal list.
   app.get("/api/personal-habits", telegramAuth, listPersonalHabitsRoute);
+  app.get("/api/personal-habits/log", telegramAuth, personalHabitLogWindowRoute);
   app.post(
     "/api/personal-habits",
     telegramAuth,
@@ -129,6 +132,8 @@ export function createApiServer(bot: Bot<MyContext>) {
   app.delete("/api/personal-habits/:id/log", telegramAuth, deletePersonalHabitLogRoute);
   app.get("/api/progress", telegramAuth, progressRoute);
   app.get("/api/progress/week", telegramAuth, progressWeekRoute);
+  app.get("/api/progress/history/habits", telegramAuth, historyHabitsRoute);
+  app.get("/api/progress/history", telegramAuth, historyMonthRoute);
   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
   app.get("/api/profile", telegramAuth, getProfileRoute);
   app.patch("/api/profile", telegramAuth, patchProfileRoute);
