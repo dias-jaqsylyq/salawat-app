@@ -56,7 +56,7 @@ function GoalLineField({
         disabled={disabled}
         placeholder="e.g. min 30 min"
       />
-      <p className="text-xs text-muted-foreground">
+      <p className="text-footnote text-muted-foreground">
         Shown to members next to the habit. It's a note, not a rule — points don't depend on it.
       </p>
     </div>
@@ -163,11 +163,11 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
       {/* Shown, not offered: the points already frozen into past logs were
           scored under this cadence, so switching it now would make old weeks
           mean something they never meant. Deactivate and recreate instead. */}
-      <p className="text-xs text-muted-foreground">
+      <p className="text-footnote text-muted-foreground">
         Scores {habit.period === "weekly" ? "once a week" : "every day"}. To change that,
         deactivate this habit and create a new one.
       </p>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-body text-destructive">{error}</p>}
       <div className="flex gap-2">
         <Button type="button" size="sm" onClick={() => void handleSave()} disabled={saving}>
           {saving ? "Saving…" : "Save"}
@@ -232,7 +232,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
           <span className="flex items-center gap-2">
             <span
               className={cn(
-                "truncate text-sm font-medium",
+                "truncate text-body font-semibold",
                 habit.isActive ? "text-foreground" : "text-muted-foreground line-through"
               )}
             >
@@ -249,18 +249,18 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
               </Badge>
             )}
           </span>
-          <span className="text-xs text-muted-foreground">
+          <span className="text-footnote text-muted-foreground">
             {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
           </span>
           {habit.description && (
-            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+            <span className="mt-0.5 block truncate text-footnote text-muted-foreground">
               {habit.description}
             </span>
           )}
           {/* Categories were turned on after this habit was made — the server
               keeps the old value hidden until the admin re-confirms it (PRD §0). */}
           {categoriesEnabled && !habit.category && (
-            <span className="mt-1 flex items-center gap-1 text-xs font-medium text-destructive">
+            <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-destructive">
               <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
               Tap to set a category
             </span>
@@ -273,7 +273,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
           aria-label={`${habit.isActive ? "Deactivate" : "Activate"} ${habit.name}`}
         />
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-body text-destructive">{error}</p>}
     </div>
   );
 }
@@ -333,7 +333,7 @@ function CreateHabitForm({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex items-center gap-2">
           <Plus className="h-4 w-4" aria-hidden="true" />
           New habit
         </CardTitle>
@@ -384,7 +384,7 @@ function CreateHabitForm({
             />
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {error && <p className="text-body text-destructive">{error}</p>}
         </CardContent>
         <CardContent className="pt-0">
           <Button type="submit" className="w-full" disabled={creating}>
@@ -459,7 +459,7 @@ export default function AdminHabits({ initData, categoriesEnabled }: Props) {
             </Button>
           </div>
           <div className="flex items-center justify-between gap-3 pt-2">
-            <Label htmlFor="admin-habits-show-inactive" className="text-sm font-normal text-muted-foreground">
+            <Label htmlFor="admin-habits-show-inactive" className="text-footnote font-normal text-muted-foreground">
               Show inactive habits
             </Label>
             <Switch
@@ -471,15 +471,15 @@ export default function AdminHabits({ initData, categoriesEnabled }: Props) {
         </CardHeader>
         <CardContent className="p-0">
           {error && (
-            <p role="alert" className="px-4 pb-3 text-sm text-destructive">
+            <p role="alert" className="px-4 pb-3 text-body text-destructive">
               {error}
             </p>
           )}
           {loading && !habits && (
-            <p className="px-4 pb-4 text-sm text-muted-foreground">Loading…</p>
+            <p className="px-4 pb-4 text-footnote text-muted-foreground">Loading…</p>
           )}
           {visibleHabits && visibleHabits.length === 0 && (
-            <p className="px-4 pb-4 text-sm text-muted-foreground">
+            <p className="px-4 pb-4 text-footnote text-muted-foreground">
               {hasHiddenInactive
                 ? 'No active habits — turn on "Show inactive habits" to see them.'
                 : "No habits yet."}

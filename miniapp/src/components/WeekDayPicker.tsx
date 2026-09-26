@@ -63,7 +63,7 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
         >
           <ChevronLeft className="h-4 w-4" aria-hidden="true" />
         </button>
-        <p className="flex-1 text-center text-xs font-medium text-muted-foreground" aria-live="polite">
+        <p className="flex-1 text-center text-footnote font-semibold text-muted-foreground" aria-live="polite">
           {view.label}
         </p>
         <button
@@ -92,14 +92,14 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
               disabled={!selectable}
               onClick={() => onSelect(date)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                 isSelected
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <span>{weekdayLabel(date)}</span>
-              <span className="tabular-nums text-[11px]">{dayOfMonth(date)}</span>
+              <span className="numeric text-caption">{dayOfMonth(date)}</span>
             </button>
           );
         })}

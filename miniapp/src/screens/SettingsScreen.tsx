@@ -196,11 +196,11 @@ export default function SettingsScreen({
 
           <CardContent className="space-y-8">
             {loading ? (
-              <p className="text-sm text-muted-foreground">Loading…</p>
+              <p className="text-footnote text-muted-foreground">Loading…</p>
             ) : (
               <>
                 <section className="space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Profile</h3>
+                  <h3 className="text-body font-semibold text-foreground">Profile</h3>
                   <div className="space-y-2">
                     <Label htmlFor="settings-nickname">Nickname</Label>
                     <Input
@@ -222,14 +222,14 @@ export default function SettingsScreen({
                       maxLength={REAL_NAME_MAX_LENGTH}
                       autoComplete="name"
                     />
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-footnote text-muted-foreground">
                       Only the admin can see this. Other participants see your nickname.
                     </p>
                   </div>
                 </section>
 
                 <section className="space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Reminders</h3>
+                  <h3 className="text-body font-semibold text-foreground">Reminders</h3>
                   <div className="flex items-center justify-between gap-3">
                     <Label htmlFor="settings-reminder-enabled" className="flex-1">
                       Daily reminder
@@ -249,7 +249,7 @@ export default function SettingsScreen({
                       onChange={(e) => setReminderTime(e.target.value)}
                       disabled={!reminderEnabled}
                     />
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-footnote text-muted-foreground">
                       Reminders arrive in your own timezone ({timezone ?? timezoneLabel}),
                       detected automatically.
                     </p>
@@ -258,7 +258,7 @@ export default function SettingsScreen({
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex-1">
                       <Label htmlFor="settings-fasting-enabled">Fasting reminder</Label>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-footnote text-muted-foreground">
                         Sunday and Wednesday evenings, about Monday's and Thursday's fast.
                       </p>
                     </div>
@@ -277,14 +277,14 @@ export default function SettingsScreen({
                       onChange={(e) => setFastingReminderTime(e.target.value)}
                       disabled={!fastingReminderEnabled}
                     />
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-footnote text-muted-foreground">
                       One time covers both evenings.
                     </p>
                   </div>
                 </section>
 
                 <section className="space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Streaks</h3>
+                  <h3 className="text-body font-semibold text-foreground">Streaks</h3>
                   <div className="space-y-2">
                     <Label htmlFor="settings-streak-display">Display</Label>
                     <div
@@ -303,7 +303,7 @@ export default function SettingsScreen({
                             aria-checked={active}
                             onClick={() => setStreakDisplay(option.id)}
                             className={cn(
-                              "min-h-11 rounded-lg px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              "min-h-11 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               active
                                 ? "bg-background text-foreground shadow-sm"
                                 : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -314,7 +314,7 @@ export default function SettingsScreen({
                         );
                       })}
                     </div>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-footnote text-muted-foreground">
                       {STREAK_DISPLAYS.find((o) => o.id === streakDisplay)?.hint} Applies when you
                       save.
                     </p>
@@ -327,14 +327,14 @@ export default function SettingsScreen({
                 </section>
 
                 <section className="space-y-4">
-                  <h3 className="text-sm font-semibold text-foreground">Room</h3>
+                  <h3 className="text-body font-semibold text-foreground">Room</h3>
                   {room ? (
                     <>
                       <div className="flex items-center gap-3 rounded-lg bg-secondary/40 px-3 py-2.5">
                         <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-foreground">{room.name}</p>
-                          <p className="text-xs text-muted-foreground">Your current room</p>
+                          <p className="truncate text-body font-semibold text-foreground">{room.name}</p>
+                          <p className="text-footnote text-muted-foreground">Your current room</p>
                         </div>
                       </div>
                       <Button
@@ -347,19 +347,19 @@ export default function SettingsScreen({
                         <DoorOpen className="h-4 w-4" />
                         {leaving ? "Leaving…" : "Leave room"}
                       </Button>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-footnote text-muted-foreground">
                         Your logs are kept, but they stop counting here. Joining another room
                         happens in the bot, with that room's password.
                       </p>
                     </>
                   ) : (
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-footnote text-muted-foreground">
                       You're not in a room. Send /start in the bot and enter a room password to
                       join one.
                     </p>
                   )}
                   {leaveError && (
-                    <p role="alert" className="text-sm text-destructive">
+                    <p role="alert" className="text-body text-destructive">
                       {leaveError}
                     </p>
                   )}
@@ -367,8 +367,8 @@ export default function SettingsScreen({
               </>
             )}
 
-            {confirmation && <p className="text-sm text-primary">{confirmation}</p>}
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {confirmation && <p className="text-body text-primary">{confirmation}</p>}
+            {error && <p className="text-body text-destructive">{error}</p>}
           </CardContent>
 
           <CardFooter>

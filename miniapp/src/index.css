@@ -176,6 +176,9 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
   --font-display: "Lexend Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 
+  /* The only font sizes are the five type roles (@utility text-*) — the default scale is removed */
+  --text-*: initial;
+
 
   --animate-shimmer: shimmer 1.4s ease-in-out infinite;
   @keyframes shimmer {
@@ -233,5 +236,12 @@
   body {
     @apply bg-background text-body text-foreground;
     margin: 0;
+  }
+  /* 16px, not a type role: iOS zooms the page when focusing a field under 16px */
+  input,
+  textarea,
+  select {
+    font-size: 1rem;
+    line-height: 1.5rem;
   }
 }

@@ -61,14 +61,14 @@ function HistoryWeekBadge({ week }: { week: HistoryWeek }) {
         )}
       >
         {week.met ? (
-          <span className="text-sm font-bold tabular-nums text-accent">{week.count}</span>
+          <span className="text-body numeric font-semibold text-accent">{week.count}</span>
         ) : (
           <Flame className="h-4 w-4 text-muted-foreground/50" strokeWidth={1.5} aria-hidden="true" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-medium text-foreground/80">{range}</p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-footnote font-semibold text-foreground/80">{range}</p>
+        <p className="text-caption text-muted-foreground">
           {week.met ? `${week.count}× this week` : "Not marked"}
         </p>
       </div>
@@ -80,14 +80,14 @@ function SummaryLine({ data }: { data: HistoryMonthResponse }) {
   const points =
     data.totalPoints !== undefined ? (
       <span>
-        <span className="font-medium text-foreground">{data.totalPoints.toLocaleString()}</span> pts this month
+        <span className="font-semibold text-foreground">{data.totalPoints.toLocaleString()}</span> pts this month
       </span>
     ) : null;
 
   if (data.period === "daily") {
     return (
-      <p className="text-sm text-muted-foreground">
-        <span className="font-medium text-foreground">
+      <p className="text-footnote text-muted-foreground">
+        <span className="font-semibold text-foreground">
           {data.completedCount} of {data.applicableDays}
         </span>{" "}
         days
@@ -96,7 +96,7 @@ function SummaryLine({ data }: { data: HistoryMonthResponse }) {
     );
   }
 
-  return points ? <p className="text-sm text-muted-foreground">{points}</p> : null;
+  return points ? <p className="text-footnote text-muted-foreground">{points}</p> : null;
 }
 
 function EmptyHistoryState({
@@ -111,8 +111,8 @@ function EmptyHistoryState({
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
         <CalendarDays className="h-6 w-6" aria-hidden="true" />
       </div>
-      <p className="text-sm font-medium text-foreground">No habits yet</p>
-      <p className="max-w-xs text-sm text-muted-foreground">
+      <p className="text-body font-semibold text-foreground">No habits yet</p>
+      <p className="max-w-xs text-footnote text-muted-foreground">
         {isAdmin
           ? "There's no history until your room has a habit to track."
           : "There's no history until you have a habit to track — add one of your own."}
@@ -208,13 +208,13 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
         >
           <ChevronLeft className="h-5 w-5" />
         </Button>
-        <h2 className="text-lg font-semibold text-foreground">History</h2>
+        <h2 className="text-title text-foreground">History</h2>
       </div>
 
-      {listError && <p className="text-sm text-destructive">{listError}</p>}
+      {listError && <p className="text-body text-destructive">{listError}</p>}
 
       {!listError && habitsList === null && (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <p className="text-footnote text-muted-foreground">Loading…</p>
       )}
 
       {!listError && habitsList !== null && habitsList.length === 0 && (
@@ -236,7 +236,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <p className="text-sm font-medium text-foreground">{formatMonthLabel(month)}</p>
+            <p className="text-body font-semibold text-foreground">{formatMonthLabel(month)}</p>
             <Button
               type="button"
               variant="ghost"
@@ -251,7 +251,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
 
           {dataError && (
             <div className="space-y-2">
-              <p className="text-sm text-destructive">{dataError}</p>
+              <p className="text-body text-destructive">{dataError}</p>
               <Button
                 type="button"
                 variant="secondary"
@@ -263,10 +263,10 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
             </div>
           )}
 
-          {!dataError && dataLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {!dataError && dataLoading && <p className="text-footnote text-muted-foreground">Loading…</p>}
 
           {!dataError && !dataLoading && data !== null && !data.hasData && (
-            <p className="text-sm text-muted-foreground">No data this month.</p>
+            <p className="text-footnote text-muted-foreground">No data this month.</p>
           )}
 
           {!dataError && !dataLoading && data !== null && data.hasData && (

@@ -51,7 +51,7 @@ function DayCell({ day, isToday }: { day: HistoryDay; isToday: boolean }) {
       aria-label={cellLabel(day, isToday)}
       title={cellLabel(day, isToday)}
       className={cn(
-        "flex aspect-square items-center justify-center rounded-lg border text-[11px] font-medium tabular-nums transition-colors",
+        "flex aspect-square items-center justify-center rounded-lg border text-caption font-semibold numeric transition-colors",
         day.logged && !day.outOfMonth && "border-accent/40 bg-accent/15 text-accent",
         !day.logged && inactive && "border-dashed border-border/50 bg-muted/20 text-muted-foreground/30",
         !day.logged && !inactive && "border-border bg-muted/40 text-foreground/70",
@@ -81,7 +81,7 @@ export default function HistoryCalendarGrid({ days, today }: Props) {
         {WEEKDAY_INITIALS.map((label, i) => (
           <span
             key={i}
-            className="text-center text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+            className="text-center text-caption font-semibold uppercase tracking-wide text-muted-foreground"
           >
             {label}
           </span>

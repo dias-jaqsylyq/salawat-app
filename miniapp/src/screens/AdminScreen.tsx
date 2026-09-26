@@ -269,8 +269,8 @@ export default function AdminScreen({ initData, roomName }: Props) {
   return (
     <main className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Admin</h1>
-        <p className="text-sm text-muted-foreground">
+        <h1 className="text-title text-foreground">Admin</h1>
+        <p className="text-footnote text-muted-foreground">
           {room ? `Managing ${room.name}.` : "Managing your room."} Everything here applies to
           this room only.
         </p>
@@ -278,10 +278,10 @@ export default function AdminScreen({ initData, roomName }: Props) {
 
       <div className="flex items-center justify-between rounded-xl border bg-secondary/40 px-4 py-3">
         <div>
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
             Participants
           </p>
-          <p className="text-2xl font-semibold tabular-nums text-foreground">{countLabel}</p>
+          <p className="text-title numeric font-bold text-foreground">{countLabel}</p>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Users className="h-5 w-5" aria-hidden="true" />
@@ -309,7 +309,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setSection(item.id)}
               className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -340,7 +340,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setMode(item.id)}
               className={cn(
-                "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -378,13 +378,13 @@ export default function AdminScreen({ initData, roomName }: Props) {
                     disabled={sending}
                     rows={7}
                   />
-                  <p className="text-right text-xs tabular-nums text-muted-foreground">
+                  <p className="text-right text-footnote numeric text-muted-foreground">
                     {textMessage.length.toLocaleString()} / 4,096
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <p className="text-sm font-medium text-foreground">Preview</p>
-                  <div className="min-h-24 rounded-lg border bg-secondary/25 px-3 py-3 text-sm leading-relaxed text-foreground">
+                  <p className="text-body font-semibold text-foreground">Preview</p>
+                  <div className="min-h-24 rounded-lg border bg-secondary/25 px-3 py-3 text-body leading-relaxed text-foreground">
                     {textMessage.trim() ? (
                       <ReactMarkdown
                         skipHtml
@@ -443,7 +443,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   />
                 </div>
                 {(linkUrl.trim() || linkCaption.trim()) && (
-                  <div className="rounded-lg border bg-secondary/25 px-3 py-3 text-sm">
+                  <div className="rounded-lg border bg-secondary/25 px-3 py-3 text-body">
                     {linkCaption.trim() && (
                       <p className="mb-2 whitespace-pre-wrap text-foreground">{linkCaption}</p>
                     )}
@@ -475,14 +475,14 @@ export default function AdminScreen({ initData, roomName }: Props) {
                     accept="application/pdf,.pdf"
                     disabled={sending}
                     onChange={(event) => selectPdf(event.target.files?.[0] ?? null)}
-                    className="h-12 cursor-pointer file:mr-3 file:border-0 file:bg-transparent file:text-sm file:font-medium"
+                    className="h-12 cursor-pointer file:mr-3 file:border-0 file:bg-transparent file:text-body file:font-semibold"
                   />
                   {pdfFile && (
                     <div className="flex items-center gap-3 rounded-lg bg-secondary/35 px-3 py-2.5">
                       <FileText className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">{pdfFile.name}</p>
-                        <p className="text-xs text-muted-foreground">{fileSizeLabel(pdfFile.size)}</p>
+                        <p className="truncate text-body font-semibold text-foreground">{pdfFile.name}</p>
+                        <p className="text-footnote text-muted-foreground">{fileSizeLabel(pdfFile.size)}</p>
                       </div>
                     </div>
                   )}
@@ -519,13 +519,13 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   placeholder={String(BROADCAST_AUTO_DELETE_DEFAULT_HOURS)}
                   disabled={sending || keepForever}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="text-footnote text-muted-foreground">
                   Whole hours, up to {BROADCAST_AUTO_DELETE_MAX_HOURS}. Empty means{" "}
                   {BROADCAST_AUTO_DELETE_DEFAULT_HOURS}. Every copy is deleted at the same time,
                   counted from when sending starts.
                 </p>
               </div>
-              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-foreground">
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-body text-foreground">
                 <input
                   type="checkbox"
                   className="h-4 w-4 accent-primary"
@@ -551,16 +551,16 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   }`}
             </Button>
             {error && (
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-body text-destructive">
                 {error}
               </p>
             )}
             {result && (
               <div
                 aria-live="polite"
-                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5 text-sm text-foreground"
+                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5 text-body text-foreground"
               >
-                <p className="font-medium">
+                <p className="font-semibold">
                   Sent to {result.sentCount.toLocaleString()} of{" "}
                   {result.participantCount.toLocaleString()} participants.
                 </p>

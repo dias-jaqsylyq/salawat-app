@@ -66,10 +66,10 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
 
           <CardContent className="space-y-4">
             <div className="space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
                 Your nickname
               </p>
-              <p className="text-sm font-medium text-foreground">{nickname}</p>
+              <p className="text-body font-semibold text-foreground">{nickname}</p>
             </div>
 
             <div className="space-y-2">
@@ -83,12 +83,12 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
                 autoComplete="name"
                 placeholder="e.g. Ali Nurlanov"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-footnote text-muted-foreground">
                 Only the challenge admin can see this. Other participants see your nickname.
               </p>
             </div>
 
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p className="text-body text-destructive">{error}</p>}
           </CardContent>
 
           <CardFooter>

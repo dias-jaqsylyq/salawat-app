@@ -115,7 +115,7 @@ function HabitForm({
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-destructive">
           {error}
         </p>
       )}
@@ -264,14 +264,14 @@ export default function PersonalHabits({
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between px-1">
-        <h3 className="text-sm font-semibold text-foreground">My Habits</h3>
-        <span className="text-xs text-muted-foreground">Private · no points</span>
+        <h3 className="text-body font-semibold text-foreground">My Habits</h3>
+        <span className="text-footnote text-muted-foreground">Private · no points</span>
       </div>
 
       <Card>
         <CardContent className="divide-y p-0">
           {habits.length === 0 && !adding && (
-            <p className="px-4 py-3 text-sm text-muted-foreground">
+            <p className="px-4 py-3 text-footnote text-muted-foreground">
               Nothing here yet. Add a habit only you can see.
             </p>
           )}
@@ -363,7 +363,7 @@ export default function PersonalHabits({
       </Card>
 
       {rowError && (
-        <p role="alert" className="px-1 text-sm text-destructive">
+        <p role="alert" className="px-1 text-body text-destructive">
           {rowError}
         </p>
       )}

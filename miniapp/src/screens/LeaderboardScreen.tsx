@@ -137,11 +137,11 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
+          <h2 className="flex items-center gap-2 text-title text-foreground">
             <Trophy className="h-5 w-5 text-accent" aria-hidden="true" />
             Leaderboard
           </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="mt-0.5 text-footnote text-muted-foreground">
             {effectivePeriod === "weekly"
               ? week
                 ? `This week · ${weekRange(week.start, week.end)}`
@@ -211,7 +211,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               aria-selected={period === option.id}
               onClick={() => setPeriod(option.id)}
               className={cn(
-                "min-h-9 rounded-lg px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "min-h-9 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 period === option.id
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -225,21 +225,21 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
 
       {error && (
         <div className="space-y-2">
-          <p className="text-sm text-destructive">{error}</p>
+          <p className="text-body text-destructive">{error}</p>
           <Button type="button" variant="secondary" size="sm" onClick={load}>
             Retry
           </Button>
         </div>
       )}
 
-      {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {loading && <p className="text-footnote text-muted-foreground">Loading…</p>}
 
       {!loading && !error && entries !== null && entries.length === 0 && (
-        <p className="text-sm text-muted-foreground">No one's registered yet.</p>
+        <p className="text-footnote text-muted-foreground">No one's registered yet.</p>
       )}
 
       {!loading && !error && entries !== null && entries.length > 0 && !isAdmin && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-footnote text-muted-foreground">
           Everyone's place is shown; only your own points are. Resets every Monday.
         </p>
       )}

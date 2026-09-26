@@ -140,14 +140,14 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
         )}
       >
         {habit.met ? (
-          <span className="text-sm font-bold tabular-nums text-accent">{habit.count}</span>
+          <span className="text-body numeric font-semibold text-accent">{habit.count}</span>
         ) : (
           <Flame className="h-4 w-4 text-muted-foreground/50" strokeWidth={1.5} aria-hidden="true" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-medium text-foreground/80">{habit.name}</p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="truncate text-footnote font-semibold text-foreground/80">{habit.name}</p>
+        <p className="text-caption text-muted-foreground">
           {habit.met
             ? `${habit.count}× this week`
             : "Not yet this week"}
@@ -173,7 +173,7 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
  */
 export default function WeeklyStreakGrid({ week }: Props) {
   if (week.habits.length === 0 && week.weeklyHabits.length === 0) {
-    return <p className="text-sm text-muted-foreground">No habits yet.</p>;
+    return <p className="text-footnote text-muted-foreground">No habits yet.</p>;
   }
 
   const range = weekRange(week.weekStart, week.weekEnd);
@@ -186,7 +186,7 @@ export default function WeeklyStreakGrid({ week }: Props) {
             <span
               key={date}
               className={cn(
-                "text-center text-[11px] font-medium uppercase tracking-wide",
+                "text-center text-caption font-semibold uppercase tracking-wide",
                 date === week.today ? "text-foreground" : "text-muted-foreground"
               )}
             >
@@ -201,7 +201,7 @@ export default function WeeklyStreakGrid({ week }: Props) {
         // collide — the kind has to be part of the key even though the two rows
         // are drawn identically.
         <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-1.5">
-          <p className="truncate text-xs font-medium text-foreground/80">{habit.name}</p>
+          <p className="truncate text-footnote font-semibold text-foreground/80">{habit.name}</p>
           <div className="grid grid-cols-7 gap-1.5">
             {habit.days.map((day) => (
               <DayCell
@@ -217,7 +217,7 @@ export default function WeeklyStreakGrid({ week }: Props) {
 
       {week.weeklyHabits.length > 0 && (
         <div className="space-y-2 pt-1">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
             Once a week · {range}
           </p>
           {week.weeklyHabits.map((habit) => (

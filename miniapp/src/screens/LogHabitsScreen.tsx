@@ -117,7 +117,7 @@ function CategoryHeading({ category }: { category: HabitCategory | null }) {
     return (
       <div className="flex items-center gap-2 px-1">
         <Layers className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <h3 className="text-sm font-semibold text-muted-foreground">Uncategorized</h3>
+        <h3 className="text-footnote font-semibold text-muted-foreground">Uncategorized</h3>
       </div>
     );
   }
@@ -126,7 +126,7 @@ function CategoryHeading({ category }: { category: HabitCategory | null }) {
   return (
     <div className="flex items-center gap-2 px-1">
       <Icon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-      <h3 className="text-sm font-semibold text-foreground">
+      <h3 className="text-body font-semibold text-foreground">
         {category}
         <span className="ml-1.5 font-normal text-muted-foreground">{label}</span>
       </h3>
@@ -203,8 +203,8 @@ export default function LogHabitsScreen({
   return (
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div>
-        <h2 className="text-lg font-semibold text-foreground">Log habits</h2>
-        <p className="mt-0.5 text-xs text-muted-foreground">
+        <h2 className="text-title text-foreground">Log habits</h2>
+        <p className="mt-0.5 text-footnote text-muted-foreground">
           {logWindow === null ? " " : isToday ? "Today" : formatSelectedDate(logWindow.date)}
         </p>
       </div>
@@ -220,7 +220,7 @@ export default function LogHabitsScreen({
 
       {windowError && (
         <div className="space-y-2">
-          <p className="text-sm text-destructive">{windowError}</p>
+          <p className="text-body text-destructive">{windowError}</p>
           <Button
             type="button"
             variant="secondary"
@@ -232,7 +232,7 @@ export default function LogHabitsScreen({
         </div>
       )}
 
-      {rows === null && !windowError && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {rows === null && !windowError && <p className="text-footnote text-muted-foreground">Loading…</p>}
 
       {/* While another day loads, the previous day's rows stay on screen but
           inert and dimmed — never togglable against a day no longer selected. */}
@@ -241,7 +241,7 @@ export default function LogHabitsScreen({
         aria-busy={switching}
       >
         {rows !== null && rows.length === 0 && (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-footnote text-muted-foreground">
             {isToday ? "No active habits yet." : "Nothing to log yet on this day."}
           </p>
         )}

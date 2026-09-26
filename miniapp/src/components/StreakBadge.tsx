@@ -47,11 +47,11 @@ export default function StreakBadge({ habitName, streak, unit = "days" }: Props)
         strokeWidth={tier === "unlit" ? 1.5 : 2}
         aria-hidden="true"
       />
-      <span className="text-2xl font-extrabold tabular-nums text-foreground">{streak}</span>
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <span className="text-title numeric font-bold text-foreground">{streak}</span>
+      <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
         {streak === 1 ? unit.slice(0, -1) : unit}
       </span>
-      <span className="mt-1 line-clamp-2 text-xs font-medium text-foreground/80">{habitName}</span>
+      <span className="mt-1 line-clamp-2 text-footnote font-semibold text-foreground/80">{habitName}</span>
     </div>
   );
 }

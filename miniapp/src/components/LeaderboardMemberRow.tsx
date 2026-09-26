@@ -108,7 +108,7 @@ export default function LeaderboardMemberRow({
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="flex min-w-0 items-center gap-3 text-sm font-medium text-foreground">
+        <span className="flex min-w-0 items-center gap-3 text-body font-semibold text-foreground">
           <Badge variant={rankBadgeVariant(entry.rank)} className="w-7 shrink-0 justify-center">
             {entry.rank}
           </Badge>
@@ -126,9 +126,9 @@ export default function LeaderboardMemberRow({
               )}
             </span>
             {isAdmin && realName && (
-              <span className="truncate text-xs font-normal text-muted-foreground">{realName}</span>
+              <span className="truncate text-footnote font-normal text-muted-foreground">{realName}</span>
             )}
-            {tied && <span className="text-xs font-normal text-muted-foreground">tied</span>}
+            {tied && <span className="text-footnote font-normal text-muted-foreground">tied</span>}
           </span>
         </span>
         {/* A member sees no figure for anyone but themselves, so there is
@@ -136,13 +136,13 @@ export default function LeaderboardMemberRow({
             someone else's week that the server never made. */}
         {entry.points === undefined ? (
           <span
-            className="shrink-0 text-sm text-muted-foreground/50"
+            className="shrink-0 text-footnote text-muted-foreground/50"
             aria-label="Points hidden"
           >
             —
           </span>
         ) : (
-          <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-footnote numeric text-muted-foreground">
             {entry.points.toLocaleString()}
           </span>
         )}
@@ -174,7 +174,7 @@ export default function LeaderboardMemberRow({
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        <p role="alert" className="mt-2 text-body text-destructive">
           {error}
         </p>
       )}
