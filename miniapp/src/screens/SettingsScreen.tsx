@@ -291,7 +291,7 @@ export default function SettingsScreen({
                       id="settings-streak-display"
                       role="radiogroup"
                       aria-label="Streak display"
-                      className="grid grid-cols-2 gap-1 rounded-xl bg-secondary/60 p-1"
+                      className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1"
                     >
                       {STREAK_DISPLAYS.map((option) => {
                         const active = streakDisplay === option.id;
@@ -305,7 +305,7 @@ export default function SettingsScreen({
                             className={cn(
                               "min-h-11 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               active
-                                ? "bg-background text-foreground shadow-sm"
+                                ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                                 : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
                             )}
                           >
@@ -330,7 +330,7 @@ export default function SettingsScreen({
                   <h3 className="text-body font-semibold text-foreground">Room</h3>
                   {room ? (
                     <>
-                      <div className="flex items-center gap-3 rounded-lg bg-secondary/40 px-3 py-3">
+                      <div className="flex items-center gap-3 rounded-lg bg-surface-2 px-3 py-3">
                         <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                         <div className="min-w-0">
                           <p className="truncate text-body font-semibold text-foreground">{room.name}</p>

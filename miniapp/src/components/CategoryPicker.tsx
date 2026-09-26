@@ -20,7 +20,7 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
         id={id}
         role="tablist"
         aria-label="Habit category"
-        className="grid grid-cols-4 gap-1 rounded-lg bg-secondary/60 p-1"
+        className="grid grid-cols-4 gap-1 rounded-lg bg-surface-2 p-1"
       >
         {CATEGORY_ORDER.map((category) => {
           const { label, icon: Icon } = CATEGORY_META[category];
@@ -37,7 +37,7 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
               className={cn(
                 "flex min-h-11 flex-col items-center justify-center gap-1 rounded-md px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >

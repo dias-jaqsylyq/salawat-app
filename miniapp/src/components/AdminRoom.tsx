@@ -198,7 +198,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-2 rounded-lg border bg-secondary/30 px-3 py-3">
+          <div className="flex items-center gap-2 rounded-lg border bg-surface-2 px-3 py-3">
             <code className="min-w-0 flex-1 break-all font-mono text-body text-foreground">
               {room.password}
             </code>
@@ -266,7 +266,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
         <CardContent className="space-y-3">
           {room.inviteLink ? (
             <>
-              <div className="flex items-center gap-2 rounded-lg border bg-secondary/30 px-3 py-3">
+              <div className="flex items-center gap-2 rounded-lg border bg-surface-2 px-3 py-3">
                 <span className="min-w-0 flex-1 break-all font-mono text-footnote text-foreground">
                   {room.inviteLink}
                 </span>

@@ -12,9 +12,9 @@ const badgeVariants = cva(
         secondary: "border-transparent bg-secondary text-secondary-foreground",
         destructive: "border-transparent bg-destructive text-destructive-foreground",
         outline: "text-foreground",
-        gold: "border-transparent bg-[#EAB308] text-[#422006]",
-        silver: "border-transparent bg-[#94A3B8] text-[#0F172A]",
-        bronze: "border-transparent bg-[#D97706] text-[#FFFBEB]",
+        gold: "border-transparent bg-medal-gold text-medal-gold-foreground",
+        silver: "border-transparent bg-medal-silver text-medal-silver-foreground",
+        bronze: "border-transparent bg-medal-bronze text-medal-bronze-foreground",
       },
     },
     defaultVariants: {

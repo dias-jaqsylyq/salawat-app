@@ -18,7 +18,7 @@ interface Props {
 export default function NoRoomScreen({ nickname, onRefresh }: Props) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-3 text-muted-foreground">
         <DoorOpen className="h-6 w-6" aria-hidden="true" />
       </div>
       <h1 className="mt-4 text-headline text-foreground">You're not in a room</h1>

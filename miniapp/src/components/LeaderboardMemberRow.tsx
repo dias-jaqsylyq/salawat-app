@@ -29,9 +29,9 @@ function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "outline
 }
 
 function rankRowTint(rank: number): string {
-  if (rank === 1) return "bg-amber-50/80 dark:bg-amber-950/30";
-  if (rank === 2) return "bg-slate-100/80 dark:bg-slate-800/40";
-  if (rank === 3) return "bg-orange-50/80 dark:bg-orange-950/25";
+  if (rank === 1) return "bg-medal-gold-soft";
+  if (rank === 2) return "bg-medal-silver-soft";
+  if (rank === 3) return "bg-medal-bronze-soft";
   return "";
 }
 
@@ -136,7 +136,7 @@ export default function LeaderboardMemberRow({
             someone else's week that the server never made. */}
         {entry.points === undefined ? (
           <span
-            className="shrink-0 text-footnote text-muted-foreground/50"
+            className="shrink-0 text-footnote text-quaternary"
             aria-label="Points hidden"
           >
             —

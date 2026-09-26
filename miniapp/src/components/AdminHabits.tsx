@@ -233,7 +233,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
             <span
               className={cn(
                 "truncate text-body font-semibold",
-                habit.isActive ? "text-foreground" : "text-muted-foreground line-through"
+                habit.isActive ? "text-foreground" : "text-quaternary line-through"
               )}
             >
               {habit.name}
@@ -260,7 +260,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
           {/* Categories were turned on after this habit was made — the server
               keeps the old value hidden until the admin re-confirms it (PRD §0). */}
           {categoriesEnabled && !habit.category && (
-            <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-destructive">
+            <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-warning">
               <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
               Tap to set a category
             </span>

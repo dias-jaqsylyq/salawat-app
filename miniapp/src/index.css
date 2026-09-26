@@ -53,14 +53,14 @@
 
   /* Three surface levels instead of a spread of secondary/muted opacities */
   --surface-1: var(--card); /* raised: cards, sheets, the selected segment */
-  --surface-2: oklch(0.965 0.008 80); /* inset/grouped: segment tracks, grouped rows */
+  --surface-2: oklch(0.955 0.008 80); /* inset/grouped: segment tracks, grouped rows */
   --surface-3: oklch(0.93 0.011 80); /* emphasised inset: selected rows, chips */
 
   /* Inactive/disabled text — kept ≥ 3:1 on background and surfaces */
   --text-quaternary: oklch(0.6 0.012 70);
 
   /* Non-critical warnings (amber) — text-destructive is for real errors only */
-  --warning: oklch(0.55 0.14 55);
+  --warning: oklch(0.52 0.14 55);
   --warning-foreground: #ffffff;
   --warning-soft: oklch(0.96 0.035 75);
 

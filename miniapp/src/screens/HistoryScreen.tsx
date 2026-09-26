@@ -49,7 +49,7 @@ function HistoryWeekBadge({ week }: { week: HistoryWeek }) {
     <div
       className={cn(
         "flex items-center gap-3 rounded-xl border px-3 py-3",
-        week.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-muted/30"
+        week.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-surface-2"
       )}
       aria-label={label}
       title={label}
@@ -57,17 +57,17 @@ function HistoryWeekBadge({ week }: { week: HistoryWeek }) {
       <div
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-          week.met ? "bg-accent/20" : "bg-muted/50"
+          week.met ? "bg-accent/20" : "bg-surface-3"
         )}
       >
         {week.met ? (
           <span className="text-body numeric font-semibold text-accent">{week.count}</span>
         ) : (
-          <Flame className="h-4 w-4 text-muted-foreground/50" strokeWidth={1.5} aria-hidden="true" />
+          <Flame className="h-4 w-4 text-quaternary" strokeWidth={1.5} aria-hidden="true" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-footnote font-semibold text-foreground/80">{range}</p>
+        <p className="text-footnote font-semibold text-foreground">{range}</p>
         <p className="text-caption text-muted-foreground">
           {week.met ? `${week.count}× this week` : "Not marked"}
         </p>
@@ -108,7 +108,7 @@ function EmptyHistoryState({
 }) {
   return (
     <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-muted-foreground">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-3 text-muted-foreground">
         <CalendarDays className="h-6 w-6" aria-hidden="true" />
       </div>
       <p className="text-body font-semibold text-foreground">No habits yet</p>

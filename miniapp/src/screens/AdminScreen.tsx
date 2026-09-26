@@ -276,7 +276,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
         </p>
       </div>
 
-      <div className="flex items-center justify-between rounded-xl border bg-secondary/40 px-4 py-3">
+      <div className="flex items-center justify-between rounded-xl border bg-surface-2 px-4 py-3">
         <div>
           <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
             Participants
@@ -291,7 +291,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
       <div
         role="tablist"
         aria-label="Admin section"
-        className="grid grid-cols-4 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1"
       >
         {([
           { id: "broadcasts" as const, label: "Posts", icon: Megaphone },
@@ -311,7 +311,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               className={cn(
                 "flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
@@ -327,7 +327,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
       <div
         role="tablist"
         aria-label="Broadcast type"
-        className="grid grid-cols-3 gap-1 rounded-xl bg-secondary/60 p-1"
+        className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1"
       >
         {MODES.map((item) => {
           const Icon = item.icon;
@@ -342,7 +342,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               className={cn(
                 "flex min-h-11 items-center justify-center gap-2 rounded-lg px-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
@@ -384,7 +384,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                 </div>
                 <div className="space-y-2">
                   <p className="text-body font-semibold text-foreground">Preview</p>
-                  <div className="min-h-24 rounded-lg border bg-secondary/25 px-3 py-3 text-body leading-relaxed text-foreground">
+                  <div className="min-h-24 rounded-lg border bg-surface-2 px-3 py-3 text-body leading-relaxed text-foreground">
                     {textMessage.trim() ? (
                       <ReactMarkdown
                         skipHtml
@@ -443,7 +443,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   />
                 </div>
                 {(linkUrl.trim() || linkCaption.trim()) && (
-                  <div className="rounded-lg border bg-secondary/25 px-3 py-3 text-body">
+                  <div className="rounded-lg border bg-surface-2 px-3 py-3 text-body">
                     {linkCaption.trim() && (
                       <p className="mb-2 whitespace-pre-wrap text-foreground">{linkCaption}</p>
                     )}
@@ -478,7 +478,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                     className="h-12 cursor-pointer file:mr-3 file:border-0 file:bg-transparent file:text-body file:font-semibold"
                   />
                   {pdfFile && (
-                    <div className="flex items-center gap-3 rounded-lg bg-secondary/35 px-3 py-3">
+                    <div className="flex items-center gap-3 rounded-lg bg-surface-2 px-3 py-3">
                       <FileText className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                       <div className="min-w-0">
                         <p className="truncate text-body font-semibold text-foreground">{pdfFile.name}</p>

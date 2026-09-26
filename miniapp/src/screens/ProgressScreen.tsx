@@ -125,7 +125,7 @@ export default function ProgressScreen({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-footnote font-semibold text-[#854d0e] dark:bg-accent/15 dark:text-[#e6bf6a]">
+            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-footnote font-semibold text-accent">
               <MoonStar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {hijriLabel}
             </span>
@@ -147,7 +147,7 @@ export default function ProgressScreen({
             group total anywhere in the app.
           */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg bg-secondary/40 px-4 py-3">
+            <div className="rounded-lg bg-surface-2 px-4 py-3">
               <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                 Today
               </p>
@@ -155,7 +155,7 @@ export default function ProgressScreen({
                 {todayPoints.toLocaleString()}
               </p>
             </div>
-            <div className="rounded-lg bg-secondary/40 px-4 py-3">
+            <div className="rounded-lg bg-surface-2 px-4 py-3">
               <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                 All-time
               </p>
