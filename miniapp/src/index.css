@@ -26,6 +26,9 @@
   --border: #e7e2d6;
   --input: #e7e2d6;
   --ring: #047857;
+  /* Neutral hover/pressed wash for service states — gold stays reserved for "achieved" */
+  --fill: rgb(15 23 42 / 0.05);
+  --fill-pressed: rgb(15 23 42 / 0.1);
 }
 
 .dark {
@@ -48,6 +51,8 @@
   --border: #2a382f;
   --input: #2a382f;
   --ring: #10b981;
+  --fill: rgb(242 240 233 / 0.06);
+  --fill-pressed: rgb(242 240 233 / 0.12);
 }
 
 @theme inline {
@@ -70,6 +75,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-fill: var(--fill);
+  --color-fill-pressed: var(--fill-pressed);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

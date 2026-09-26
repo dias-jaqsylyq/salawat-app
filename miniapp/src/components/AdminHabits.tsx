@@ -227,7 +227,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="min-w-0 flex-1 text-left"
+          className="-mx-1 min-w-0 flex-1 rounded-md px-1 text-left transition duration-100 active:scale-[0.97] active:bg-fill-pressed"
         >
           <span className="flex items-center gap-2">
             <span

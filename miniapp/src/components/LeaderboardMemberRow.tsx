@@ -3,6 +3,7 @@ import { ShieldCheck, UserMinus } from "lucide-react";
 import { kickParticipant, promoteParticipant } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { LeaderboardMember } from "../api/types.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -78,12 +79,16 @@ export default function LeaderboardMemberRow({
     );
   }
 
-  function handleKick() {
+  async function handleKick() {
     if (entry.telegramId === undefined) return;
-    const confirmed = window.confirm(
-      `Kick ${entry.nickname} from this room?\n\nEverything they logged here is deleted and ` +
-        "they're told by the bot. They can rejoin later with the room password, starting fresh."
-    );
+    const confirmed = await confirmAction({
+      title: `Kick ${entry.nickname} from this room?`,
+      message:
+        "Everything they logged here is deleted and they're told by the bot. " +
+        "They can rejoin later with the room password, starting fresh.",
+      okText: "Kick",
+      destructive: true,
+    });
     if (!confirmed) return;
     void run(
       () => kickParticipant(initData, entry.telegramId!),
@@ -159,7 +164,7 @@ export default function LeaderboardMemberRow({
               size="sm"
               className="text-destructive hover:text-destructive"
               disabled={busy}
-              onClick={handleKick}
+              onClick={() => void handleKick()}
             >
               <UserMinus className="h-3.5 w-3.5" />
               Kick

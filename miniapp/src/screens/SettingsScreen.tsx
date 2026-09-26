@@ -3,6 +3,7 @@ import { ChevronLeft, DoorOpen, Users } from "lucide-react";
 import { getProfile, leaveRoom, patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { Room, StreakDisplay } from "../api/types.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import {
   NICKNAME_MATCHES_REAL_NAME_MESSAGE,
   REAL_NAME_MAX_LENGTH,
@@ -113,10 +114,14 @@ export default function SettingsScreen({
 
   async function handleLeaveRoom() {
     if (leaving || saving || !room) return;
-    const confirmed = window.confirm(
-      `Leave ${room.name}?\n\nYou'll stop appearing on its leaderboard and won't be able to log ` +
-        "habits until you join a room again with its password, in the bot."
-    );
+    const confirmed = await confirmAction({
+      title: `Leave ${room.name}?`,
+      message:
+        "You'll stop appearing on its leaderboard and won't be able to log " +
+        "habits until you join a room again with its password, in the bot.",
+      okText: "Leave",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setLeaving(true);
@@ -298,10 +303,10 @@ export default function SettingsScreen({
                             aria-checked={active}
                             onClick={() => setStreakDisplay(option.id)}
                             className={cn(
-                              "min-h-11 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              "min-h-11 rounded-lg px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               active
                                 ? "bg-background text-foreground shadow-sm"
-                                : "text-muted-foreground hover:text-foreground"
+                                : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
                             )}
                           >
                             {option.label}

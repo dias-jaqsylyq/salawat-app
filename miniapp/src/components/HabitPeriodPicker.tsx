@@ -40,10 +40,10 @@ export default function HabitPeriodPicker({ value, disabled, onChange }: Props) 
             disabled={disabled}
             onClick={() => onChange(option)}
             className={cn(
-              "min-h-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "min-h-10 rounded-md px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               value === option
                 ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+                : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
             )}
           >
             {LABELS[option]}

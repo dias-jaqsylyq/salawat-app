@@ -35,10 +35,10 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
               disabled={disabled}
               onClick={() => onChange(category)}
               className={cn(
-                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />

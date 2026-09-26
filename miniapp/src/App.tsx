@@ -34,13 +34,37 @@ function Centered({ children }: { children: ReactNode }) {
   return <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">{children}</div>;
 }
 
-/** Keeps the app's theme in sync with Telegram's color scheme (falls back to system preference outside Telegram). */
+/**
+ * Keeps the app's theme in sync with Telegram's color scheme (falls back to system
+ * preference outside Telegram), live — not just at launch — and paints Telegram's own
+ * header, background and bottom bar to match our palette so there's no seam around the app.
+ */
 function useSyncDarkMode() {
   useEffect(() => {
-    const isDark =
-      window.Telegram?.WebApp?.colorScheme === "dark" ||
-      (!window.Telegram?.WebApp && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    document.documentElement.classList.toggle("dark", isDark);
+    const webApp = window.Telegram?.WebApp;
+    const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+    const apply = () => {
+      const isDark = webApp ? webApp.colorScheme === "dark" : systemDark.matches;
+      document.documentElement.classList.toggle("dark", isDark);
+      if (!webApp?.initData) return;
+
+      const styles = getComputedStyle(document.documentElement);
+      const background = styles.getPropertyValue("--background").trim();
+      // The bottom of the screen is the TabBar, which sits on --card.
+      const card = styles.getPropertyValue("--card").trim();
+      if (webApp.isVersionAtLeast("6.9")) webApp.setHeaderColor(background);
+      if (webApp.isVersionAtLeast("6.1")) webApp.setBackgroundColor(background);
+      if (webApp.isVersionAtLeast("7.10")) webApp.setBottomBarColor(card);
+    };
+
+    apply();
+    if (webApp) {
+      webApp.onEvent("themeChanged", apply);
+      return () => webApp.offEvent("themeChanged", apply);
+    }
+    systemDark.addEventListener("change", apply);
+    return () => systemDark.removeEventListener("change", apply);
   }, []);
 }
 
