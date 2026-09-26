@@ -3,22 +3,46 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * Design tokens.
+ *
+ * Anything that changes with the theme (colors) is a CSS variable on :root / .dark,
+ * mapped to utilities in `@theme inline` below. Anything theme-independent (fonts,
+ * type roles, spacing) lives directly in `@theme` / `@utility`.
+ *
+ * Contrast of the text/surface pairs is checked in src/lib/contrast.test.ts, and
+ * usage (type roles, spacing scale, no raw palette colors) in designTokens.test.ts.
+ */
+
 :root {
   --radius: 0.75rem;
 
+  /* Warm neutral scale (stone-like, hue ≈ 75) — replaces the cold slate text colors */
+  --neutral-50: oklch(0.985 0.004 75);
+  --neutral-100: oklch(0.965 0.006 75);
+  --neutral-200: oklch(0.925 0.009 75);
+  --neutral-300: oklch(0.87 0.011 75);
+  --neutral-400: oklch(0.72 0.012 70);
+  --neutral-500: oklch(0.58 0.012 70);
+  --neutral-600: oklch(0.48 0.011 65);
+  --neutral-700: oklch(0.4 0.01 60);
+  --neutral-800: oklch(0.3 0.008 60);
+  --neutral-900: oklch(0.22 0.006 60);
+  --neutral-950: oklch(0.16 0.005 60);
+
   /* Warm cream + deep emerald + muted gold — calm/trustworthy, not flashy */
   --background: #fdfbf7;
-  --foreground: #0f172a;
+  --foreground: var(--neutral-900);
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: var(--neutral-900);
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: var(--neutral-900);
   --primary: #047857;
   --primary-foreground: #ffffff;
   --secondary: #e3efe9;
   --secondary-foreground: #065f46;
-  --muted: #f5f3ee;
-  --muted-foreground: #64748b;
+  --muted: var(--surface-2);
+  --muted-foreground: var(--neutral-600);
   --accent: #a16207;
   --accent-foreground: #ffffff;
   --destructive: #dc2626;
@@ -26,6 +50,31 @@
   --border: #e7e2d6;
   --input: #e7e2d6;
   --ring: #047857;
+
+  /* Three surface levels instead of a spread of secondary/muted opacities */
+  --surface-1: var(--card); /* raised: cards, sheets, the selected segment */
+  --surface-2: oklch(0.965 0.008 80); /* inset/grouped: segment tracks, grouped rows */
+  --surface-3: oklch(0.93 0.011 80); /* emphasised inset: selected rows, chips */
+
+  /* Inactive/disabled text — kept ≥ 3:1 on background and surfaces */
+  --text-quaternary: oklch(0.6 0.012 70);
+
+  /* Non-critical warnings (amber) — text-destructive is for real errors only */
+  --warning: oklch(0.55 0.14 55);
+  --warning-foreground: #ffffff;
+  --warning-soft: oklch(0.96 0.035 75);
+
+  /* Muted metallic medals for the top 3 */
+  --medal-gold: oklch(0.82 0.1 85);
+  --medal-gold-foreground: oklch(0.33 0.06 70);
+  --medal-gold-soft: oklch(0.975 0.025 90);
+  --medal-silver: oklch(0.85 0.01 80);
+  --medal-silver-foreground: var(--neutral-800);
+  --medal-silver-soft: oklch(0.965 0.004 80);
+  --medal-bronze: oklch(0.74 0.08 55);
+  --medal-bronze-foreground: oklch(0.28 0.05 50);
+  --medal-bronze-soft: oklch(0.97 0.018 60);
+
   /* Neutral hover/pressed wash for service states — gold stays reserved for "achieved" */
   --fill: rgb(15 23 42 / 0.05);
   --fill-pressed: rgb(15 23 42 / 0.1);
@@ -42,8 +91,8 @@
   --primary-foreground: #052e1f;
   --secondary: #1a2e24;
   --secondary-foreground: #6ee7b7;
-  --muted: #1c2921;
-  --muted-foreground: #a8b0a3;
+  --muted: var(--surface-2);
+  --muted-foreground: oklch(0.75 0.012 85);
   --accent: #d9a441;
   --accent-foreground: #422b06;
   --destructive: #f87171;
@@ -51,6 +100,27 @@
   --border: #2a382f;
   --input: #2a382f;
   --ring: #10b981;
+
+  --surface-1: var(--card);
+  --surface-2: #1a2a21;
+  --surface-3: #233429;
+
+  --text-quaternary: oklch(0.58 0.012 85);
+
+  --warning: oklch(0.8 0.13 70);
+  --warning-foreground: oklch(0.25 0.05 60);
+  --warning-soft: oklch(0.28 0.045 65);
+
+  --medal-gold: oklch(0.78 0.09 85);
+  --medal-gold-foreground: oklch(0.26 0.05 70);
+  --medal-gold-soft: oklch(0.26 0.035 85);
+  --medal-silver: oklch(0.76 0.012 80);
+  --medal-silver-foreground: oklch(0.22 0.006 60);
+  --medal-silver-soft: oklch(0.25 0.008 100);
+  --medal-bronze: oklch(0.68 0.08 55);
+  --medal-bronze-foreground: oklch(0.2 0.03 50);
+  --medal-bronze-soft: oklch(0.25 0.03 55);
+
   --fill: rgb(242 240 233 / 0.06);
   --fill-pressed: rgb(242 240 233 / 0.12);
 }
@@ -78,12 +148,82 @@
   --color-fill: var(--fill);
   --color-fill-pressed: var(--fill-pressed);
 
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-quaternary: var(--text-quaternary);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-medal-gold: var(--medal-gold);
+  --color-medal-gold-foreground: var(--medal-gold-foreground);
+  --color-medal-gold-soft: var(--medal-gold-soft);
+  --color-medal-silver: var(--medal-silver);
+  --color-medal-silver-foreground: var(--medal-silver-foreground);
+  --color-medal-silver-soft: var(--medal-silver-soft);
+  --color-medal-bronze: var(--medal-bronze);
+  --color-medal-bronze-foreground: var(--medal-bronze-foreground);
+  --color-medal-bronze-soft: var(--medal-bronze-soft);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+}
 
-  --font-sans: "Lexend Variable", ui-sans-serif, system-ui, sans-serif;
+@theme {
+  /* Body/caption on the platform font; Lexend only for headings and numbers */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, "Segoe UI", system-ui, sans-serif;
+  --font-display: "Lexend Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+
+  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
+  @keyframes shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: -100% 0;
+    }
+  }
+}
+
+/*
+ * Type roles: one class sets family, size, line height and weight. Emphasis inside
+ * body/footnote is `font-semibold`; weights are 400/600 only (700 for big numbers).
+ */
+@utility text-title {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  line-height: 2.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+@utility text-headline {
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  line-height: 1.375rem;
+  font-weight: 600;
+}
+@utility text-body {
+  font-size: 0.9375rem;
+  line-height: 1.25rem;
+  font-weight: 400;
+}
+@utility text-footnote {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  font-weight: 400;
+}
+@utility text-caption {
+  font-size: 0.6875rem;
+  line-height: 0.8125rem;
+  font-weight: 400;
+}
+/* Numbers: Lexend with tabular figures; pair with font-semibold/font-bold */
+@utility numeric {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
 }
 
 @layer base {
@@ -91,7 +231,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-body text-foreground;
     margin: 0;
   }
 }
