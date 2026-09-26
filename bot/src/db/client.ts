@@ -165,6 +165,9 @@ const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
   // Backfilled from created_at for everyone already in a room — see
   // backfillRoomJoinedAt().
   { table: "users", column: "room_joined_at", definition: "TEXT" },
+  // Backfilled from updated_at for habits already retired — see
+  // backfillHabitDeactivatedAt().
+  { table: "habits", column: "deactivated_at", definition: "TEXT" },
   // The admin-vs-participant registration branch (PRD §2) parks its answers in
   // pending_registrations until finalize.
   { table: "pending_registrations", column: "role", definition: "TEXT" },
@@ -434,11 +437,39 @@ export function backfillRoomJoinedAt(): number {
   return result.changes;
 }
 
+/**
+ * Give every already-retired habit a deactivated_at. Habits retired before the
+ * column existed have no record of when that happened; updated_at is the
+ * closest honest answer — deactivation is normally the last edit a habit gets,
+ * so it is usually the exact one. Only ever fills NULLs on inactive habits, so
+ * a real timestamp is never overwritten and an active habit keeps NULL.
+ *
+ * Idempotent: a no-op once every inactive habit has one.
+ */
+export function backfillHabitDeactivatedAt(): number {
+  if (!tableExists("habits")) return 0;
+  if (!columnNames("habits").includes("deactivated_at")) return 0;
+  const result = db
+    .prepare(
+      `UPDATE habits SET deactivated_at = updated_at
+       WHERE deactivated_at IS NULL AND is_active = 0`
+    )
+    .run();
+  return result.changes;
+}
+
 // Then top up any column that a DB created by an earlier multi-room deploy is
 // missing. Runs after db.exec(schema) so the tables it patches always exist.
 const addedColumns = addMissingColumns();
 if (addedColumns.length > 0) {
   console.warn(`db migration: added missing columns: ${addedColumns.join(", ")}`);
+}
+
+const backfilledDeactivations = backfillHabitDeactivatedAt();
+if (backfilledDeactivations > 0) {
+  console.warn(
+    `db migration: backfilled habits.deactivated_at from updated_at for ${backfilledDeactivations} habit(s).`
+  );
 }
 
 const backfilledJoins = backfillRoomJoinedAt();

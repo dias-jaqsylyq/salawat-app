@@ -9,6 +9,8 @@ import {
 } from "../../db/repository.js";
 import type { Habit, User } from "../../types.js";
 import { dailyLogWindow } from "../habitLogWindow.js";
+import { dayKeyFromSqliteUtc, getUserTimezone } from "../../utils/challenge.js";
+import { weekBoundsOfDateKey } from "../../utils/dates.js";
 import { parseDateParam, parseIdParam } from "../params.js";
 import { allowRequest } from "../rateLimit.js";
 import { getRoomHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope.js";
@@ -56,7 +58,17 @@ export function listHabitsRoute(req: Request, res: Response): void {
  * `editable` is false when `date` precedes that particular habit's own
  * creation day, even though the day itself is inside the screen's window —
  * the picker is one control for the whole screen, but a habit created
- * mid-window cannot be backfilled into days before it existed.
+ * mid-window cannot be backfilled into days before it existed. Such a habit is
+ * still listed (locked), never hidden.
+ *
+ * A deactivated habit is listed too, always locked (`isActive: false`,
+ * `editable: false`), but only for a `date` in a *past* week during which it
+ * was still active — created on or before that week's Sunday and deactivated
+ * on or after its Monday. The same read-only treatment the History screen
+ * gives retired habits; the current week never shows one.
+ *
+ * Every entry carries the habit's own display fields, so the Log screen can
+ * render a retired habit that GET /api/habits (active only) no longer lists.
  */
 export function habitLogWindowRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
@@ -82,17 +94,36 @@ export function habitLogWindowRoute(req: Request, res: Response): void {
     return;
   }
 
-  const activeHabits = listHabits({ activeOnly: true, roomId: caller.roomId });
+  const timeZone = getUserTimezone(caller.user);
+  const { weekStart, weekEnd } = weekBoundsOfDateKey(date);
+  const isPastWeek = weekStart < weekBoundsOfDateKey(screenWindow.today).weekStart;
+  const wasActiveDuringWeek = (habit: Habit): boolean => {
+    if (!isPastWeek) return false;
+    if (dayKeyFromSqliteUtc(habit.created_at, timeZone) > weekEnd) return false;
+    const deactivatedAt = habit.deactivated_at ?? habit.updated_at;
+    return dayKeyFromSqliteUtc(deactivatedAt, timeZone) >= weekStart;
+  };
+
+  const shownHabits = listHabits({ roomId: caller.roomId }).filter(
+    (habit) => habit.is_active === 1 || wasActiveDuringWeek(habit)
+  );
   const logs = getUserHabitLogsForDate(caller.user.id, date);
 
-  const habits = activeHabits.map((habit) => {
+  const habits = shownHabits.map((habit) => {
     const log = logs.get(habit.id);
+    const isActive = habit.is_active === 1;
     const entry = {
       habitId: habit.id,
+      name: habit.name,
+      description: habit.description,
+      period: habit.period,
+      pointsWeight: habit.points_weight,
+      category: habit.category,
+      isActive,
       logged: log !== undefined,
       value: log?.value ?? 0,
       points: log?.points_earned ?? 0,
-      editable: date >= dailyLogWindow(caller.user, habit).minDate,
+      editable: isActive && date >= dailyLogWindow(caller.user, habit).minDate,
     };
     if (habit.period !== "weekly") return entry;
     const carrier = weekCarrierRow(caller.user.id, habit.id, date);

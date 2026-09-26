@@ -299,7 +299,6 @@ export default function App() {
           {activeTab === "log" && (
             <LogHabitsScreen
               initData={initData}
-              habits={habits}
               personalHabits={personalHabits}
               progress={state.progress}
               onLogged={() => void loadProgress()}

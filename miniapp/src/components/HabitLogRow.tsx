@@ -31,6 +31,12 @@ interface Props {
    * inert and says so, rather than silently doing nothing on tap.
    */
   disabled?: boolean;
+  /**
+   * A deactivated habit shown on a past day it was still active: read-only
+   * history, locked like `disabled` but explained as retired rather than
+   * not-yet-created.
+   */
+  inactive?: boolean;
   onToggle: (checked: boolean) => Promise<void>;
 }
 
@@ -53,6 +59,7 @@ export function BinaryHabitRow({
   countedThisWeek,
   logged,
   disabled,
+  inactive,
   onToggle,
 }: Props) {
   const [saving, setSaving] = useState(false);
@@ -88,19 +95,21 @@ export function BinaryHabitRow({
           )}
           {pointsWeight !== undefined && (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {disabled
-                ? "Not tracked yet on this day"
-                : weekly && countedThisWeek
-                  ? `${pointsWeight} pts — already counted this week`
-                  : weekly
-                    ? `${pointsWeight} pts once a week`
-                    : `${pointsWeight} pts when done`}
+              {inactive
+                ? "Deactivated — read only"
+                : disabled
+                  ? "Not tracked yet on this day"
+                  : weekly && countedThisWeek
+                    ? `${pointsWeight} pts — already counted this week`
+                    : weekly
+                      ? `${pointsWeight} pts once a week`
+                      : `${pointsWeight} pts when done`}
             </p>
           )}
         </div>
         <Switch
           checked={logged}
-          disabled={saving || disabled}
+          disabled={saving || disabled || inactive}
           onCheckedChange={(checked) => void handleToggle(checked)}
         />
       </div>
