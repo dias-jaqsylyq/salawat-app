@@ -15,6 +15,7 @@ import type {
 } from "../api/types.ts";
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
 import { BinaryHabitRow } from "./HabitLogRow.tsx";
 import { Badge } from "@/components/ui/badge";
@@ -242,11 +243,14 @@ export default function PersonalHabits({
     if (ok) setEditingId(null);
   }
 
-  function handleDelete(habit: PersonalHabit) {
-    const confirmed = window.confirm(
-      `Delete "${habit.name}"?\n\nIts history goes with it. This only affects your own ` +
-        "habits — nothing in the room changes."
-    );
+  async function handleDelete(habit: PersonalHabit) {
+    const confirmed = await confirmAction({
+      title: `Delete "${habit.name}"?`,
+      message:
+        "Its history goes with it. This only affects your own habits — nothing in the room changes.",
+      okText: "Delete",
+      destructive: true,
+    });
     if (!confirmed) return;
     void run(
       () => deletePersonalHabit(initData, habit.id),
@@ -330,7 +334,7 @@ export default function PersonalHabits({
                       aria-label={`Delete ${habit.name}`}
                       className="text-destructive hover:text-destructive"
                       disabled={busy}
-                      onClick={() => handleDelete(habit)}
+                      onClick={() => void handleDelete(habit)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>

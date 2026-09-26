@@ -24,6 +24,7 @@ import {
   resolveAutoDeleteHours,
 } from "../lib/broadcastAutoDelete.ts";
 import type { AdminBroadcastResponse, AdminRoomResponse } from "../api/types.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -213,11 +214,13 @@ export default function AdminScreen({ initData, roomName }: Props) {
     const autoDeleteHours = "hours" in autoDelete ? autoDelete.hours : null;
     const contentLabel =
       mode === "text" ? "this text post" : mode === "link" ? "this link" : "this PDF";
-    const confirmed = window.confirm(
-      `Send ${contentLabel} to ${participantCount.toLocaleString()} participant${
+    const confirmed = await confirmAction({
+      title: `Send ${contentLabel} to ${participantCount.toLocaleString()} participant${
         participantCount === 1 ? "" : "s"
-      }?\n\n${autoDeleteConfirmLine(mode === "pdf" ? null : autoDeleteHours)}`
-    );
+      }?`,
+      message: autoDeleteConfirmLine(mode === "pdf" ? null : autoDeleteHours),
+      okText: "Send",
+    });
     if (!confirmed) return;
 
     setSending(true);
@@ -306,10 +309,10 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setSection(item.id)}
               className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <Icon className="h-4 w-4" aria-hidden="true" />
@@ -337,10 +340,10 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setMode(item.id)}
               className={cn(
-                "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />

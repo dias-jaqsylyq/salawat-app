@@ -177,7 +177,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
                 {downloading ? "…" : "CSV"}
               </Button>
             )}
-            {/* Save only leaves edit mode: promote and kick already applied as
+            {/* Done only leaves edit mode: promote and kick already applied as
                 they were tapped, so there is nothing batched to submit. */}
             <Button
               type="button"
@@ -186,7 +186,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               onClick={() => setEditing((wasEditing) => !wasEditing)}
             >
               {editing ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
-              {editing ? "Save" : "Edit"}
+              {editing ? "Done" : "Edit"}
             </Button>
           </div>
         )}
@@ -211,10 +211,10 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               aria-selected={period === option.id}
               onClick={() => setPeriod(option.id)}
               className={cn(
-                "min-h-9 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "min-h-9 rounded-lg px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 period === option.id
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               {option.label}

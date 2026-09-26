@@ -4,6 +4,7 @@ import { patchAdminRoom, setRoomPassword } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminRoomResponse } from "../api/types.ts";
 import { copyText } from "../lib/clipboard.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -102,10 +103,14 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
 
   async function handleRegenerate() {
     if (savingPassword) return;
-    const confirmed = window.confirm(
-      "Generate a new room password?\n\nThe old password and invite link stop working. " +
-        "Everyone already in the room stays in — only new joins are affected."
-    );
+    const confirmed = await confirmAction({
+      title: "Generate a new room password?",
+      message:
+        "The old password and invite link stop working. " +
+        "Everyone already in the room stays in — only new joins are affected.",
+      okText: "Generate",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setSavingPassword(true);

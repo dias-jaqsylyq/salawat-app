@@ -23,7 +23,7 @@ function dayOfMonth(date: string): string {
 }
 
 const ARROW_CLASS =
-  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30";
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition duration-100 active:scale-[0.97] hover:text-foreground active:bg-fill-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30";
 
 /**
  * The Log screen's day picker (BACKFILL PRD): one Monday-Sunday week at a
@@ -92,10 +92,10 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
               disabled={!selectable}
               onClick={() => onSelect(date)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                 isSelected
                   ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <span>{weekdayLabel(date)}</span>
