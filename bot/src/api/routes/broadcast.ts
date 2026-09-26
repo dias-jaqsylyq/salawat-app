@@ -3,6 +3,7 @@ import type { Bot } from "grammy";
 import type { MyContext } from "../../context.js";
 import {
   adminMarkdownToTelegramHtml,
+  parseAutoDeleteHours,
   validHttpUrl,
   validMessage,
   validOptionalCaption,
@@ -18,6 +19,7 @@ interface BroadcastBody {
   message?: unknown;
   url?: unknown;
   fileUrl?: unknown;
+  autoDeleteHours?: unknown;
 }
 
 function invalid(res: Response, error: string): void {
@@ -41,6 +43,20 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
       return;
     }
 
+    // Auto-delete applies to plain sendMessage posts (text, link) only; a
+    // document broadcast always stays.
+    if (body.type === "file" && body.autoDeleteHours !== undefined) {
+      invalid(res, "invalid_auto_delete");
+      return;
+    }
+    const autoDelete = parseAutoDeleteHours(body.autoDeleteHours);
+    if (!autoDelete.ok) {
+      invalid(res, "invalid_auto_delete");
+      return;
+    }
+    const options =
+      autoDelete.hours === null ? {} : { autoDeleteAfterHours: autoDelete.hours };
+
     try {
       if (body.type === "text") {
         if (!validMessage(body.message)) {
@@ -48,11 +64,16 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
           return;
         }
         const html = adminMarkdownToTelegramHtml(body.message.trim());
-        const result = await broadcastToRoom(roomId, async (user) => {
-          await bot.api.sendMessage(user.telegram_id, html, {
-            parse_mode: "HTML",
-          });
-        });
+        const result = await broadcastToRoom(
+          roomId,
+          async (user) => {
+            const sent = await bot.api.sendMessage(user.telegram_id, html, {
+              parse_mode: "HTML",
+            });
+            return sent.message_id;
+          },
+          options
+        );
         res.json({ success: true, ...result });
         return;
       }
@@ -69,9 +90,14 @@ export function createBroadcastRoute(bot: Bot<MyContext>) {
         const caption =
           typeof body.message === "string" ? body.message.trim() : undefined;
         const text = caption ? `${caption}\n\n${body.url}` : body.url;
-        const result = await broadcastToRoom(roomId, async (user) => {
-          await bot.api.sendMessage(user.telegram_id, text);
-        });
+        const result = await broadcastToRoom(
+          roomId,
+          async (user) => {
+            const sent = await bot.api.sendMessage(user.telegram_id, text);
+            return sent.message_id;
+          },
+          options
+        );
         res.json({ success: true, ...result });
         return;
       }

@@ -546,9 +546,14 @@ export interface KickParticipantResponse {
   habitLogsDeleted: number;
 }
 
+/**
+ * `autoDeleteHours`: omitted → server default (24 h), null → keep forever,
+ * 1..720 → delete that many hours after the broadcast starts. Text and link
+ * posts only; file broadcasts always stay.
+ */
 export type AdminBroadcastPayload =
-  | { type: "text"; message: string }
-  | { type: "link"; url: string; message?: string }
+  | { type: "text"; message: string; autoDeleteHours?: number | null }
+  | { type: "link"; url: string; message?: string; autoDeleteHours?: number | null }
   | { type: "file"; fileUrl: string; message?: string };
 
 export interface AdminBroadcastResponse {
@@ -556,4 +561,6 @@ export interface AdminBroadcastResponse {
   participantCount: number;
   sentCount: number;
   failedCount: number;
+  /** UTC 'YYYY-MM-DD HH:MM:SS' when the post is deleted; null = kept forever. */
+  autoDeleteAt: string | null;
 }

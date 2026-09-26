@@ -1014,6 +1014,27 @@ export function enqueueMessageDeletion(
   ).run(chatId, messageId, `+${delayMinutes} minutes`);
 }
 
+/**
+ * Queue a sent message for deletion at an absolute UTC deadline
+ * ('YYYY-MM-DD HH:MM:SS', see toSqliteUtc). A broadcast passes one deadline for
+ * every recipient so the whole send disappears together, however long it took.
+ */
+export function enqueueMessageDeletionAt(
+  chatId: number,
+  messageId: number,
+  deleteAt: string
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO scheduled_message_deletions (chat_id, message_id, delete_at)
+     VALUES (?, ?, ?)`
+  ).run(chatId, messageId, deleteAt);
+}
+
+/** Format a Date in the same UTC shape as SQLite's datetime('now'). */
+export function toSqliteUtc(date: Date): string {
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
 export interface ScheduledMessageDeletion {
   id: number;
   chat_id: number;

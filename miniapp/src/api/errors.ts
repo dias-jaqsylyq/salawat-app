@@ -86,6 +86,8 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "PDF must be 20 MB or smaller.";
     case "invalid_caption":
       return "The caption is too long.";
+    case "invalid_auto_delete":
+      return "Auto-delete must be a whole number of hours from 1 to 720.";
     case "missing_init_data":
     case "invalid_init_data":
       return "Telegram session expired — close and reopen the app from the bot menu.";
