@@ -17,6 +17,12 @@ import {
   getAdminStats,
 } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
+import {
+  BROADCAST_AUTO_DELETE_DEFAULT_HOURS,
+  BROADCAST_AUTO_DELETE_MAX_HOURS,
+  autoDeleteConfirmLine,
+  resolveAutoDeleteHours,
+} from "../lib/broadcastAutoDelete.ts";
 import type { AdminBroadcastResponse, AdminRoomResponse } from "../api/types.ts";
 import { Button } from "@/components/ui/button";
 import {
@@ -91,6 +97,9 @@ export default function AdminScreen({ initData, roomName }: Props) {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [pdfCaption, setPdfCaption] = useState("");
   const [fileInputKey, setFileInputKey] = useState(0);
+  // Shared by the Text and Link tabs; PDFs never auto-delete.
+  const [autoDeleteInput, setAutoDeleteInput] = useState("");
+  const [keepForever, setKeepForever] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AdminBroadcastResponse | null>(null);
@@ -182,6 +191,9 @@ export default function AdminScreen({ initData, roomName }: Props) {
     if (mode === "pdf") {
       if (!pdfFile) return "Choose a PDF file before sending.";
       if (pdfCaption.length > 1024) return "Caption must be 1,024 characters or fewer.";
+    } else {
+      const autoDelete = resolveAutoDeleteHours(keepForever, autoDeleteInput);
+      if ("error" in autoDelete) return autoDelete.error;
     }
     return null;
   }
@@ -196,12 +208,15 @@ export default function AdminScreen({ initData, roomName }: Props) {
       return;
     }
 
+    // validate() has already rejected a bad value, so this is hours or null.
+    const autoDelete = resolveAutoDeleteHours(keepForever, autoDeleteInput);
+    const autoDeleteHours = "hours" in autoDelete ? autoDelete.hours : null;
     const contentLabel =
       mode === "text" ? "this text post" : mode === "link" ? "this link" : "this PDF";
     const confirmed = window.confirm(
       `Send ${contentLabel} to ${participantCount.toLocaleString()} participant${
         participantCount === 1 ? "" : "s"
-      }?`
+      }?\n\n${autoDeleteConfirmLine(mode === "pdf" ? null : autoDeleteHours)}`
     );
     if (!confirmed) return;
 
@@ -214,6 +229,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
         response = await broadcastAdminContent(initData, {
           type: "text",
           message: textMessage.trim(),
+          autoDeleteHours,
         });
         setTextMessage("");
       } else if (mode === "link") {
@@ -221,6 +237,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
           type: "link",
           url: linkUrl.trim(),
           message: linkCaption.trim() || undefined,
+          autoDeleteHours,
         });
         setLinkUrl("");
         setLinkCaption("");
@@ -483,6 +500,41 @@ export default function AdminScreen({ initData, roomName }: Props) {
             </>
           )}
 
+          {mode !== "pdf" && (
+            <CardContent className="space-y-3 border-t pt-4">
+              <div className="space-y-2">
+                <Label htmlFor="admin-auto-delete-hours">Auto-delete after (hours)</Label>
+                <Input
+                  id="admin-auto-delete-hours"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={BROADCAST_AUTO_DELETE_MAX_HOURS}
+                  step={1}
+                  value={autoDeleteInput}
+                  onChange={(event) => setAutoDeleteInput(event.target.value)}
+                  placeholder={String(BROADCAST_AUTO_DELETE_DEFAULT_HOURS)}
+                  disabled={sending || keepForever}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Whole hours, up to {BROADCAST_AUTO_DELETE_MAX_HOURS}. Empty means{" "}
+                  {BROADCAST_AUTO_DELETE_DEFAULT_HOURS}. Every copy is deleted at the same time,
+                  counted from when sending starts.
+                </p>
+              </div>
+              <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={keepForever}
+                  onChange={(event) => setKeepForever(event.target.checked)}
+                  disabled={sending}
+                />
+                Keep forever
+              </label>
+            </CardContent>
+          )}
+
           <CardContent className="space-y-3 border-t pt-4">
             <Button
               type="submit"
@@ -508,6 +560,13 @@ export default function AdminScreen({ initData, roomName }: Props) {
                 <p className="font-medium">
                   Sent to {result.sentCount.toLocaleString()} of{" "}
                   {result.participantCount.toLocaleString()} participants.
+                </p>
+                <p className="mt-1 text-muted-foreground">
+                  {result.autoDeleteAt
+                    ? `Will be deleted ${new Date(
+                        `${result.autoDeleteAt.replace(" ", "T")}Z`
+                      ).toLocaleString()}.`
+                    : "Kept forever."}
                 </p>
                 {result.failedCount > 0 && (
                   <p className="mt-1 text-muted-foreground">
