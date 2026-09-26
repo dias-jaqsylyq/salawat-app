@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ShieldCheck, UserMinus } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { kickParticipant, promoteParticipant } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { LeaderboardMember } from "../api/types.ts";
@@ -120,7 +121,7 @@ export default function LeaderboardMemberRow({
               </span>
               {entry.isRoomAdmin && (
                 <Badge variant="outline" className="shrink-0 gap-1">
-                  <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                  <Icon icon={ShieldCheck} />
                   Admin
                 </Badge>
               )}
@@ -152,7 +153,7 @@ export default function LeaderboardMemberRow({
         <div className={cn("mt-2 flex flex-wrap gap-2", busy && "opacity-60")}>
           {!entry.isRoomAdmin && (
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={handlePromote}>
-              <ShieldCheck className="h-3.5 w-3.5" />
+              <Icon icon={ShieldCheck} />
               Make co-admin
             </Button>
           )}
@@ -166,7 +167,7 @@ export default function LeaderboardMemberRow({
               disabled={busy}
               onClick={() => void handleKick()}
             >
-              <UserMinus className="h-3.5 w-3.5" />
+              <Icon icon={UserMinus} />
               Kick
             </Button>
           )}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, MoonStar, Settings, Users } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { getProgressWeek } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type {
@@ -111,7 +112,7 @@ export default function ProgressScreen({
                 onClick={onOpenHistory}
                 aria-label="Open history"
               >
-                <CalendarDays className="h-5 w-5" />
+                <Icon icon={CalendarDays} size="md" />
               </Button>
               <Button
                 type="button"
@@ -120,19 +121,19 @@ export default function ProgressScreen({
                 onClick={onOpenSettings}
                 aria-label="Open settings"
               >
-                <Settings className="h-5 w-5" />
+                <Icon icon={Settings} size="md" />
               </Button>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-footnote font-semibold text-accent">
-              <MoonStar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <Icon icon={MoonStar} />
               {hijriLabel}
             </span>
             {/* Which room these points belong to (PRD §3a). */}
             {room && (
               <span className="inline-flex w-fit max-w-full items-center gap-2 rounded-full bg-secondary px-3 py-1 text-footnote font-semibold text-secondary-foreground">
-                <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <Icon icon={Users} />
                 <span className="truncate">{room.name}</span>
               </span>
             )}

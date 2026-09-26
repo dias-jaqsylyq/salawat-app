@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { backfillWeekView, dayForWeekStep } from "../lib/backfillWeeks.ts";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +62,7 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
           onClick={() => step(-1)}
           className={ARROW_CLASS}
         >
-          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={ChevronLeft} />
         </button>
         <p className="flex-1 text-center text-footnote font-semibold text-muted-foreground" aria-live="polite">
           {view.label}
@@ -73,7 +74,7 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
           onClick={() => step(1)}
           className={cn(ARROW_CLASS, !view.canGoForward && "invisible")}
         >
-          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={ChevronRight} />
         </button>
       </div>
       <div

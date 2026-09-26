@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -37,15 +38,14 @@ export default function StreakBadge({ habitName, streak, unit = "days" }: Props)
         tier === "hot" && "border-accent/50 bg-accent/15 shadow-sm"
       )}
     >
-      <Flame
+      <Icon
+        icon={Flame}
+        size="lg"
+        filled={tier !== "unlit"}
         className={cn(
-          "h-7 w-7",
           tier === "unlit" ? "text-quaternary" : "text-accent",
           tier === "hot" && "drop-shadow-[0_0_6px_color-mix(in_oklab,var(--accent)_40%,transparent)]"
         )}
-        fill={tier === "unlit" ? "none" : "currentColor"}
-        strokeWidth={tier === "unlit" ? 1.5 : 2}
-        aria-hidden="true"
       />
       <span className="text-title numeric font-bold text-foreground">{streak}</span>
       <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">

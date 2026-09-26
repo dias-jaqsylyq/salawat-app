@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Download, Pencil, RefreshCw, Trophy } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { downloadAdminExport, getAdminLeaderboard, getLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import { adminLeaderboardToMembers } from "../api/leaderboardAdapters.ts";
@@ -138,7 +139,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <h2 className="flex items-center gap-2 text-title text-foreground">
-            <Trophy className="h-5 w-5 text-accent" aria-hidden="true" />
+            <Icon icon={Trophy} size="md" className="text-accent" />
             Leaderboard
           </h2>
           <p className="mt-1 text-footnote text-muted-foreground">
@@ -160,7 +161,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               disabled={loading}
               onClick={load}
             >
-              <RefreshCw className="h-4 w-4" />
+              <Icon icon={RefreshCw} />
             </Button>
             {/* All-time only: the export is for prizes and moderation, which
                 are about the whole run — offering it beside a weekly board
@@ -173,7 +174,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
                 disabled={downloading}
                 onClick={() => void downloadCsv()}
               >
-                <Download className="h-3.5 w-3.5" />
+                <Icon icon={Download} />
                 {downloading ? "…" : "CSV"}
               </Button>
             )}
@@ -185,7 +186,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               size="sm"
               onClick={() => setEditing((wasEditing) => !wasEditing)}
             >
-              {editing ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+              {editing ? <Icon icon={Check} /> : <Icon icon={Pencil} />}
               {editing ? "Done" : "Edit"}
             </Button>
           </div>

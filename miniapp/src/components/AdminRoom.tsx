@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Check, Copy, KeyRound, RotateCw, Share2 } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { patchAdminRoom, setRoomPassword } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminRoomResponse } from "../api/types.ts";
@@ -65,7 +66,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       onClick={() => void handleCopy()}
       aria-label={label}
     >
-      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+      {copied ? <Icon icon={Check} /> : <Icon icon={Copy} />}
       {copied ? "Copied" : "Copy"}
     </Button>
   );
@@ -189,7 +190,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <KeyRound className="h-4 w-4" aria-hidden="true" />
+            <Icon icon={KeyRound} />
             Room password
           </CardTitle>
           <CardDescription>
@@ -212,7 +213,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
             onClick={() => void handleRegenerate()}
             disabled={savingPassword}
           >
-            <RotateCw className="h-4 w-4" />
+            <Icon icon={RotateCw} />
             {savingPassword ? "Working…" : "Generate a new password"}
           </Button>
 
@@ -256,7 +257,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Share2 className="h-4 w-4" aria-hidden="true" />
+            <Icon icon={Share2} />
             Invite link
           </CardTitle>
           <CardDescription>
@@ -273,7 +274,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
                 <CopyButton value={room.inviteLink} label="Copy invite link" />
               </div>
               <Button type="button" className="min-h-11 w-full" onClick={handleShare}>
-                <Share2 className="h-4 w-4" />
+                <Icon icon={Share2} />
                 Share link
               </Button>
             </>

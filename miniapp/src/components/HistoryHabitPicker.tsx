@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { HistoryHabitListEntry } from "../api/types.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
 import { cn } from "@/lib/utils";
@@ -16,8 +17,8 @@ function isSame(a: HistoryHabitListEntry, b: HistoryHabitListEntry): boolean {
 
 function HabitIcon({ category }: { category: HistoryHabitListEntry["category"] }) {
   if (category === null) return null;
-  const Icon = CATEGORY_META[category].icon;
-  return <Icon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />;
+  const glyph = CATEGORY_META[category].icon;
+  return <Icon icon={glyph} className="text-primary" />;
 }
 
 /**
@@ -61,12 +62,9 @@ export default function HistoryHabitPicker({ habits, selected, onSelect }: Props
             Inactive
           </span>
         )}
-        <ChevronDown
-          className={cn(
-            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180"
-          )}
-          aria-hidden="true"
+        <Icon
+          icon={ChevronDown}
+          className={cn("text-muted-foreground transition-transform", open && "rotate-180")}
         />
       </button>
 

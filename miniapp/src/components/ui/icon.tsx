@@ -12,15 +12,18 @@ interface IconProps {
   size?: IconSize;
   /** Accessible name; without it the icon is decorative and hidden from screen readers. */
   label?: string;
+  /** Solid glyph (fill: currentColor), e.g. a logged day's flame. */
+  filled?: boolean;
   className?: string;
 }
 
 /** Every lucide icon goes through here so size and stroke stay on the system. */
-function Icon({ icon: LucideComponent, size = "sm", label, className }: IconProps) {
+function Icon({ icon: LucideComponent, size = "sm", label, filled = false, className }: IconProps) {
   return (
     <LucideComponent
       size={SIZES[size]}
       strokeWidth={1.75}
+      fill={filled ? "currentColor" : "none"}
       className={cn("shrink-0", className)}
       aria-hidden={label ? undefined : true}
       aria-label={label}

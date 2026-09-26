@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { WeekDay, WeeklyHabitSummary, WeeklyProgressResponse } from "../api/types.ts";
 import { cn } from "@/lib/utils";
 
@@ -75,12 +76,7 @@ function DayCell({
       )}
     >
       {day.logged ? (
-        <Flame
-          className="h-4 w-4 text-accent"
-          fill="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        />
+        <Icon icon={Flame} filled className="text-accent" />
       ) : (
         <span
           className={cn(
@@ -142,7 +138,7 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
         {habit.met ? (
           <span className="text-body numeric font-semibold text-accent">{habit.count}</span>
         ) : (
-          <Flame className="h-4 w-4 text-quaternary" strokeWidth={1.5} aria-hidden="true" />
+          <Icon icon={Flame} className="text-quaternary" />
         )}
       </div>
       <div className="min-w-0 flex-1">

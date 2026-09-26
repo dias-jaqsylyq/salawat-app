@@ -9,6 +9,7 @@ import {
   Trophy,
   Users,
 } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import ReactMarkdown from "react-markdown";
 import {
   broadcastAdminContent,
@@ -284,7 +285,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
           <p className="text-title numeric font-bold text-foreground">{countLabel}</p>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Users className="h-5 w-5" aria-hidden="true" />
+          <Icon icon={Users} size="md" />
         </div>
       </div>
 
@@ -299,7 +300,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
           { id: "leaderboard" as const, label: "Board", icon: Trophy },
           { id: "room" as const, label: "Room", icon: Settings2 },
         ]).map((item) => {
-          const Icon = item.icon;
+          const glyph = item.icon;
           const active = section === item.id;
           return (
             <button
@@ -315,7 +316,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
-              <Icon className="h-4 w-4" aria-hidden="true" />
+              <Icon icon={glyph} />
               {item.label}
             </button>
           );
@@ -330,7 +331,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
         className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1"
       >
         {MODES.map((item) => {
-          const Icon = item.icon;
+          const glyph = item.icon;
           const active = mode === item.id;
           return (
             <button
@@ -346,7 +347,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
-              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <Icon icon={glyph} />
               {item.label}
             </button>
           );
@@ -479,7 +480,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   />
                   {pdfFile && (
                     <div className="flex items-center gap-3 rounded-lg bg-surface-2 px-3 py-3">
-                      <FileText className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                      <Icon icon={FileText} size="md" className="text-primary" />
                       <div className="min-w-0">
                         <p className="truncate text-body font-semibold text-foreground">{pdfFile.name}</p>
                         <p className="text-footnote text-muted-foreground">{fileSizeLabel(pdfFile.size)}</p>

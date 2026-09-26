@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ChevronLeft, DoorOpen, Users } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { getProfile, leaveRoom, patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { Room, StreakDisplay } from "../api/types.ts";
@@ -188,7 +189,7 @@ export default function SettingsScreen({
                 onClick={onBack}
                 aria-label="Back to progress"
               >
-                <ChevronLeft className="h-5 w-5" />
+                <Icon icon={ChevronLeft} size="md" />
               </Button>
               <CardTitle>Settings</CardTitle>
             </div>
@@ -331,7 +332,7 @@ export default function SettingsScreen({
                   {room ? (
                     <>
                       <div className="flex items-center gap-3 rounded-lg bg-surface-2 px-3 py-3">
-                        <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <Icon icon={Users} className="text-muted-foreground" />
                         <div className="min-w-0">
                           <p className="truncate text-body font-semibold text-foreground">{room.name}</p>
                           <p className="text-footnote text-muted-foreground">Your current room</p>
@@ -344,7 +345,7 @@ export default function SettingsScreen({
                         onClick={() => void handleLeaveRoom()}
                         disabled={leaving || saving}
                       >
-                        <DoorOpen className="h-4 w-4" />
+                        <Icon icon={DoorOpen} />
                         {leaving ? "Leaving…" : "Leave room"}
                       </Button>
                       <p className="text-footnote text-muted-foreground">

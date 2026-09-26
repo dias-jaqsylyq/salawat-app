@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { getHistoryHabits, getHistoryMonth } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { HistoryHabitListEntry, HistoryMonthResponse, HistoryWeek } from "../api/types.ts";
@@ -63,7 +64,7 @@ function HistoryWeekBadge({ week }: { week: HistoryWeek }) {
         {week.met ? (
           <span className="text-body numeric font-semibold text-accent">{week.count}</span>
         ) : (
-          <Flame className="h-4 w-4 text-quaternary" strokeWidth={1.5} aria-hidden="true" />
+          <Icon icon={Flame} className="text-quaternary" />
         )}
       </div>
       <div className="min-w-0 flex-1">
@@ -109,7 +110,7 @@ function EmptyHistoryState({
   return (
     <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-3 text-muted-foreground">
-        <CalendarDays className="h-6 w-6" aria-hidden="true" />
+        <Icon icon={CalendarDays} size="lg" />
       </div>
       <p className="text-body font-semibold text-foreground">No habits yet</p>
       <p className="max-w-xs text-footnote text-muted-foreground">
@@ -206,7 +207,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
           aria-label="Back to Progress"
           className="-ml-2"
         >
-          <ChevronLeft className="h-5 w-5" />
+          <Icon icon={ChevronLeft} size="md" />
         </Button>
         <h2 className="text-title text-foreground">History</h2>
       </div>
@@ -234,7 +235,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
               disabled={!canGoPrev}
               onClick={() => handleMonthChange(shiftMonthKey(month, -1))}
             >
-              <ChevronLeft className="h-4 w-4" />
+              <Icon icon={ChevronLeft} />
             </Button>
             <p className="text-body font-semibold text-foreground">{formatMonthLabel(month)}</p>
             <Button
@@ -245,7 +246,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
               disabled={!canGoNext}
               onClick={() => handleMonthChange(shiftMonthKey(month, 1))}
             >
-              <ChevronRight className="h-4 w-4" />
+              <Icon icon={ChevronRight} />
             </Button>
           </div>
 

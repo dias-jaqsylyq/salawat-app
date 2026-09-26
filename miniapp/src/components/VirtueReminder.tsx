@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { shuffleReminders, type VirtueReminder } from "../lib/reminders.ts";
 import { Button } from "@/components/ui/button";
 
@@ -52,7 +53,7 @@ export default function VirtueReminder() {
           aria-label="Show another reminder"
           onClick={() => setIndex((i) => (i + 1) % order.length)}
         >
-          <RefreshCw className="h-4 w-4" />
+          <Icon icon={RefreshCw} />
         </Button>
         <ReminderBody reminder={reminder} />
       </section>

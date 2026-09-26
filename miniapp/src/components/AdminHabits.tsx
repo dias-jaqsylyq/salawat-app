@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminHabit, HabitCategory, HabitPeriod } from "../api/types.ts";
@@ -261,7 +262,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
               keeps the old value hidden until the admin re-confirms it (PRD §0). */}
           {categoriesEnabled && !habit.category && (
             <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-warning">
-              <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+              <Icon icon={AlertTriangle} />
               Tap to set a category
             </span>
           )}
@@ -334,7 +335,7 @@ function CreateHabitForm({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Plus className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={Plus} />
           New habit
         </CardTitle>
       </CardHeader>
@@ -455,7 +456,7 @@ export default function AdminHabits({ initData, categoriesEnabled }: Props) {
               disabled={loading}
               aria-label="Refresh habits"
             >
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+              <Icon icon={RefreshCw} className={cn(loading && "animate-spin")} />
             </Button>
           </div>
           <div className="flex items-center justify-between gap-3 pt-2">

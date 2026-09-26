@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import {
   createPersonalHabit,
   deletePersonalHabit,
@@ -305,8 +306,8 @@ export default function PersonalHabits({
                   {categoriesEnabled && habit.category ? (
                     <Badge variant="outline" className="gap-1">
                       {(() => {
-                        const Icon = CATEGORY_META[habit.category].icon;
-                        return <Icon className="h-3 w-3" aria-hidden="true" />;
+                        const glyph = CATEGORY_META[habit.category].icon;
+                        return <Icon icon={glyph} />;
                       })()}
                       {habit.category}
                     </Badge>
@@ -325,7 +326,7 @@ export default function PersonalHabits({
                         setEditingId(habit.id);
                       }}
                     >
-                      <Pencil className="h-3.5 w-3.5" />
+                      <Icon icon={Pencil} />
                     </Button>
                     <Button
                       type="button"
@@ -336,7 +337,7 @@ export default function PersonalHabits({
                       disabled={busy}
                       onClick={() => void handleDelete(habit)}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Icon icon={Trash2} />
                     </Button>
                   </span>
                 </div>
@@ -379,7 +380,7 @@ export default function PersonalHabits({
             setAdding(true);
           }}
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Icon icon={Plus} />
           Add habit
         </Button>
       )}

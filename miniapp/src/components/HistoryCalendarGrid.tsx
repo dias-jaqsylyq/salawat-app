@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { HistoryDay } from "../api/types.ts";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +62,7 @@ function DayCell({ day, isToday }: { day: HistoryDay; isToday: boolean }) {
       )}
     >
       {day.logged && !day.outOfMonth ? (
-        <Flame className="h-4 w-4" fill="currentColor" strokeWidth={2} aria-hidden="true" />
+        <Icon icon={Flame} filled />
       ) : (
         dayOfMonth(day.date)
       )}

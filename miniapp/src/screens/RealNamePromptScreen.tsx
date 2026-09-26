@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Moon } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import {
@@ -56,7 +57,7 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
         <form onSubmit={handleSubmit}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Moon className="h-5 w-5 text-primary" aria-hidden="true" />
+              <Icon icon={Moon} size="md" className="text-primary" />
               Add your full name
             </CardTitle>
             <CardDescription>

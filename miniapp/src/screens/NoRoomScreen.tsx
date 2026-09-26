@@ -1,4 +1,5 @@
 import { DoorOpen, RefreshCw } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { Button } from "@/components/ui/button";
 
 interface Props {
@@ -19,7 +20,7 @@ export default function NoRoomScreen({ nickname, onRefresh }: Props) {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-3 text-muted-foreground">
-        <DoorOpen className="h-6 w-6" aria-hidden="true" />
+        <Icon icon={DoorOpen} size="lg" />
       </div>
       <h1 className="mt-4 text-headline text-foreground">You're not in a room</h1>
       <p className="mt-3 max-w-sm text-footnote text-muted-foreground">
@@ -31,7 +32,7 @@ export default function NoRoomScreen({ nickname, onRefresh }: Props) {
         Daily reminders stay paused while you're between rooms.
       </p>
       <Button type="button" variant="outline" onClick={onRefresh} className="mt-6">
-        <RefreshCw className="h-4 w-4" />
+        <Icon icon={RefreshCw} />
         I've joined — refresh
       </Button>
     </div>

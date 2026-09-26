@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Layers } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import {
   deleteHabitLog,
   getHabitLogWindow,
@@ -116,16 +117,16 @@ function CategoryHeading({ category }: { category: HabitCategory | null }) {
   if (category === null) {
     return (
       <div className="flex items-center gap-2 px-1">
-        <Layers className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <Icon icon={Layers} className="text-muted-foreground" />
         <h3 className="text-footnote font-semibold text-muted-foreground">Uncategorized</h3>
       </div>
     );
   }
 
-  const { label, icon: Icon } = CATEGORY_META[category];
+  const { label, icon: glyph } = CATEGORY_META[category];
   return (
     <div className="flex items-center gap-2 px-1">
-      <Icon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+      <Icon icon={glyph} className="text-primary" />
       <h3 className="text-body font-semibold text-foreground">
         {category}
         <span className="ml-2 font-normal text-muted-foreground">{label}</span>

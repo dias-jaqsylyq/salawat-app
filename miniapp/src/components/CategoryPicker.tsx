@@ -1,5 +1,6 @@
 import type { HabitCategory } from "../api/types.ts";
 import { CATEGORY_META, CATEGORY_ORDER } from "../lib/habitCategories.ts";
+import { Icon } from "@/components/ui/icon";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +24,7 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
         className="grid grid-cols-4 gap-1 rounded-lg bg-surface-2 p-1"
       >
         {CATEGORY_ORDER.map((category) => {
-          const { label, icon: Icon } = CATEGORY_META[category];
+          const { label, icon: glyph } = CATEGORY_META[category];
           const active = value === category;
           return (
             <button
@@ -41,7 +42,7 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
-              <Icon className="h-4 w-4" aria-hidden="true" />
+              <Icon icon={glyph} />
               {category}
             </button>
           );
