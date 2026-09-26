@@ -77,6 +77,7 @@ const PAIRS: [string, string[], number][] = [
   ["--foreground", ["--medal-gold-soft", "--medal-silver-soft", "--medal-bronze-soft"], 4.5],
   ["--muted-foreground", ["--medal-gold-soft", "--medal-silver-soft", "--medal-bronze-soft"], 4.5],
   ["--secondary-foreground", ["--secondary"], 4.5],
+  ["--accent-soft-foreground", ["--accent-soft"], 4.5],
 ];
 
 for (const [name, theme] of [["light", light], ["dark", dark]] as const) {

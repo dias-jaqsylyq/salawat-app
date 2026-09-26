@@ -15,6 +15,14 @@ interface TelegramHapticFeedback {
   selectionChanged(): void;
 }
 
+/** https://core.telegram.org/bots/webapps#backbutton */
+interface TelegramBackButton {
+  show(): void;
+  hide(): void;
+  onClick(handler: () => void): void;
+  offClick(handler: () => void): void;
+}
+
 /** https://core.telegram.org/bots/webapps#popupbutton */
 export interface TelegramPopupButton {
   id?: string;
@@ -38,6 +46,8 @@ interface TelegramWebApp {
   };
   colorScheme: "light" | "dark";
   HapticFeedback: TelegramHapticFeedback;
+  /** Bot API 6.1+: the native back button in Telegram's header. */
+  BackButton: TelegramBackButton;
   ready(): void;
   expand(): void;
   /**

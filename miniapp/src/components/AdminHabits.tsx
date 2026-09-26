@@ -240,12 +240,12 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
               {habit.name}
             </span>
             {habit.period === "weekly" && (
-              <Badge variant="outline" className="shrink-0">
+              <Badge className="shrink-0">
                 weekly
               </Badge>
             )}
             {categoriesEnabled && habit.category && (
-              <Badge variant="outline" className="shrink-0">
+              <Badge className="shrink-0">
                 {habit.category}
               </Badge>
             )}

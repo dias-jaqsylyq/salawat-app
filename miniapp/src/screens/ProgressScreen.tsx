@@ -126,7 +126,7 @@ export default function ProgressScreen({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-footnote font-semibold text-accent">
+            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent-soft px-3 py-1 text-footnote font-semibold text-accent-soft-foreground">
               <Icon icon={MoonStar} />
               {hijriLabel}
             </span>

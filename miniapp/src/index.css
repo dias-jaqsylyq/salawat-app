@@ -64,6 +64,13 @@
   --warning-foreground: #ffffff;
   --warning-soft: oklch(0.96 0.035 75);
 
+  /* Gold tint for "achieved" chips/badges (text on a translucent accent fails contrast) */
+  --accent-soft: oklch(0.955 0.04 85);
+  --accent-soft-foreground: oklch(0.47 0.1 70);
+
+  /* Dim layer behind sheets */
+  --scrim: rgb(28 25 23 / 0.4);
+
   /* Muted metallic medals for the top 3 */
   --medal-gold: oklch(0.82 0.1 85);
   --medal-gold-foreground: oklch(0.33 0.06 70);
@@ -111,6 +118,11 @@
   --warning-foreground: oklch(0.25 0.05 60);
   --warning-soft: oklch(0.28 0.045 65);
 
+  --accent-soft: oklch(0.29 0.05 80);
+  --accent-soft-foreground: #d9a441;
+
+  --scrim: rgb(0 0 0 / 0.6);
+
   --medal-gold: oklch(0.78 0.09 85);
   --medal-gold-foreground: oklch(0.26 0.05 70);
   --medal-gold-soft: oklch(0.26 0.035 85);
@@ -152,6 +164,9 @@
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
   --color-quaternary: var(--text-quaternary);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
+  --color-scrim: var(--scrim);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-warning-soft: var(--warning-soft);
@@ -179,16 +194,6 @@
   /* The only font sizes are the five type roles (@utility text-*) — the default scale is removed */
   --text-*: initial;
 
-
-  --animate-shimmer: shimmer 1.4s ease-in-out infinite;
-  @keyframes shimmer {
-    from {
-      background-position: 100% 0;
-    }
-    to {
-      background-position: -100% 0;
-    }
-  }
 }
 
 /*
@@ -227,6 +232,24 @@
 @utility numeric {
   font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
+}
+
+/* Skeleton placeholder: a soft highlight sweeping across surface-2 */
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@utility shimmer {
+  background-image: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
 }
 
 @layer base {

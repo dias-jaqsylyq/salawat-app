@@ -304,11 +304,7 @@ export default function PersonalHabits({
                 />
                 <div className="flex items-center justify-between gap-2 px-4 pb-3">
                   {categoriesEnabled && habit.category ? (
-                    <Badge variant="outline" className="gap-1">
-                      {(() => {
-                        const glyph = CATEGORY_META[habit.category].icon;
-                        return <Icon icon={glyph} />;
-                      })()}
+                    <Badge icon={CATEGORY_META[habit.category].icon}>
                       {habit.category}
                     </Badge>
                   ) : (

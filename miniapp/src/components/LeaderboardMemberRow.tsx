@@ -22,11 +22,11 @@ interface Props {
   onChanged: () => void;
 }
 
-function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "outline" {
+function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "neutral" {
   if (rank === 1) return "gold";
   if (rank === 2) return "silver";
   if (rank === 3) return "bronze";
-  return "outline";
+  return "neutral";
 }
 
 function rankRowTint(rank: number): string {
@@ -120,8 +120,7 @@ export default function LeaderboardMemberRow({
                 {entry.isYou ? " (You)" : ""}
               </span>
               {entry.isRoomAdmin && (
-                <Badge variant="outline" className="shrink-0 gap-1">
-                  <Icon icon={ShieldCheck} />
+                <Badge size="sm" icon={ShieldCheck} className="shrink-0">
                   Admin
                 </Badge>
               )}
