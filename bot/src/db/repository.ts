@@ -1321,12 +1321,19 @@ export function updateHabit(
   const isActive = patch.isActive !== undefined ? (patch.isActive ? 1 : 0) : current.is_active;
   const category = patch.category !== undefined ? patch.category : current.category;
 
+  // Stamped on the 1 -> 0 transition only (a repeat deactivation keeps the
+  // original instant), cleared on reactivation.
   db.prepare(
     `UPDATE habits
      SET name = ?, description = ?, points_weight = ?, is_active = ?, category = ?,
+         deactivated_at = CASE
+           WHEN ? = 1 THEN NULL
+           WHEN is_active = 1 THEN datetime('now')
+           ELSE deactivated_at
+         END,
          updated_at = datetime('now')
      WHERE id = ?`
-  ).run(name, description, pointsWeight, isActive, category, id);
+  ).run(name, description, pointsWeight, isActive, category, isActive, id);
 
   return getHabitById(id) ?? (() => {
     throw new Error(`Failed to reload habit ${id} after update`);

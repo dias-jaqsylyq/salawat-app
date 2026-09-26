@@ -171,6 +171,19 @@ export interface TodayHabitEntry {
  */
 export interface HabitLogWindowEntry {
   habitId: number;
+  /** The habit's own display fields — carried here because a deactivated
+   *  habit (below) is no longer in GET /api/habits' active-only list. */
+  name: string;
+  description: string | null;
+  period: HabitPeriod;
+  pointsWeight: number;
+  category: HabitCategory | null;
+  /**
+   * False for a deactivated habit, listed only on a day of a past week it was
+   * still active during — always read-only (`editable` false), the same way
+   * the History screen keeps retired habits as historical data.
+   */
+  isActive: boolean;
   logged: boolean;
   value: number;
   points: number;
@@ -181,7 +194,8 @@ export interface HabitLogWindowEntry {
 /**
  * GET /api/habits/log?date=YYYY-MM-DD — the Log screen's day picker (`today`,
  * `minDate`, `maxDate`) plus every active habit's state on `date`, daily and
- * weekly alike.
+ * weekly alike — and, on a day of a past week, any since-deactivated habit
+ * that was still active that week (locked).
  */
 export interface HabitLogWindowResponse {
   /** The day this response describes — `today` when the request omitted `date`. */

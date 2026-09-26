@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Layers } from "lucide-react";
 import {
   deleteHabitLog,
@@ -10,6 +10,7 @@ import { messageForApiError } from "../api/errors.ts";
 import type {
   Habit,
   HabitCategory,
+  HabitLogWindowEntry,
   HabitLogWindowResponse,
   PersonalHabit,
   PersonalHabitLogWindowResponse,
@@ -18,14 +19,14 @@ import type {
 import { hapticMedium } from "../lib/haptics.ts";
 import { CATEGORY_META, groupHabitsByCategory } from "../lib/habitCategories.ts";
 import { BinaryHabitRow } from "../components/HabitLogRow.tsx";
-import BackfillDayList from "../components/BackfillDayList.tsx";
+import WeekDayPicker from "../components/WeekDayPicker.tsx";
 import PersonalHabits from "../components/PersonalHabits.tsx";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
-  habits: Habit[] | null;
   /** The viewer's own private list, null until loaded. */
   personalHabits: PersonalHabit[] | null;
   progress: RegisteredProgress;
@@ -35,34 +36,26 @@ interface Props {
   onPersonalHabitsChanged: () => void;
 }
 
-interface RowState {
-  logged: boolean;
-  /** The selected day precedes this habit's own creation — nothing to mark, not a permission question. */
-  disabled: boolean;
-  countedThisWeek: boolean;
-}
-
 /**
- * Resolves each habit's row state for whichever day is selected — daily and
- * weekly alike, both backfillable within the same window now (BACKFILL PRD),
- * both read from the same day-specific GET /api/habits/log response.
+ * One room habit on the selected day: its display fields plus its state, both
+ * read from the same day-specific GET /api/habits/log response — daily and
+ * weekly alike (BACKFILL PRD). That response, not GET /api/habits, is the
+ * list: on a past week it also carries habits deactivated since (locked), and
+ * a habit created after the selected day is in it too (also locked, never
+ * hidden).
  */
-function buildRowStates(
-  habits: Habit[],
-  logWindow: HabitLogWindowResponse
-): Map<number, RowState> {
-  const entries = new Map(logWindow.habits.map((entry) => [entry.habitId, entry]));
-  const states = new Map<number, RowState>();
+type LogRow = Habit & { entry: HabitLogWindowEntry };
 
-  for (const habit of habits) {
-    const entry = entries.get(habit.id);
-    states.set(habit.id, {
-      logged: entry?.logged ?? false,
-      disabled: entry !== undefined && !entry.editable,
-      countedThisWeek: entry?.countedThisWeek ?? false,
-    });
-  }
-  return states;
+function toLogRows(logWindow: HabitLogWindowResponse): LogRow[] {
+  return logWindow.habits.map((entry) => ({
+    id: entry.habitId,
+    name: entry.name,
+    description: entry.description,
+    period: entry.period,
+    pointsWeight: entry.pointsWeight,
+    category: entry.category,
+    entry,
+  }));
 }
 
 /** "Tue, 9 Sep", parsed as UTC so a local read of the YYYY-MM-DD string can never shift a day. */
@@ -78,8 +71,7 @@ function formatSelectedDate(date: string): string {
 }
 
 interface HabitRowsProps {
-  habits: Habit[];
-  rowStates: Map<number, RowState>;
+  habits: LogRow[];
   onToggle: (habit: Habit, checked: boolean) => Promise<void>;
 }
 
@@ -92,12 +84,12 @@ interface HabitRowsProps {
  * my room asks of me", and a separate section would imply a separate ritual.
  * The row's own badge is what tells them the difference.
  */
-function HabitRows({ habits, rowStates, onToggle }: HabitRowsProps) {
+function HabitRows({ habits, onToggle }: HabitRowsProps) {
   return (
     <Card>
       <CardContent className="divide-y p-0">
         {habits.map((habit) => {
-          const state = rowStates.get(habit.id);
+          const { entry } = habit;
           return (
             <BinaryHabitRow
               key={habit.id}
@@ -105,9 +97,10 @@ function HabitRows({ habits, rowStates, onToggle }: HabitRowsProps) {
               description={habit.description}
               pointsWeight={habit.pointsWeight}
               weekly={habit.period === "weekly"}
-              countedThisWeek={state?.countedThisWeek ?? false}
-              logged={state?.logged ?? false}
-              disabled={state?.disabled ?? false}
+              countedThisWeek={entry.countedThisWeek ?? false}
+              logged={entry.logged}
+              disabled={!entry.editable}
+              inactive={!entry.isActive}
               onToggle={(checked) => onToggle(habit, checked)}
             />
           );
@@ -143,7 +136,6 @@ function CategoryHeading({ category }: { category: HabitCategory | null }) {
 
 export default function LogHabitsScreen({
   initData,
-  habits,
   personalHabits,
   progress,
   onLogged,
@@ -153,32 +145,44 @@ export default function LogHabitsScreen({
   const [personalLogWindow, setPersonalLogWindow] =
     useState<PersonalHabitLogWindowResponse | null>(null);
   const [windowError, setWindowError] = useState<string | null>(null);
+  /** The day being fetched, shown as selected right away; null once it landed. */
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
+  /** Only the latest request may land — a quick ◄◄ must not end on the middle week. */
+  const requestSeq = useRef(0);
 
   // Both windows describe the same day and share the same backfill bounds
   // (BACKFILL PRD), so they are always loaded together — one date picker
   // drives room habits and the member's own list alike.
   const loadLogWindow = useCallback(
     (date?: string) => {
+      const seq = ++requestSeq.current;
       setWindowError(null);
+      setPendingDate(date ?? null);
       Promise.all([getHabitLogWindow(initData, date), getPersonalHabitLogWindow(initData, date)])
         .then(([habitsWindow, personalWindow]) => {
+          if (seq !== requestSeq.current) return;
           setLogWindow(habitsWindow);
           setPersonalLogWindow(personalWindow);
+          setPendingDate(null);
         })
         .catch((err) => {
+          if (seq !== requestSeq.current) return;
+          setPendingDate(null);
           setWindowError(messageForApiError(err, "Couldn't load that day."));
         });
     },
     [initData]
   );
 
-  // Mounts fresh (and so re-defaults to today) every time the Log tab opens —
-  // App.tsx only renders this screen while that tab is active.
+  // Mounts fresh (and so re-defaults to today, in the current week) every time
+  // the Log tab opens — App.tsx only renders this screen while that tab is
+  // active.
   useEffect(() => {
     loadLogWindow();
   }, [loadLogWindow]);
 
   const isToday = logWindow !== null && logWindow.date === logWindow.today;
+  const switching = pendingDate !== null && pendingDate !== logWindow?.date;
 
   async function handleToggle(habit: Habit, checked: boolean) {
     const date = logWindow?.date;
@@ -193,28 +197,23 @@ export default function LogHabitsScreen({
   // shows the same flat list it always did, even though the habits may still
   // carry a stored category (PRD §0).
   const categoriesEnabled = progress.room?.categoriesEnabled ?? false;
-  // Daily and weekly habits alike are backfillable within the window now
-  // (BACKFILL PRD), so every active habit stays in the list on any day.
-  const visibleHabits = habits;
-  const groups =
-    categoriesEnabled && visibleHabits !== null ? groupHabitsByCategory(visibleHabits) : null;
-
-  const loading = habits === null || logWindow === null;
+  const rows = logWindow === null ? null : toLogRows(logWindow);
+  const groups = categoriesEnabled && rows !== null ? groupHabitsByCategory(rows) : null;
 
   return (
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div>
         <h2 className="text-lg font-semibold text-foreground">Log habits</h2>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {logWindow === null ? " " : isToday ? "Today" : formatSelectedDate(logWindow.date)}
+          {logWindow === null ? " " : isToday ? "Today" : formatSelectedDate(logWindow.date)}
         </p>
       </div>
 
       {logWindow !== null && (
-        <BackfillDayList
+        <WeekDayPicker
           minDate={logWindow.minDate}
           today={logWindow.today}
-          selected={logWindow.date}
+          selected={pendingDate ?? logWindow.date}
           onSelect={(date) => loadLogWindow(date)}
         />
       )}
@@ -233,52 +232,51 @@ export default function LogHabitsScreen({
         </div>
       )}
 
-      {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {rows === null && !windowError && <p className="text-sm text-muted-foreground">Loading…</p>}
 
-      {!loading && visibleHabits !== null && visibleHabits.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          {isToday ? "No active habits yet." : "Nothing to log yet on this day."}
-        </p>
-      )}
+      {/* While another day loads, the previous day's rows stay on screen but
+          inert and dimmed — never togglable against a day no longer selected. */}
+      <div
+        className={cn("space-y-4 transition-opacity", switching && "pointer-events-none opacity-50")}
+        aria-busy={switching}
+      >
+        {rows !== null && rows.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {isToday ? "No active habits yet." : "Nothing to log yet on this day."}
+          </p>
+        )}
 
-      {!loading && visibleHabits !== null && visibleHabits.length > 0 && groups !== null && (
-        <div className="space-y-5">
-          {groups.map((group) => (
-            <section key={group.category ?? "uncategorized"} className="space-y-2">
-              <CategoryHeading category={group.category} />
-              <HabitRows
-                habits={group.habits}
-                rowStates={buildRowStates(group.habits, logWindow!)}
-                onToggle={handleToggle}
-              />
-            </section>
-          ))}
-        </div>
-      )}
+        {rows !== null && rows.length > 0 && groups !== null && (
+          <div className="space-y-5">
+            {groups.map((group) => (
+              <section key={group.category ?? "uncategorized"} className="space-y-2">
+                <CategoryHeading category={group.category} />
+                <HabitRows habits={group.habits} onToggle={handleToggle} />
+              </section>
+            ))}
+          </div>
+        )}
 
-      {!loading && visibleHabits !== null && visibleHabits.length > 0 && groups === null && (
-        <HabitRows
-          habits={visibleHabits}
-          rowStates={buildRowStates(visibleHabits, logWindow!)}
-          onToggle={handleToggle}
-        />
-      )}
+        {rows !== null && rows.length > 0 && groups === null && (
+          <HabitRows habits={rows} onToggle={handleToggle} />
+        )}
 
-      {/* The member's own list, always last and always one block — even in a
-          categories-enabled room, where the room's habits above are grouped.
-          Backfillable on any day of the same window room habits get
-          (BACKFILL PRD), reading and writing the same selected day. */}
-      {logWindow !== null && (
-        <PersonalHabits
-          initData={initData}
-          habits={personalHabits}
-          entries={personalLogWindow?.habits ?? []}
-          date={logWindow.date}
-          categoriesEnabled={categoriesEnabled}
-          onLogged={onLogged}
-          onListChanged={onPersonalHabitsChanged}
-        />
-      )}
+        {/* The member's own list, always last and always one block — even in a
+            categories-enabled room, where the room's habits above are grouped.
+            Backfillable on any day of the same window room habits get
+            (BACKFILL PRD), reading and writing the same selected day. */}
+        {logWindow !== null && (
+          <PersonalHabits
+            initData={initData}
+            habits={personalHabits}
+            entries={personalLogWindow?.habits ?? []}
+            date={logWindow.date}
+            categoriesEnabled={categoriesEnabled}
+            onLogged={onLogged}
+            onListChanged={onPersonalHabitsChanged}
+          />
+        )}
+      </div>
     </div>
   );
 }

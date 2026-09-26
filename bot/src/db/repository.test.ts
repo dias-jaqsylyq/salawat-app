@@ -26,7 +26,7 @@ const {
   updateHabit,
   upsertHabitLog,
 } = await import("./repository.js");
-const { db } = await import("./client.js");
+const { backfillHabitDeactivatedAt, db } = await import("./client.js");
 
 let nextTelegramId = 600000001;
 
@@ -131,6 +131,37 @@ describe("habit CRUD", () => {
     const all = listHabits().map((h) => h.id);
     assert.ok(all.includes(active.id));
     assert.ok(all.includes(toDeactivate.id));
+  });
+
+  it("stamps deactivated_at on deactivation only, keeps it on a repeat, clears it on reactivation", () => {
+    const habit = makeHabit("Retire me", 5);
+    assert.equal(getHabitById(habit.id)?.deactivated_at, null);
+
+    const retired = deactivateHabit(habit.id);
+    assert.ok(retired.deactivated_at !== null);
+
+    db.prepare("UPDATE habits SET deactivated_at = '2001-01-01 00:00:00' WHERE id = ?").run(habit.id);
+    // A second deactivation or an unrelated edit while retired keeps the original instant.
+    deactivateHabit(habit.id);
+    updateHabit(habit.id, { name: "Retired, renamed" });
+    assert.equal(getHabitById(habit.id)?.deactivated_at, "2001-01-01 00:00:00");
+
+    assert.equal(updateHabit(habit.id, { isActive: true }).deactivated_at, null);
+    // A plain edit to an active habit never stamps it.
+    assert.equal(updateHabit(habit.id, { pointsWeight: 7 }).deactivated_at, null);
+  });
+
+  it("backfills deactivated_at from updated_at for habits retired before the column existed", () => {
+    const legacy = makeHabit("Legacy retired", 5);
+    const active = makeHabit("Still here", 5);
+    db.prepare(
+      "UPDATE habits SET is_active = 0, deactivated_at = NULL, updated_at = '2002-02-02 00:00:00' WHERE id = ?"
+    ).run(legacy.id);
+
+    assert.ok(backfillHabitDeactivatedAt() >= 1);
+    assert.equal(getHabitById(legacy.id)?.deactivated_at, "2002-02-02 00:00:00");
+    assert.equal(getHabitById(active.id)?.deactivated_at, null);
+    assert.equal(backfillHabitDeactivatedAt(), 0);
   });
 });
 

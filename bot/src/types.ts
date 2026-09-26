@@ -187,6 +187,8 @@ export interface Habit {
   category: HabitCategory | null;
   /** SQLite 0/1; default 1 (active). */
   is_active: number;
+  /** SQLite UTC instant is_active last went 1 -> 0; NULL while active. */
+  deactivated_at: string | null;
   created_at: string;
   updated_at: string;
 }

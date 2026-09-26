@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS habits (
   -- application layer, not here (PRD §1).
   category TEXT CHECK (category IS NULL OR category IN ('IQ','SQ','PQ','EQ')),
   is_active INTEGER NOT NULL DEFAULT 1,
+  -- When is_active last went 1 -> 0 (SQLite UTC), NULL while active. Lets the
+  -- Log screen show a retired habit, read-only, in the past weeks it was still
+  -- active during. Habits retired before this column existed are backfilled
+  -- from updated_at — see backfillHabitDeactivatedAt().
+  deactivated_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

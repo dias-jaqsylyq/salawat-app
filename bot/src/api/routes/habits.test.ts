@@ -468,6 +468,12 @@ describe("GET /api/habits/log", () => {
     const row = body.habits.find((h: any) => h.habitId === habit.id);
     assert.deepEqual(row, {
       habitId: habit.id,
+      name: "Log window default",
+      description: null,
+      period: "daily",
+      pointsWeight: 4,
+      category: null,
+      isActive: true,
       logged: true,
       value: 1,
       points: 4,
@@ -549,6 +555,64 @@ describe("GET /api/habits/log", () => {
     const { status, body } = callLogWindow(telegramId, TOO_OLD_WEEK);
     assert.equal(status, 400);
     assert.equal(body.error, "date_out_of_window");
+  });
+
+  it("lists a habit created after the viewed week, locked rather than hidden", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeHabit("Created this week", 5); // created_at left at "now"
+
+    const row = callLogWindow(telegramId, LAST_WEEK).body.habits.find(
+      (h: any) => h.habitId === habit.id
+    );
+    assert.ok(row, "a habit newer than the viewed week must still be listed");
+    assert.equal(row.isActive, true);
+    assert.equal(row.editable, false);
+  });
+
+  it("lists a deactivated habit, locked, in a past week it was active during — with its log", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Retired later", 6);
+    callLog(telegramId, habit.id, {}, LAST_WEEK);
+    updateHabit(habit.id, { isActive: false });
+
+    const { body } = callLogWindow(telegramId, LAST_WEEK);
+    const row = body.habits.find((h: any) => h.habitId === habit.id);
+    assert.ok(row, "a retired habit must show in a past week it was active in");
+    assert.equal(row.isActive, false);
+    assert.equal(row.editable, false);
+    assert.equal(row.logged, true);
+    assert.equal(row.name, "Retired later");
+  });
+
+  it("never lists a deactivated habit in the current week", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Retired this week", 6);
+    updateHabit(habit.id, { isActive: false });
+
+    const ids = callLogWindow(telegramId).body.habits.map((h: any) => h.habitId);
+    assert.ok(!ids.includes(habit.id));
+  });
+
+  it("does not list a deactivated habit in a past week it had already been retired before", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeBackfillableHabit("Retired long ago", 6);
+    updateHabit(habit.id, { isActive: false });
+    // Retired before the oldest week of the window even began.
+    db.prepare("UPDATE habits SET deactivated_at = '2001-01-01 00:00:00' WHERE id = ?").run(
+      habit.id
+    );
+
+    const ids = callLogWindow(telegramId, TWO_WEEKS_AGO).body.habits.map((h: any) => h.habitId);
+    assert.ok(!ids.includes(habit.id));
+  });
+
+  it("does not list a deactivated habit in a past week before it was even created", () => {
+    const telegramId = makeBackfillableUser();
+    const habit = makeHabit("Short-lived", 6); // created "now", i.e. this week
+    updateHabit(habit.id, { isActive: false });
+
+    const ids = callLogWindow(telegramId, LAST_WEEK).body.habits.map((h: any) => h.habitId);
+    assert.ok(!ids.includes(habit.id));
   });
 
   it("403s for a telegram id with no registered user", () => {
