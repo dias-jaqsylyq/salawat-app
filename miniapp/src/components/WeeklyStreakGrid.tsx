@@ -127,7 +127,7 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5",
+        "flex items-center gap-3 rounded-xl border px-3 py-3",
         habit.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-muted/30"
       )}
       aria-label={label}
@@ -181,7 +181,7 @@ export default function WeeklyStreakGrid({ week }: Props) {
   return (
     <div className="space-y-3">
       {week.habits.length > 0 && (
-        <div className="grid grid-cols-7 gap-1.5" aria-hidden="true">
+        <div className="grid grid-cols-7 gap-2" aria-hidden="true">
           {week.days.map((date) => (
             <span
               key={date}
@@ -200,9 +200,9 @@ export default function WeeklyStreakGrid({ week }: Props) {
         // Room and personal habits come from different tables, so their ids can
         // collide — the kind has to be part of the key even though the two rows
         // are drawn identically.
-        <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-1.5">
+        <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-2">
           <p className="truncate text-footnote font-semibold text-foreground/80">{habit.name}</p>
-          <div className="grid grid-cols-7 gap-1.5">
+          <div className="grid grid-cols-7 gap-2">
             {habit.days.map((day) => (
               <DayCell
                 key={day.date}

@@ -125,13 +125,13 @@ export default function ProgressScreen({
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-footnote font-semibold text-[#854d0e] dark:bg-accent/15 dark:text-[#e6bf6a]">
+            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-footnote font-semibold text-[#854d0e] dark:bg-accent/15 dark:text-[#e6bf6a]">
               <MoonStar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {hijriLabel}
             </span>
             {/* Which room these points belong to (PRD §3a). */}
             {room && (
-              <span className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-footnote font-semibold text-secondary-foreground">
+              <span className="inline-flex w-fit max-w-full items-center gap-2 rounded-full bg-secondary px-3 py-1 text-footnote font-semibold text-secondary-foreground">
                 <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">{room.name}</span>
               </span>

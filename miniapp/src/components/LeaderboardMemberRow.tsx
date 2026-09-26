@@ -113,7 +113,7 @@ export default function LeaderboardMemberRow({
             {entry.rank}
           </Badge>
           <span className="flex min-w-0 flex-col">
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-2">
               <span className="truncate">
                 {entry.nickname}
                 {entry.isYou ? " (You)" : ""}

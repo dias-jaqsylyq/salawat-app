@@ -222,7 +222,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
   }
 
   return (
-    <div className="space-y-1.5 px-4 py-3">
+    <div className="space-y-2 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <button
           type="button"
@@ -253,7 +253,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
             {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
           </span>
           {habit.description && (
-            <span className="mt-0.5 block truncate text-footnote text-muted-foreground">
+            <span className="mt-1 block truncate text-footnote text-muted-foreground">
               {habit.description}
             </span>
           )}
@@ -443,7 +443,7 @@ export default function AdminHabits({ initData, categoriesEnabled }: Props) {
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <CardTitle>{showInactive ? "All habits" : "Active habits"}</CardTitle>
               <CardDescription>Tap a habit to edit its name or points.</CardDescription>
             </div>

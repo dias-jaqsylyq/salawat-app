@@ -38,7 +38,7 @@ export default function TabBar({
             disabled={disabled}
             onClick={() => onChange(tab.id)}
             className={cn(
-              "flex flex-1 flex-col items-center gap-0.5 py-2 text-caption font-semibold transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
+              "flex flex-1 flex-col items-center gap-1 py-2 text-caption font-semibold transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
               isActive ? "text-primary" : "text-muted-foreground",
               disabled && "pointer-events-none opacity-60"
             )}

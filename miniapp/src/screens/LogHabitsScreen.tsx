@@ -128,7 +128,7 @@ function CategoryHeading({ category }: { category: HabitCategory | null }) {
       <Icon className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
       <h3 className="text-body font-semibold text-foreground">
         {category}
-        <span className="ml-1.5 font-normal text-muted-foreground">{label}</span>
+        <span className="ml-2 font-normal text-muted-foreground">{label}</span>
       </h3>
     </div>
   );
@@ -204,7 +204,7 @@ export default function LogHabitsScreen({
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div>
         <h2 className="text-title text-foreground">Log habits</h2>
-        <p className="mt-0.5 text-footnote text-muted-foreground">
+        <p className="mt-1 text-footnote text-muted-foreground">
           {logWindow === null ? " " : isToday ? "Today" : formatSelectedDate(logWindow.date)}
         </p>
       </div>
@@ -247,7 +247,7 @@ export default function LogHabitsScreen({
         )}
 
         {rows !== null && rows.length > 0 && groups !== null && (
-          <div className="space-y-5">
+          <div className="space-y-6">
             {groups.map((group) => (
               <section key={group.category ?? "uncategorized"} className="space-y-2">
                 <CategoryHeading category={group.category} />

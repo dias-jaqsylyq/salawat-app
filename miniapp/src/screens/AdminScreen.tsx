@@ -309,7 +309,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setSection(item.id)}
               className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-0.5 rounded-lg px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -340,7 +340,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
               aria-selected={active}
               onClick={() => setMode(item.id)}
               className={cn(
-                "flex min-h-11 items-center justify-center gap-1.5 rounded-lg px-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-11 items-center justify-center gap-2 rounded-lg px-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
@@ -478,7 +478,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
                     className="h-12 cursor-pointer file:mr-3 file:border-0 file:bg-transparent file:text-body file:font-semibold"
                   />
                   {pdfFile && (
-                    <div className="flex items-center gap-3 rounded-lg bg-secondary/35 px-3 py-2.5">
+                    <div className="flex items-center gap-3 rounded-lg bg-secondary/35 px-3 py-3">
                       <FileText className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                       <div className="min-w-0">
                         <p className="truncate text-body font-semibold text-foreground">{pdfFile.name}</p>
@@ -558,7 +558,7 @@ export default function AdminScreen({ initData, roomName }: Props) {
             {result && (
               <div
                 aria-live="polite"
-                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5 text-body text-foreground"
+                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-3 text-body text-foreground"
               >
                 <p className="font-semibold">
                   Sent to {result.sentCount.toLocaleString()} of{" "}

@@ -141,7 +141,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
             <Trophy className="h-5 w-5 text-accent" aria-hidden="true" />
             Leaderboard
           </h2>
-          <p className="mt-0.5 text-footnote text-muted-foreground">
+          <p className="mt-1 text-footnote text-muted-foreground">
             {effectivePeriod === "weekly"
               ? week
                 ? `This week · ${weekRange(week.start, week.end)}`
@@ -151,7 +151,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
         </div>
 
         {isAdmin && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="ghost"

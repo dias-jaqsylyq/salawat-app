@@ -48,7 +48,7 @@ function HistoryWeekBadge({ week }: { week: HistoryWeek }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5",
+        "flex items-center gap-3 rounded-xl border px-3 py-3",
         week.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-muted/30"
       )}
       aria-label={label}

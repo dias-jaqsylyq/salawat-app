@@ -47,17 +47,17 @@ export default function HistoryHabitPicker({ habits, selected, onSelect }: Props
         onClick={() => setOpen((wasOpen) => !wasOpen)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        className="flex w-full items-center gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-2.5 text-left transition duration-100 active:scale-[0.97] active:bg-fill-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full items-center gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-3 text-left transition duration-100 active:scale-[0.97] active:bg-fill-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <HabitIcon category={selected.category} />
         <span className="flex-1 truncate text-body font-semibold text-foreground">{selected.name}</span>
         {selected.kind === "personal" && (
-          <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-caption font-semibold text-secondary-foreground">
+          <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-caption font-semibold text-secondary-foreground">
             My Habits
           </span>
         )}
         {selected.kind === "room" && !selected.isActive && (
-          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-caption font-semibold text-muted-foreground">
+          <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-caption font-semibold text-muted-foreground">
             Inactive
           </span>
         )}

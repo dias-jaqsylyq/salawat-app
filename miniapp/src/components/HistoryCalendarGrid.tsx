@@ -76,8 +76,8 @@ function DayCell({ day, isToday }: { day: HistoryDay; isToday: boolean }) {
  */
 export default function HistoryCalendarGrid({ days, today }: Props) {
   return (
-    <div className="space-y-1.5">
-      <div className="grid grid-cols-7 gap-1.5" aria-hidden="true">
+    <div className="space-y-2">
+      <div className="grid grid-cols-7 gap-2" aria-hidden="true">
         {WEEKDAY_INITIALS.map((label, i) => (
           <span
             key={i}
@@ -87,7 +87,7 @@ export default function HistoryCalendarGrid({ days, today }: Props) {
           </span>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1.5">
+      <div className="grid grid-cols-7 gap-2">
         {days.map((day) => (
           <DayCell key={day.date} day={day} isToday={day.date === today} />
         ))}

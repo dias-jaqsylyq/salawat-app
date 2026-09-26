@@ -92,7 +92,7 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
               disabled={!selectable}
               onClick={() => onSelect(date)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                "flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                 isSelected
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"

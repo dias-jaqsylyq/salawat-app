@@ -30,7 +30,7 @@ export default function NoRoomScreen({ nickname, onRefresh }: Props) {
       <p className="mt-2 max-w-sm text-footnote text-muted-foreground">
         Daily reminders stay paused while you're between rooms.
       </p>
-      <Button type="button" variant="outline" onClick={onRefresh} className="mt-5">
+      <Button type="button" variant="outline" onClick={onRefresh} className="mt-6">
         <RefreshCw className="h-4 w-4" />
         I've joined — refresh
       </Button>

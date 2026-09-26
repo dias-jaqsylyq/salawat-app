@@ -43,7 +43,7 @@ export default function VirtueReminder() {
       <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
         Today&apos;s reminder
       </p>
-      <section className="relative space-y-3 rounded-lg bg-secondary/30 px-4 py-5 text-center">
+      <section className="relative space-y-3 rounded-lg bg-secondary/30 px-4 py-6 text-center">
         <Button
           type="button"
           variant="ghost"

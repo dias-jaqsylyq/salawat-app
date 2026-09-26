@@ -330,7 +330,7 @@ export default function SettingsScreen({
                   <h3 className="text-body font-semibold text-foreground">Room</h3>
                   {room ? (
                     <>
-                      <div className="flex items-center gap-3 rounded-lg bg-secondary/40 px-3 py-2.5">
+                      <div className="flex items-center gap-3 rounded-lg bg-secondary/40 px-3 py-3">
                         <Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                         <div className="min-w-0">
                           <p className="truncate text-body font-semibold text-foreground">{room.name}</p>

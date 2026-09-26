@@ -16,7 +16,7 @@ Card.displayName = "Card";
 
 const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} data-slot="card-header" className={cn("flex flex-col gap-1.5 p-6", className)} {...props} />
+    <div ref={ref} data-slot="card-header" className={cn("flex flex-col gap-2 p-6", className)} {...props} />
   )
 );
 CardHeader.displayName = "CardHeader";
