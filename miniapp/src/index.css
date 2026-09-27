@@ -194,6 +194,36 @@
   /* The only font sizes are the five type roles (@utility text-*) — the default scale is removed */
   --text-*: initial;
 
+  /* Pair with motion-safe: so reduced motion keeps the element still */
+  --animate-shake: shake 0.4s ease-in-out;
+  --animate-pop: pop 0.45s ease-out;
+}
+
+/* A rolled-back toggle: a quick left-right wobble */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+/* A day just completed: one soft swell */
+@keyframes pop {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.03);
+  }
 }
 
 /*
