@@ -1795,6 +1795,33 @@ export function getPersonalHabitLogDatesInRange(
 }
 
 /**
+ * Every day in [fromDate, toDate] on which this member marked anything in this
+ * room — a room habit or one of their own — sorted ascending. Feeds the Log
+ * screen's day picker, which dots a day that has any mark on it; which habit
+ * it was does not matter there.
+ */
+export function getLoggedDatesInRange(
+  userId: number,
+  roomId: number,
+  fromDate: string,
+  toDate: string
+): string[] {
+  const rows = db
+    .prepare(
+      `SELECT log_date FROM habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date >= ? AND log_date <= ?
+       UNION
+       SELECT log_date FROM personal_habit_logs
+       WHERE user_id = ? AND room_id = ? AND log_date >= ? AND log_date <= ?
+       ORDER BY log_date ASC`
+    )
+    .all(userId, roomId, fromDate, toDate, userId, roomId, fromDate, toDate) as {
+    log_date: string;
+  }[];
+  return rows.map((row) => row.log_date);
+}
+
+/**
  * Rank one room's members (or, with no roomId, everyone) by all-time points.
  *
  * Scoping a room filters on both sides: only its current members are listed,

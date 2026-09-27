@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { messageForApiError } from "../api/errors.ts";
+import type { ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 
 interface Props {
   name: string;
@@ -37,7 +38,21 @@ interface Props {
    * not-yet-created.
    */
   inactive?: boolean;
-  onToggle: (checked: boolean) => Promise<void>;
+  /** Shown beside the name, e.g. a personal habit's category. */
+  badge?: ReactNode;
+  /** Why the last toggle was rolled back; cleared by the next one. */
+  error?: string | null;
+  /**
+   * Bumped on each rollback: a new value replays the switch's shake once.
+   * 0 (the default) never shakes.
+   */
+  shakeKey?: number;
+  /**
+   * Fired the moment the switch flips. The row never waits on the request:
+   * `logged` is already the optimistic value, and the caller rolls it back
+   * (with `error` and a new `shakeKey`) if the server refuses.
+   */
+  onToggle: (checked: boolean) => void;
 }
 
 /**
@@ -50,6 +65,9 @@ interface Props {
  * differs is the payout, which happens once a week — so the row carries a
  * "once a week" badge and, once the week is banked, says so. Without that line
  * a second tick later in the week would look like it silently failed to score.
+ *
+ * Purely presentational: the Log screen owns the optimistic state, so the row
+ * stays tappable while a save is still in flight.
  */
 export function BinaryHabitRow({
   name,
@@ -60,24 +78,11 @@ export function BinaryHabitRow({
   logged,
   disabled,
   inactive,
+  badge,
+  error,
+  shakeKey = 0,
   onToggle,
 }: Props) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleToggle(checked: boolean) {
-    if (saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await onToggle(checked);
-    } catch (err) {
-      setError(messageForApiError(err, "Couldn't update that — please try again."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <div className="space-y-2 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
@@ -85,10 +90,11 @@ export function BinaryHabitRow({
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <p className="text-body font-semibold text-foreground">{name}</p>
             {weekly && (
-              <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-caption font-semibold text-secondary-foreground">
+              <Badge variant="brand" size="sm">
                 Once a week
-              </span>
+              </Badge>
             )}
+            {badge}
           </div>
           {description && (
             <p className="mt-1 text-footnote text-muted-foreground">{description}</p>
@@ -107,13 +113,21 @@ export function BinaryHabitRow({
             </p>
           )}
         </div>
-        <Switch
-          checked={logged}
-          disabled={saving || disabled || inactive}
-          onCheckedChange={(checked) => void handleToggle(checked)}
-        />
+        {/* Keyed so each rollback remounts the wrapper and replays the shake. */}
+        <span key={shakeKey} className={cn("inline-flex", shakeKey > 0 && "motion-safe:animate-shake")}>
+          <Switch
+            checked={logged}
+            aria-label={name}
+            disabled={disabled || inactive}
+            onCheckedChange={onToggle}
+          />
+        </span>
       </div>
-      {error && <p className="text-body text-destructive">{error}</p>}
+      {error && (
+        <p role="alert" className="text-footnote text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

@@ -206,6 +206,11 @@ export interface HabitLogWindowResponse {
   minDate: string;
   maxDate: string;
   habits: HabitLogWindowEntry[];
+  /**
+   * Every day of [minDate, maxDate] carrying any mark — room habit or
+   * personal — ascending. The day picker dots these.
+   */
+  markedDates: string[];
 }
 
 export interface HabitStreak {

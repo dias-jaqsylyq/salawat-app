@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import { backfillWeekView, dayForWeekStep } from "../lib/backfillWeeks.ts";
+import { hapticSelection } from "../lib/haptics.ts";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   /** The caller's own today — the window's upper bound, and its default selection. */
   today: string;
   selected: string;
+  /** Days with at least one mark — each gets a dot under its number. */
+  markedDates: ReadonlySet<string>;
   onSelect: (date: string) => void;
 }
 
@@ -38,18 +41,28 @@ const ARROW_CLASS =
  * Days outside [minDate, today] stay in the row, inert, so the week always
  * reads as a whole Monday-Sunday.
  *
+ * Each day is its number in a circle — filled primary when selected, primary
+ * text for today otherwise — with a dot underneath once anything is marked on
+ * it, so a gap in the week shows before opening the day.
+ *
  * Renders nothing when there is only one day to show across the whole window
  * (a brand-new member on the day they joined, say): a single-day picker has
  * nothing to switch between.
  */
-export default function WeekDayPicker({ minDate, today, selected, onSelect }: Props) {
+export default function WeekDayPicker({ minDate, today, selected, markedDates, onSelect }: Props) {
   if (minDate >= today) return null;
 
   const view = backfillWeekView(minDate, today, selected);
 
+  function select(date: string) {
+    if (date === selected) return;
+    hapticSelection();
+    onSelect(date);
+  }
+
   function step(weeks: number) {
     const day = dayForWeekStep(minDate, today, selected, weeks);
-    if (day !== null) onSelect(day);
+    if (day !== null) select(day);
   }
 
   return (
@@ -77,30 +90,40 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
           <Icon icon={ChevronRight} />
         </button>
       </div>
-      <div
-        role="tablist"
-        aria-label={view.label}
-        className="flex gap-1 rounded-xl bg-surface-2 p-1"
-      >
+      <div role="tablist" aria-label={view.label} className="flex">
         {view.days.map(({ date, selectable }) => {
           const isSelected = date === selected;
+          const isToday = date === today;
+          const marked = markedDates.has(date);
           return (
             <button
               key={date}
               type="button"
               role="tab"
               aria-selected={isSelected}
+              aria-label={`${weekdayLabel(date)} ${dayOfMonth(date)}${marked ? ", marked" : ""}`}
               disabled={!selectable}
-              onClick={() => onSelect(date)}
-              className={cn(
-                "flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
-                isSelected
-                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-              )}
+              onClick={() => select(date)}
+              className="group flex flex-1 flex-col items-center gap-1 rounded-lg py-1 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
             >
-              <span>{weekdayLabel(date)}</span>
-              <span className="numeric text-caption">{dayOfMonth(date)}</span>
+              <span className="text-caption font-semibold text-muted-foreground">{weekdayLabel(date)}</span>
+              <span
+                className={cn(
+                  "numeric flex size-9 items-center justify-center rounded-full text-body font-semibold transition duration-100 group-active:scale-[0.97] group-focus-visible:ring-2 group-focus-visible:ring-ring",
+                  isSelected
+                    ? "bg-primary text-primary-foreground"
+                    : cn(
+                        "group-hover:bg-fill group-active:bg-fill-pressed",
+                        isToday ? "text-primary" : "text-foreground"
+                      )
+                )}
+              >
+                {dayOfMonth(date)}
+              </span>
+              <span
+                aria-hidden="true"
+                className={cn("size-1 rounded-full", marked ? "bg-primary" : "bg-transparent")}
+              />
             </button>
           );
         })}

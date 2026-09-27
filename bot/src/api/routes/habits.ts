@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { HABIT_LOG_RATE_LIMIT_PER_MINUTE } from "../../config.js";
 import {
   deleteHabitLog,
+  getLoggedDatesInRange,
   getUserHabitLogsForDate,
   listHabits,
   upsertHabitLog,
@@ -69,6 +70,10 @@ export function listHabitsRoute(req: Request, res: Response): void {
  *
  * Every entry carries the habit's own display fields, so the Log screen can
  * render a retired habit that GET /api/habits (active only) no longer lists.
+ *
+ * `markedDates` lists every day of the whole window (not just `date`) that
+ * carries any mark — room habit or personal, this room only — so the day
+ * picker can dot them without one request per day.
  */
 export function habitLogWindowRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
@@ -139,6 +144,12 @@ export function habitLogWindowRoute(req: Request, res: Response): void {
     minDate: screenWindow.minDate,
     maxDate: screenWindow.maxDate,
     habits,
+    markedDates: getLoggedDatesInRange(
+      caller.user.id,
+      caller.roomId,
+      screenWindow.minDate,
+      screenWindow.maxDate
+    ),
   });
 }
 

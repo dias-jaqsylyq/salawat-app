@@ -8,6 +8,7 @@ process.env.DB_PATH ??= ":memory:";
 
 const {
   createHabit,
+  createPersonalHabit,
   createRoom,
   createUser,
   getHabitStreak,
@@ -15,6 +16,7 @@ const {
   getUserTotalPoints,
   setUserCurrentRoom,
   updateHabit,
+  upsertPersonalHabitLog,
 } = await import("../../db/repository.js");
 const { deleteHabitLogRoute, habitLogWindowRoute, listHabitsRoute, logHabitRoute } = await import(
   "./habits.js"
@@ -619,5 +621,33 @@ describe("GET /api/habits/log", () => {
     const { status, body } = callLogWindow(999_999_999);
     assert.equal(status, 403);
     assert.equal(body.error, "not_registered");
+  });
+
+  it("lists every marked day of the window in markedDates, room and personal alike", () => {
+    const telegramId = makeBackfillableUser();
+    const user = getUserByTelegramId(telegramId)!;
+    const habit = makeBackfillableHabit("Marked dates, room", 2);
+    const personal = createPersonalHabit(user.id, room.id, "Marked dates, mine", null);
+
+    assert.deepEqual(callLogWindow(telegramId).body.markedDates, []);
+
+    callLog(telegramId, habit.id, {}, TWO_WEEKS_AGO);
+    upsertPersonalHabitLog(personal.id, 1, LAST_WEEK);
+    // Both kinds on the same day still read as one marked day.
+    callLog(telegramId, habit.id, {}, today);
+    upsertPersonalHabitLog(personal.id, 1, today);
+
+    // The same list whichever day is being viewed — it describes the window.
+    for (const date of [undefined, TWO_WEEKS_AGO]) {
+      assert.deepEqual(callLogWindow(telegramId, date).body.markedDates, [
+        TWO_WEEKS_AGO,
+        LAST_WEEK,
+        today,
+      ]);
+    }
+
+    // Unmarking the day's only mark drops it from the list.
+    callDeleteLog(telegramId, habit.id, TWO_WEEKS_AGO);
+    assert.deepEqual(callLogWindow(telegramId).body.markedDates, [LAST_WEEK, today]);
   });
 });
