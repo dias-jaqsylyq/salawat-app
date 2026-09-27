@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { HistoryDay } from "../api/types.ts";
 import { cn } from "@/lib/utils";
 
@@ -51,17 +52,17 @@ function DayCell({ day, isToday }: { day: HistoryDay; isToday: boolean }) {
       aria-label={cellLabel(day, isToday)}
       title={cellLabel(day, isToday)}
       className={cn(
-        "flex aspect-square items-center justify-center rounded-lg border text-[11px] font-medium tabular-nums transition-colors",
+        "flex aspect-square items-center justify-center rounded-lg border text-caption font-semibold numeric transition-colors",
         day.logged && !day.outOfMonth && "border-accent/40 bg-accent/15 text-accent",
-        !day.logged && inactive && "border-dashed border-border/50 bg-muted/20 text-muted-foreground/30",
-        !day.logged && !inactive && "border-border bg-muted/40 text-foreground/70",
+        !day.logged && inactive && "border-dashed border-border/50 bg-surface-2 text-quaternary",
+        !day.logged && !inactive && "border-border bg-surface-2 text-muted-foreground",
         // Today is marked independent of its own status — even locked, future
         // or unlogged, it still gets the ring.
         isToday && "ring-2 ring-primary ring-offset-1 ring-offset-background"
       )}
     >
       {day.logged && !day.outOfMonth ? (
-        <Flame className="h-4 w-4" fill="currentColor" strokeWidth={2} aria-hidden="true" />
+        <Icon icon={Flame} filled />
       ) : (
         dayOfMonth(day.date)
       )}
@@ -76,18 +77,18 @@ function DayCell({ day, isToday }: { day: HistoryDay; isToday: boolean }) {
  */
 export default function HistoryCalendarGrid({ days, today }: Props) {
   return (
-    <div className="space-y-1.5">
-      <div className="grid grid-cols-7 gap-1.5" aria-hidden="true">
+    <div className="space-y-2">
+      <div className="grid grid-cols-7 gap-2" aria-hidden="true">
         {WEEKDAY_INITIALS.map((label, i) => (
           <span
             key={i}
-            className="text-center text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+            className="text-center text-caption font-semibold uppercase tracking-wide text-muted-foreground"
           >
             {label}
           </span>
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1.5">
+      <div className="grid grid-cols-7 gap-2">
         {days.map((day) => (
           <DayCell key={day.date} day={day} isToday={day.date === today} />
         ))}

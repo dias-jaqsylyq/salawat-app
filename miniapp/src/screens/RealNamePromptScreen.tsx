@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Moon } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { patchProfile } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import {
@@ -56,7 +57,7 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
         <form onSubmit={handleSubmit}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Moon className="h-5 w-5 text-primary" aria-hidden="true" />
+              <Icon icon={Moon} size="md" className="text-primary" />
               Add your full name
             </CardTitle>
             <CardDescription>
@@ -66,10 +67,10 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
 
           <CardContent className="space-y-4">
             <div className="space-y-1">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
                 Your nickname
               </p>
-              <p className="text-sm font-medium text-foreground">{nickname}</p>
+              <p className="text-body font-semibold text-foreground">{nickname}</p>
             </div>
 
             <div className="space-y-2">
@@ -83,12 +84,12 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
                 autoComplete="name"
                 placeholder="e.g. Ali Nurlanov"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-footnote text-muted-foreground">
                 Only the challenge admin can see this. Other participants see your nickname.
               </p>
             </div>
 
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p className="text-body text-destructive">{error}</p>}
           </CardContent>
 
           <CardFooter>

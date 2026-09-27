@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import {
   createPersonalHabit,
   deletePersonalHabit,
@@ -115,7 +116,7 @@ function HabitForm({
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-destructive">
           {error}
         </p>
       )}
@@ -264,14 +265,14 @@ export default function PersonalHabits({
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between px-1">
-        <h3 className="text-sm font-semibold text-foreground">My Habits</h3>
-        <span className="text-xs text-muted-foreground">Private · no points</span>
+        <h3 className="text-body font-semibold text-foreground">My Habits</h3>
+        <span className="text-footnote text-muted-foreground">Private · no points</span>
       </div>
 
       <Card>
         <CardContent className="divide-y p-0">
           {habits.length === 0 && !adding && (
-            <p className="px-4 py-3 text-sm text-muted-foreground">
+            <p className="px-4 py-3 text-footnote text-muted-foreground">
               Nothing here yet. Add a habit only you can see.
             </p>
           )}
@@ -303,11 +304,7 @@ export default function PersonalHabits({
                 />
                 <div className="flex items-center justify-between gap-2 px-4 pb-3">
                   {categoriesEnabled && habit.category ? (
-                    <Badge variant="outline" className="gap-1">
-                      {(() => {
-                        const Icon = CATEGORY_META[habit.category].icon;
-                        return <Icon className="h-3 w-3" aria-hidden="true" />;
-                      })()}
+                    <Badge icon={CATEGORY_META[habit.category].icon}>
                       {habit.category}
                     </Badge>
                   ) : (
@@ -325,7 +322,7 @@ export default function PersonalHabits({
                         setEditingId(habit.id);
                       }}
                     >
-                      <Pencil className="h-3.5 w-3.5" />
+                      <Icon icon={Pencil} />
                     </Button>
                     <Button
                       type="button"
@@ -336,7 +333,7 @@ export default function PersonalHabits({
                       disabled={busy}
                       onClick={() => void handleDelete(habit)}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Icon icon={Trash2} />
                     </Button>
                   </span>
                 </div>
@@ -363,7 +360,7 @@ export default function PersonalHabits({
       </Card>
 
       {rowError && (
-        <p role="alert" className="px-1 text-sm text-destructive">
+        <p role="alert" className="px-1 text-body text-destructive">
           {rowError}
         </p>
       )}
@@ -379,7 +376,7 @@ export default function PersonalHabits({
             setAdding(true);
           }}
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Icon icon={Plus} />
           Add habit
         </Button>
       )}

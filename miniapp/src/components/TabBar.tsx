@@ -1,4 +1,5 @@
 import { ChartColumn, Plus, Shield, Trophy, type LucideIcon } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export type Tab = "progress" | "log" | "leaderboard" | "admin";
@@ -29,7 +30,7 @@ export default function TabBar({
   return (
     <nav className="fixed inset-x-0 bottom-0 flex border-t bg-card pb-[env(safe-area-inset-bottom)]">
       {visibleTabs.map((tab) => {
-        const Icon = tab.icon;
+        const glyph = tab.icon;
         const isActive = activeTab === tab.id;
         return (
           <button
@@ -38,12 +39,12 @@ export default function TabBar({
             disabled={disabled}
             onClick={() => onChange(tab.id)}
             className={cn(
-              "flex flex-1 flex-col items-center gap-0.5 py-2 text-xs font-medium transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
+              "flex flex-1 flex-col items-center gap-1 py-2 text-caption font-semibold transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
               isActive ? "text-primary" : "text-muted-foreground",
               disabled && "pointer-events-none opacity-60"
             )}
           >
-            <Icon className="h-5 w-5" aria-hidden="true" />
+            <Icon icon={glyph} size="md" />
             {tab.label}
           </button>
         );

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, MoonStar, Settings, Users } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { getProgressWeek } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type {
@@ -102,7 +103,7 @@ export default function ProgressScreen({
       <Card>
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
-            <CardTitle className="text-2xl font-bold tracking-tight">Progress</CardTitle>
+            <CardTitle className="text-title">Progress</CardTitle>
             <div className="-mr-2 -mt-1 flex items-center gap-1">
               <Button
                 type="button"
@@ -111,7 +112,7 @@ export default function ProgressScreen({
                 onClick={onOpenHistory}
                 aria-label="Open history"
               >
-                <CalendarDays className="h-5 w-5" />
+                <Icon icon={CalendarDays} size="md" />
               </Button>
               <Button
                 type="button"
@@ -120,19 +121,19 @@ export default function ProgressScreen({
                 onClick={onOpenSettings}
                 aria-label="Open settings"
               >
-                <Settings className="h-5 w-5" />
+                <Icon icon={Settings} size="md" />
               </Button>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-accent/10 px-2.5 py-1 text-xs font-medium text-[#854d0e] dark:bg-accent/15 dark:text-[#e6bf6a]">
-              <MoonStar className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="inline-flex w-fit items-center gap-2 rounded-full bg-accent-soft px-3 py-1 text-footnote font-semibold text-accent-soft-foreground">
+              <Icon icon={MoonStar} />
               {hijriLabel}
             </span>
             {/* Which room these points belong to (PRD §3a). */}
             {room && (
-              <span className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground">
-                <Users className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span className="inline-flex w-fit max-w-full items-center gap-2 rounded-full bg-secondary px-3 py-1 text-footnote font-semibold text-secondary-foreground">
+                <Icon icon={Users} />
                 <span className="truncate">{room.name}</span>
               </span>
             )}
@@ -147,36 +148,36 @@ export default function ProgressScreen({
             group total anywhere in the app.
           */}
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg bg-secondary/40 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="rounded-lg bg-surface-2 px-4 py-3">
+              <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                 Today
               </p>
-              <p className="text-xl font-semibold tabular-nums text-foreground">
+              <p className="text-title numeric font-bold text-foreground">
                 {todayPoints.toLocaleString()}
               </p>
             </div>
-            <div className="rounded-lg bg-secondary/40 px-4 py-3">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="rounded-lg bg-surface-2 px-4 py-3">
+              <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
                 All-time
               </p>
-              <p className="text-xl font-semibold tabular-nums text-foreground">
+              <p className="text-title numeric font-bold text-foreground">
                 {totalPoints.toLocaleString()}
               </p>
             </div>
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium text-foreground">Streaks</p>
+            <p className="text-body font-semibold text-foreground">Streaks</p>
             {streakDisplay === "weekly" ? (
               weekError ? (
-                <p className="text-sm text-destructive">{weekError}</p>
+                <p className="text-body text-destructive">{weekError}</p>
               ) : week ? (
                 <WeeklyStreakGrid week={week} />
               ) : (
-                <p className="text-sm text-muted-foreground">Loading…</p>
+                <p className="text-footnote text-muted-foreground">Loading…</p>
               )
             ) : allStreaks.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No habits yet.</p>
+              <p className="text-footnote text-muted-foreground">No habits yet.</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 {allStreaks.map((s) => (

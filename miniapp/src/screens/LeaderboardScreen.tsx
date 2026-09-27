@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Download, Pencil, RefreshCw, Trophy } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { downloadAdminExport, getAdminLeaderboard, getLeaderboard } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import { adminLeaderboardToMembers } from "../api/leaderboardAdapters.ts";
@@ -137,11 +138,11 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
-            <Trophy className="h-5 w-5 text-accent" aria-hidden="true" />
+          <h2 className="flex items-center gap-2 text-title text-foreground">
+            <Icon icon={Trophy} size="md" className="text-accent" />
             Leaderboard
           </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="mt-1 text-footnote text-muted-foreground">
             {effectivePeriod === "weekly"
               ? week
                 ? `This week · ${weekRange(week.start, week.end)}`
@@ -151,7 +152,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
         </div>
 
         {isAdmin && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="ghost"
@@ -160,7 +161,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               disabled={loading}
               onClick={load}
             >
-              <RefreshCw className="h-4 w-4" />
+              <Icon icon={RefreshCw} />
             </Button>
             {/* All-time only: the export is for prizes and moderation, which
                 are about the whole run — offering it beside a weekly board
@@ -173,7 +174,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
                 disabled={downloading}
                 onClick={() => void downloadCsv()}
               >
-                <Download className="h-3.5 w-3.5" />
+                <Icon icon={Download} />
                 {downloading ? "…" : "CSV"}
               </Button>
             )}
@@ -185,7 +186,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               size="sm"
               onClick={() => setEditing((wasEditing) => !wasEditing)}
             >
-              {editing ? <Check className="h-3.5 w-3.5" /> : <Pencil className="h-3.5 w-3.5" />}
+              {editing ? <Icon icon={Check} /> : <Icon icon={Pencil} />}
               {editing ? "Done" : "Edit"}
             </Button>
           </div>
@@ -196,7 +197,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
         <div
           role="tablist"
           aria-label="Leaderboard period"
-          className="grid grid-cols-2 gap-1 rounded-xl bg-secondary/60 p-1"
+          className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1"
         >
           {(
             [
@@ -211,9 +212,9 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
               aria-selected={period === option.id}
               onClick={() => setPeriod(option.id)}
               className={cn(
-                "min-h-9 rounded-lg px-3 text-sm font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "min-h-9 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 period === option.id
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
@@ -225,21 +226,21 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
 
       {error && (
         <div className="space-y-2">
-          <p className="text-sm text-destructive">{error}</p>
+          <p className="text-body text-destructive">{error}</p>
           <Button type="button" variant="secondary" size="sm" onClick={load}>
             Retry
           </Button>
         </div>
       )}
 
-      {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {loading && <p className="text-footnote text-muted-foreground">Loading…</p>}
 
       {!loading && !error && entries !== null && entries.length === 0 && (
-        <p className="text-sm text-muted-foreground">No one's registered yet.</p>
+        <p className="text-footnote text-muted-foreground">No one's registered yet.</p>
       )}
 
       {!loading && !error && entries !== null && entries.length > 0 && !isAdmin && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-footnote text-muted-foreground">
           Everyone's place is shown; only your own points are. Resets every Monday.
         </p>
       )}

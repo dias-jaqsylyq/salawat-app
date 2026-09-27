@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Check, Copy, KeyRound, RotateCw, Share2 } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { patchAdminRoom, setRoomPassword } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminRoomResponse } from "../api/types.ts";
@@ -65,7 +66,7 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       onClick={() => void handleCopy()}
       aria-label={label}
     >
-      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+      {copied ? <Icon icon={Check} /> : <Icon icon={Copy} />}
       {copied ? "Copied" : "Copy"}
     </Button>
   );
@@ -83,7 +84,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
     return (
       <Card>
         <CardContent className="py-6">
-          <p className="text-sm text-muted-foreground">Loading room…</p>
+          <p className="text-footnote text-muted-foreground">Loading room…</p>
         </CardContent>
       </Card>
     );
@@ -93,7 +94,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
     return (
       <Card>
         <CardContent className="py-6">
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-body text-destructive">
             {error ?? "Couldn't load this room."}
           </p>
         </CardContent>
@@ -188,8 +189,8 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <KeyRound className="h-4 w-4" aria-hidden="true" />
+          <CardTitle className="flex items-center gap-2">
+            <Icon icon={KeyRound} />
             Room password
           </CardTitle>
           <CardDescription>
@@ -198,8 +199,8 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-2 rounded-lg border bg-secondary/30 px-3 py-2.5">
-            <code className="min-w-0 flex-1 break-all font-mono text-sm text-foreground">
+          <div className="flex items-center gap-2 rounded-lg border bg-surface-2 px-3 py-3">
+            <code className="min-w-0 flex-1 break-all font-mono text-body text-foreground">
               {room.password}
             </code>
             <CopyButton value={room.password} label="Copy room password" />
@@ -212,7 +213,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
             onClick={() => void handleRegenerate()}
             disabled={savingPassword}
           >
-            <RotateCw className="h-4 w-4" />
+            <Icon icon={RotateCw} />
             {savingPassword ? "Working…" : "Generate a new password"}
           </Button>
 
@@ -234,19 +235,19 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
                 Set
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-footnote text-muted-foreground">
               {MIN_PASSWORD_LENGTH}–{MAX_PASSWORD_LENGTH} characters, letters/digits/-/_ only.
               Case-sensitive.
             </p>
           </form>
 
           {passwordError && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-body text-destructive">
               {passwordError}
             </p>
           )}
           {notice && (
-            <p aria-live="polite" className="text-sm text-primary">
+            <p aria-live="polite" className="text-body text-primary">
               {notice}
             </p>
           )}
@@ -255,8 +256,8 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Share2 className="h-4 w-4" aria-hidden="true" />
+          <CardTitle className="flex items-center gap-2">
+            <Icon icon={Share2} />
             Invite link
           </CardTitle>
           <CardDescription>
@@ -266,19 +267,19 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
         <CardContent className="space-y-3">
           {room.inviteLink ? (
             <>
-              <div className="flex items-center gap-2 rounded-lg border bg-secondary/30 px-3 py-2.5">
-                <span className="min-w-0 flex-1 break-all font-mono text-xs text-foreground">
+              <div className="flex items-center gap-2 rounded-lg border bg-surface-2 px-3 py-3">
+                <span className="min-w-0 flex-1 break-all font-mono text-footnote text-foreground">
                   {room.inviteLink}
                 </span>
                 <CopyButton value={room.inviteLink} label="Copy invite link" />
               </div>
               <Button type="button" className="min-h-11 w-full" onClick={handleShare}>
-                <Share2 className="h-4 w-4" />
+                <Icon icon={Share2} />
                 Share link
               </Button>
             </>
           ) : (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-footnote text-muted-foreground">
               The bot hasn't reported its username yet, so there's no link to share. The
               password above still works — participants can enter it after /start.
             </p>
@@ -288,7 +289,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Habit categories</CardTitle>
+          <CardTitle>Habit categories</CardTitle>
           <CardDescription>
             Group habits under IQ, SQ, PQ and EQ instead of showing one flat list.
           </CardDescription>
@@ -305,12 +306,12 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
               onCheckedChange={(checked) => void handleToggleCategories(checked)}
             />
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-footnote text-muted-foreground">
             Turning this on doesn't restore categories habits had before — set each habit's
             category again in the Habits tab. Turning it off keeps them stored, just unused.
           </p>
           {categoriesError && (
-            <p role="alert" className="text-sm text-destructive">
+            <p role="alert" className="text-body text-destructive">
               {categoriesError}
             </p>
           )}

@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import type { WeekDay, WeeklyHabitSummary, WeeklyProgressResponse } from "../api/types.ts";
 import { cn } from "@/lib/utils";
 
@@ -68,24 +69,19 @@ function DayCell({
       className={cn(
         "flex aspect-square items-center justify-center rounded-lg border transition-colors",
         day.logged && "border-accent/40 bg-accent/15",
-        !day.logged && inactive && "border-dashed border-border/60 bg-muted/30",
-        !day.logged && !inactive && "border-border bg-muted/40",
+        !day.logged && inactive && "border-dashed border-border/60 bg-surface-2",
+        !day.logged && !inactive && "border-border bg-surface-2",
         // Today is marked, not made tappable.
         isToday && "ring-2 ring-primary ring-offset-1 ring-offset-background"
       )}
     >
       {day.logged ? (
-        <Flame
-          className="h-4 w-4 text-accent"
-          fill="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        />
+        <Icon icon={Flame} filled className="text-accent" />
       ) : (
         <span
           className={cn(
             "h-1.5 w-1.5 rounded-full",
-            inactive ? "bg-muted-foreground/25" : "bg-muted-foreground/40"
+            inactive ? "bg-surface-3" : "bg-quaternary"
           )}
           aria-hidden="true"
         />
@@ -127,8 +123,8 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-xl border px-3 py-2.5",
-        habit.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-muted/30"
+        "flex items-center gap-3 rounded-xl border px-3 py-3",
+        habit.met ? "border-accent/40 bg-accent/10" : "border-dashed border-border/70 bg-surface-2"
       )}
       aria-label={label}
       title={label}
@@ -136,18 +132,18 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
       <div
         className={cn(
           "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-          habit.met ? "bg-accent/20" : "bg-muted/50"
+          habit.met ? "bg-accent/20" : "bg-surface-3"
         )}
       >
         {habit.met ? (
-          <span className="text-sm font-bold tabular-nums text-accent">{habit.count}</span>
+          <span className="text-body numeric font-semibold text-accent">{habit.count}</span>
         ) : (
-          <Flame className="h-4 w-4 text-muted-foreground/50" strokeWidth={1.5} aria-hidden="true" />
+          <Icon icon={Flame} className="text-quaternary" />
         )}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-medium text-foreground/80">{habit.name}</p>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="truncate text-footnote font-semibold text-foreground">{habit.name}</p>
+        <p className="text-caption text-muted-foreground">
           {habit.met
             ? `${habit.count}× this week`
             : "Not yet this week"}
@@ -173,7 +169,7 @@ function WeeklyHabitBadge({ habit, range }: { habit: WeeklyHabitSummary; range: 
  */
 export default function WeeklyStreakGrid({ week }: Props) {
   if (week.habits.length === 0 && week.weeklyHabits.length === 0) {
-    return <p className="text-sm text-muted-foreground">No habits yet.</p>;
+    return <p className="text-footnote text-muted-foreground">No habits yet.</p>;
   }
 
   const range = weekRange(week.weekStart, week.weekEnd);
@@ -181,12 +177,12 @@ export default function WeeklyStreakGrid({ week }: Props) {
   return (
     <div className="space-y-3">
       {week.habits.length > 0 && (
-        <div className="grid grid-cols-7 gap-1.5" aria-hidden="true">
+        <div className="grid grid-cols-7 gap-2" aria-hidden="true">
           {week.days.map((date) => (
             <span
               key={date}
               className={cn(
-                "text-center text-[11px] font-medium uppercase tracking-wide",
+                "text-center text-caption font-semibold uppercase tracking-wide",
                 date === week.today ? "text-foreground" : "text-muted-foreground"
               )}
             >
@@ -200,9 +196,9 @@ export default function WeeklyStreakGrid({ week }: Props) {
         // Room and personal habits come from different tables, so their ids can
         // collide — the kind has to be part of the key even though the two rows
         // are drawn identically.
-        <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-1.5">
-          <p className="truncate text-xs font-medium text-foreground/80">{habit.name}</p>
-          <div className="grid grid-cols-7 gap-1.5">
+        <div key={`${habit.personal ? "p" : "r"}-${habit.habitId}`} className="space-y-2">
+          <p className="truncate text-footnote font-semibold text-foreground">{habit.name}</p>
+          <div className="grid grid-cols-7 gap-2">
             {habit.days.map((day) => (
               <DayCell
                 key={day.date}
@@ -217,7 +213,7 @@ export default function WeeklyStreakGrid({ week }: Props) {
 
       {week.weeklyHabits.length > 0 && (
         <div className="space-y-2 pt-1">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <p className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
             Once a week · {range}
           </p>
           {week.weeklyHabits.map((habit) => (

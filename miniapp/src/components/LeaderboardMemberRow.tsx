@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ShieldCheck, UserMinus } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { kickParticipant, promoteParticipant } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { LeaderboardMember } from "../api/types.ts";
@@ -21,17 +22,17 @@ interface Props {
   onChanged: () => void;
 }
 
-function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "outline" {
+function rankBadgeVariant(rank: number): "gold" | "silver" | "bronze" | "neutral" {
   if (rank === 1) return "gold";
   if (rank === 2) return "silver";
   if (rank === 3) return "bronze";
-  return "outline";
+  return "neutral";
 }
 
 function rankRowTint(rank: number): string {
-  if (rank === 1) return "bg-amber-50/80 dark:bg-amber-950/30";
-  if (rank === 2) return "bg-slate-100/80 dark:bg-slate-800/40";
-  if (rank === 3) return "bg-orange-50/80 dark:bg-orange-950/25";
+  if (rank === 1) return "bg-medal-gold-soft";
+  if (rank === 2) return "bg-medal-silver-soft";
+  if (rank === 3) return "bg-medal-bronze-soft";
   return "";
 }
 
@@ -108,27 +109,26 @@ export default function LeaderboardMemberRow({
       )}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="flex min-w-0 items-center gap-3 text-sm font-medium text-foreground">
+        <span className="flex min-w-0 items-center gap-3 text-body font-semibold text-foreground">
           <Badge variant={rankBadgeVariant(entry.rank)} className="w-7 shrink-0 justify-center">
             {entry.rank}
           </Badge>
           <span className="flex min-w-0 flex-col">
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-2">
               <span className="truncate">
                 {entry.nickname}
                 {entry.isYou ? " (You)" : ""}
               </span>
               {entry.isRoomAdmin && (
-                <Badge variant="outline" className="shrink-0 gap-1">
-                  <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                <Badge size="sm" icon={ShieldCheck} className="shrink-0">
                   Admin
                 </Badge>
               )}
             </span>
             {isAdmin && realName && (
-              <span className="truncate text-xs font-normal text-muted-foreground">{realName}</span>
+              <span className="truncate text-footnote font-normal text-muted-foreground">{realName}</span>
             )}
-            {tied && <span className="text-xs font-normal text-muted-foreground">tied</span>}
+            {tied && <span className="text-footnote font-normal text-muted-foreground">tied</span>}
           </span>
         </span>
         {/* A member sees no figure for anyone but themselves, so there is
@@ -136,13 +136,13 @@ export default function LeaderboardMemberRow({
             someone else's week that the server never made. */}
         {entry.points === undefined ? (
           <span
-            className="shrink-0 text-sm text-muted-foreground/50"
+            className="shrink-0 text-footnote text-quaternary"
             aria-label="Points hidden"
           >
             —
           </span>
         ) : (
-          <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-footnote numeric text-muted-foreground">
             {entry.points.toLocaleString()}
           </span>
         )}
@@ -152,7 +152,7 @@ export default function LeaderboardMemberRow({
         <div className={cn("mt-2 flex flex-wrap gap-2", busy && "opacity-60")}>
           {!entry.isRoomAdmin && (
             <Button type="button" variant="outline" size="sm" disabled={busy} onClick={handlePromote}>
-              <ShieldCheck className="h-3.5 w-3.5" />
+              <Icon icon={ShieldCheck} />
               Make co-admin
             </Button>
           )}
@@ -166,7 +166,7 @@ export default function LeaderboardMemberRow({
               disabled={busy}
               onClick={() => void handleKick()}
             >
-              <UserMinus className="h-3.5 w-3.5" />
+              <Icon icon={UserMinus} />
               Kick
             </Button>
           )}
@@ -174,7 +174,7 @@ export default function LeaderboardMemberRow({
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        <p role="alert" className="mt-2 text-body text-destructive">
           {error}
         </p>
       )}

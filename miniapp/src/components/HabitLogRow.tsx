@@ -79,22 +79,22 @@ export function BinaryHabitRow({
   }
 
   return (
-    <div className="space-y-1.5 px-4 py-3">
+    <div className="space-y-2 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="text-sm font-medium text-foreground">{name}</p>
+            <p className="text-body font-semibold text-foreground">{name}</p>
             {weekly && (
-              <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
+              <span className="shrink-0 rounded-full bg-secondary px-2 py-1 text-caption font-semibold text-secondary-foreground">
                 Once a week
               </span>
             )}
           </div>
           {description && (
-            <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+            <p className="mt-1 text-footnote text-muted-foreground">{description}</p>
           )}
           {pointsWeight !== undefined && (
-            <p className="mt-0.5 text-xs text-muted-foreground">
+            <p className="mt-1 text-footnote text-muted-foreground">
               {inactive
                 ? "Deactivated — read only"
                 : disabled
@@ -113,7 +113,7 @@ export function BinaryHabitRow({
           onCheckedChange={(checked) => void handleToggle(checked)}
         />
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-body text-destructive">{error}</p>}
     </div>
   );
 }

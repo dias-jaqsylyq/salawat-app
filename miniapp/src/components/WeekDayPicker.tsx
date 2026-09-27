@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { backfillWeekView, dayForWeekStep } from "../lib/backfillWeeks.ts";
 import { cn } from "@/lib/utils";
 
@@ -61,9 +62,9 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
           onClick={() => step(-1)}
           className={ARROW_CLASS}
         >
-          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={ChevronLeft} />
         </button>
-        <p className="flex-1 text-center text-xs font-medium text-muted-foreground" aria-live="polite">
+        <p className="flex-1 text-center text-footnote font-semibold text-muted-foreground" aria-live="polite">
           {view.label}
         </p>
         <button
@@ -73,13 +74,13 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
           onClick={() => step(1)}
           className={cn(ARROW_CLASS, !view.canGoForward && "invisible")}
         >
-          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          <Icon icon={ChevronRight} />
         </button>
       </div>
       <div
         role="tablist"
         aria-label={view.label}
-        className="flex gap-1 rounded-xl bg-secondary/60 p-1"
+        className="flex gap-1 rounded-xl bg-surface-2 p-1"
       >
         {view.days.map(({ date, selectable }) => {
           const isSelected = date === selected;
@@ -92,14 +93,14 @@ export default function WeekDayPicker({ minDate, today, selected, onSelect }: Pr
               disabled={!selectable}
               onClick={() => onSelect(date)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-0.5 rounded-lg py-1.5 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                "flex flex-1 flex-col items-center gap-1 rounded-lg py-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                 isSelected
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
               <span>{weekdayLabel(date)}</span>
-              <span className="tabular-nums text-[11px]">{dayOfMonth(date)}</span>
+              <span className="numeric text-caption">{dayOfMonth(date)}</span>
             </button>
           );
         })}

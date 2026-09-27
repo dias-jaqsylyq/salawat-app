@@ -1,4 +1,5 @@
 import { Flame } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -32,26 +33,25 @@ export default function StreakBadge({ habitName, streak, unit = "days" }: Props)
     <div
       className={cn(
         "flex flex-col items-center gap-1 rounded-2xl border px-3 py-4 text-center transition-colors",
-        tier === "unlit" && "border-border bg-muted/40",
+        tier === "unlit" && "border-border bg-surface-2",
         tier === "lit" && "border-accent/30 bg-accent/10",
         tier === "hot" && "border-accent/50 bg-accent/15 shadow-sm"
       )}
     >
-      <Flame
+      <Icon
+        icon={Flame}
+        size="lg"
+        filled={tier !== "unlit"}
         className={cn(
-          "h-7 w-7",
-          tier === "unlit" ? "text-muted-foreground/50" : "text-accent",
-          tier === "hot" && "drop-shadow-[0_0_6px_rgba(161,98,7,0.35)] dark:drop-shadow-[0_0_6px_rgba(217,164,65,0.4)]"
+          tier === "unlit" ? "text-quaternary" : "text-accent",
+          tier === "hot" && "drop-shadow-[0_0_6px_color-mix(in_oklab,var(--accent)_40%,transparent)]"
         )}
-        fill={tier === "unlit" ? "none" : "currentColor"}
-        strokeWidth={tier === "unlit" ? 1.5 : 2}
-        aria-hidden="true"
       />
-      <span className="text-2xl font-extrabold tabular-nums text-foreground">{streak}</span>
-      <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <span className="text-title numeric font-bold text-foreground">{streak}</span>
+      <span className="text-caption font-semibold uppercase tracking-wide text-muted-foreground">
         {streak === 1 ? unit.slice(0, -1) : unit}
       </span>
-      <span className="mt-1 line-clamp-2 text-xs font-medium text-foreground/80">{habitName}</span>
+      <span className="mt-1 line-clamp-2 text-footnote font-semibold text-foreground">{habitName}</span>
     </div>
   );
 }

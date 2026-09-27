@@ -1,5 +1,6 @@
 import type { HabitCategory } from "../api/types.ts";
 import { CATEGORY_META, CATEGORY_ORDER } from "../lib/habitCategories.ts";
+import { Icon } from "@/components/ui/icon";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
@@ -20,10 +21,10 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
         id={id}
         role="tablist"
         aria-label="Habit category"
-        className="grid grid-cols-4 gap-1 rounded-lg bg-secondary/60 p-1"
+        className="grid grid-cols-4 gap-1 rounded-lg bg-surface-2 p-1"
       >
         {CATEGORY_ORDER.map((category) => {
-          const { label, icon: Icon } = CATEGORY_META[category];
+          const { label, icon: glyph } = CATEGORY_META[category];
           const active = value === category;
           return (
             <button
@@ -35,13 +36,13 @@ function CategoryPicker({ id, value, disabled, onChange }: CategoryPickerProps) 
               disabled={disabled}
               onClick={() => onChange(category)}
               className={cn(
-                "flex min-h-11 flex-col items-center justify-center gap-0.5 rounded-md px-1 text-xs font-medium transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "flex min-h-11 flex-col items-center justify-center gap-1 rounded-md px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 active
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
                   : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
               )}
             >
-              <Icon className="h-4 w-4" aria-hidden="true" />
+              <Icon icon={glyph} />
               {category}
             </button>
           );
