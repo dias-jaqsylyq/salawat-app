@@ -15,8 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
 
 interface Props {
   initData: string;
@@ -288,33 +288,13 @@ export default function SettingsScreen({
                   <h3 className="text-body font-semibold text-foreground">Streaks</h3>
                   <div className="space-y-2">
                     <Label htmlFor="settings-streak-display">Display</Label>
-                    <div
+                    <SegmentedControl
                       id="settings-streak-display"
-                      role="radiogroup"
                       aria-label="Streak display"
-                      className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1"
-                    >
-                      {STREAK_DISPLAYS.map((option) => {
-                        const active = streakDisplay === option.id;
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            onClick={() => setStreakDisplay(option.id)}
-                            className={cn(
-                              "min-h-11 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                              active
-                                ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                                : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-                            )}
-                          >
-                            {option.label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                      value={streakDisplay}
+                      onChange={setStreakDisplay}
+                      options={STREAK_DISPLAYS.map((option) => ({ value: option.id, label: option.label }))}
+                    />
                     <p className="text-footnote text-muted-foreground">
                       {STREAK_DISPLAYS.find((o) => o.id === streakDisplay)?.hint} Applies when you
                       save.

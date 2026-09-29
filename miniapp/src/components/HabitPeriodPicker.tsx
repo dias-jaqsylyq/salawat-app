@@ -1,6 +1,6 @@
 import type { HabitPeriod } from "../api/types.ts";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 
 interface Props {
   value: HabitPeriod;
@@ -26,30 +26,13 @@ export default function HabitPeriodPicker({ value, disabled, onChange }: Props) 
   return (
     <div className="space-y-2">
       <Label>How often</Label>
-      <div
-        role="tablist"
+      <SegmentedControl
         aria-label="How often the habit scores"
-        className="grid grid-cols-2 gap-1 rounded-lg bg-surface-2 p-1"
-      >
-        {(["daily", "weekly"] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            role="tab"
-            aria-selected={value === option}
-            disabled={disabled}
-            onClick={() => onChange(option)}
-            className={cn(
-              "min-h-10 rounded-md px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              value === option
-                ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-            )}
-          >
-            {LABELS[option]}
-          </button>
-        ))}
-      </div>
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        options={(["daily", "weekly"] as const).map((option) => ({ value: option, label: LABELS[option] }))}
+      />
       <p className="text-footnote text-muted-foreground">
         {value === "weekly"
           ? "Scores once per week, whichever day it's ticked. Ticking more days in the same week doesn't add points."

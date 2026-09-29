@@ -8,7 +8,7 @@ import type { LeaderboardMember, LeaderboardPeriod } from "../api/types.ts";
 import LeaderboardMemberRow from "../components/LeaderboardMemberRow.tsx";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 
 interface Props {
   initData: string;
@@ -194,34 +194,16 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
       </div>
 
       {isAdmin && (
-        <div
-          role="tablist"
+        <SegmentedControl
           aria-label="Leaderboard period"
-          className="grid grid-cols-2 gap-1 rounded-xl bg-surface-2 p-1"
-        >
-          {(
-            [
-              { id: "weekly" as const, label: "This week" },
-              { id: "all-time" as const, label: "All time" },
-            ]
-          ).map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              role="tab"
-              aria-selected={period === option.id}
-              onClick={() => setPeriod(option.id)}
-              className={cn(
-                "min-h-9 rounded-lg px-3 text-body font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                period === option.id
-                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-              )}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
+          size="sm"
+          value={period}
+          onChange={setPeriod}
+          options={[
+            { value: "weekly", label: "This week" },
+            { value: "all-time", label: "All time" },
+          ]}
+        />
       )}
 
       {error && (
