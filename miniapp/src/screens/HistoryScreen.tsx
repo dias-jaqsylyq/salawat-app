@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight, Flame } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import { getHistoryHabits, getHistoryMonth } from "../api/client.ts";
@@ -9,6 +9,9 @@ import HistoryHabitPicker from "../components/HistoryHabitPicker.tsx";
 import { loadLastHabit, loadLastMonth, saveLastHabit, saveLastMonth } from "../lib/historyPrefs.ts";
 import { currentMonthKey, formatMonthLabel, shiftMonthKey } from "../lib/monthKey.ts";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SwipePager } from "../components/motion/SwipePager.tsx";
+import { hapticSelection } from "../lib/haptics.ts";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -100,6 +103,28 @@ function SummaryLine({ data }: { data: HistoryMonthResponse }) {
   return points ? <p className="text-footnote text-muted-foreground">{points}</p> : null;
 }
 
+function habitCacheKey(habit: HistoryHabitListEntry): string {
+  return `${habit.kind}:${habit.id}`;
+}
+
+function monthCacheKey(habit: HistoryHabitListEntry, month: string): string {
+  return `${habitCacheKey(habit)}:${month}`;
+}
+
+/** A month-shaped placeholder, so the page slides in at its real size while it loads. */
+function MonthSkeleton() {
+  return (
+    <div className="space-y-3" aria-busy="true" aria-label="Loading month">
+      <div className="grid grid-cols-7 gap-2">
+        {Array.from({ length: 35 }, (_, i) => (
+          <Skeleton key={i} shape="block" className="aspect-square" />
+        ))}
+      </div>
+      <Skeleton className="w-40" />
+    </div>
+  );
+}
+
 function EmptyHistoryState({
   isAdmin,
   onNavigateAway,
@@ -130,71 +155,88 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
   const [listError, setListError] = useState<string | null>(null);
   const [selected, setSelected] = useState<HistoryHabitListEntry | null>(null);
   const [month, setMonth] = useState<string | null>(null);
-  const [data, setData] = useState<HistoryMonthResponse | null>(null);
+  /** Which way the calendar last paged, for the slide: 1 forward, -1 back, 0 not a page turn. */
+  const [direction, setDirection] = useState(0);
+  /**
+   * Months already fetched this visit, so paging back and forth is instant and
+   * the slide never lands on a spinner twice. Per mount: reopening History
+   * fetches fresh, picking up anything logged in between.
+   */
+  const cache = useRef(new Map<string, HistoryMonthResponse>());
+  const [, setCacheVersion] = useState(0);
   const [dataError, setDataError] = useState<string | null>(null);
-  const [dataLoading, setDataLoading] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
-
-  // Loads the switcher list once, then restores the last-viewed habit and
-  // month (localStorage — HISTORY PRD makes no server-side change for this),
-  // falling back to the first habit and the current month on a first-ever
-  // open, or when the saved habit no longer exists (a personal habit can be
-  // hard-deleted, unlike a room habit).
-  useEffect(() => {
-    let cancelled = false;
-    getHistoryHabits(initData)
-      .then((list) => {
-        if (cancelled) return;
-        setHabitsList(list);
-        if (list.length === 0) return;
-        const saved = loadLastHabit();
-        const restored = saved
-          ? list.find((h) => h.kind === saved.kind && h.id === saved.habitId)
-          : undefined;
-        setSelected(restored ?? list[0]!);
-        setMonth(loadLastMonth() ?? currentMonthKey());
-      })
-      .catch((err) => {
-        if (!cancelled) setListError(messageForApiError(err, "Couldn't load your habits."));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [initData]);
+  const pageKey = selected !== null && month !== null ? monthCacheKey(selected, month) : null;
+  const data = pageKey !== null ? cache.current.get(pageKey) : undefined;
 
   useEffect(() => {
     if (selected === null || month === null) return;
-    let cancelled = false;
-    setDataLoading(true);
+    const key = monthCacheKey(selected, month);
     setDataError(null);
+    if (cache.current.has(key)) return;
+    let cancelled = false;
     getHistoryMonth(initData, selected.kind, selected.id, month)
       .then((loaded) => {
-        if (!cancelled) setData(loaded);
+        cache.current.set(key, loaded);
+        if (!cancelled) setCacheVersion((v) => v + 1);
       })
       .catch((err) => {
         if (!cancelled) setDataError(messageForApiError(err, "Couldn't load that month."));
-      })
-      .finally(() => {
-        if (!cancelled) setDataLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [initData, selected, month, retryToken]);
 
+  // Paging back is the common move, so the previous month is fetched quietly
+  // once this one is in, ready before the swipe that asks for it.
+  const earliestMonth = data?.earliestMonth;
+  useEffect(() => {
+    if (selected === null || month === null || earliestMonth === undefined || month <= earliestMonth) return;
+    const previous = shiftMonthKey(month, -1);
+    const key = monthCacheKey(selected, previous);
+    if (cache.current.has(key)) return;
+    getHistoryMonth(initData, selected.kind, selected.id, previous)
+      .then((loaded) => {
+        cache.current.set(key, loaded);
+      })
+      .catch(() => {
+        // Only a head start; the real request retries when that month is shown.
+      });
+  }, [initData, selected, month, earliestMonth]);
+
+  /**
+   * Paging limits come from the last month loaded for this habit, so the arrows
+   * and swipe keep working while the next page is still loading.
+   */
+  const bounds = useRef<{ habitKey: string; earliestMonth: string; currentMonth: string } | null>(null);
+  if (data && selected !== null) {
+    bounds.current = {
+      habitKey: habitCacheKey(selected),
+      earliestMonth: data.earliestMonth,
+      currentMonth: data.today.slice(0, 7),
+    };
+  }
+  const limits =
+    selected !== null && bounds.current?.habitKey === habitCacheKey(selected) ? bounds.current : null;
+
   function handleSelectHabit(habit: HistoryHabitListEntry) {
+    setDirection(0);
     setSelected(habit);
     saveLastHabit({ kind: habit.kind, habitId: habit.id });
     // Month deliberately stays as-is (HISTORY PRD) — only habit selection changes here.
   }
 
-  function handleMonthChange(next: string) {
+  function handleMonthChange(step: -1 | 1) {
+    if (month === null) return;
+    const next = shiftMonthKey(month, step);
+    setDirection(step);
     setMonth(next);
     saveLastMonth(next);
   }
 
-  const canGoPrev = data !== null && month !== null && month > data.earliestMonth;
-  const canGoNext = data !== null && month !== null && month < data.today.slice(0, 7);
+  const canGoPrev = limits !== null && month !== null && month > limits.earliestMonth;
+  const canGoNext = limits !== null && month !== null && month < limits.currentMonth;
 
   return (
     <div className="mx-auto max-w-sm space-y-4 px-4 py-6">
@@ -233,7 +275,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
               size="icon"
               aria-label="Previous month"
               disabled={!canGoPrev}
-              onClick={() => handleMonthChange(shiftMonthKey(month, -1))}
+              onClick={() => handleMonthChange(-1)}
             >
               <Icon icon={ChevronLeft} />
             </Button>
@@ -244,13 +286,13 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
               size="icon"
               aria-label="Next month"
               disabled={!canGoNext}
-              onClick={() => handleMonthChange(shiftMonthKey(month, 1))}
+              onClick={() => handleMonthChange(1)}
             >
               <Icon icon={ChevronRight} />
             </Button>
           </div>
 
-          {dataError && (
+          {dataError ? (
             <div className="space-y-2">
               <p className="text-body text-destructive animate-reveal">{dataError}</p>
               <Button
@@ -262,27 +304,36 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
                 Retry
               </Button>
             </div>
-          )}
-
-          {!dataError && dataLoading && <p className="text-footnote text-muted-foreground">Loading…</p>}
-
-          {!dataError && !dataLoading && data !== null && !data.hasData && (
-            <p className="text-footnote text-muted-foreground">No data this month.</p>
-          )}
-
-          {!dataError && !dataLoading && data !== null && data.hasData && (
-            <div className="space-y-3">
-              {data.period === "daily" ? (
-                <HistoryCalendarGrid days={data.days} today={data.today} />
+          ) : (
+            <SwipePager
+              pageKey={pageKey ?? month}
+              direction={direction}
+              canPrev={canGoPrev}
+              canNext={canGoNext}
+              onPage={(step) => {
+                hapticSelection();
+                handleMonthChange(step);
+              }}
+            >
+              {data === undefined ? (
+                <MonthSkeleton />
+              ) : !data.hasData ? (
+                <p className="text-footnote text-muted-foreground">No data this month.</p>
               ) : (
-                <div className="space-y-2">
-                  {data.weeks.map((week) => (
-                    <HistoryWeekBadge key={week.weekStart} week={week} />
-                  ))}
+                <div className="space-y-3 animate-fade">
+                  {data.period === "daily" ? (
+                    <HistoryCalendarGrid days={data.days} today={data.today} />
+                  ) : (
+                    <div className="space-y-2">
+                      {data.weeks.map((week) => (
+                        <HistoryWeekBadge key={week.weekStart} week={week} />
+                      ))}
+                    </div>
+                  )}
+                  <SummaryLine data={data} />
                 </div>
               )}
-              <SummaryLine data={data} />
-            </div>
+            </SwipePager>
           )}
         </>
       )}
