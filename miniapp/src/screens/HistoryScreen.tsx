@@ -166,6 +166,34 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
   const [, setCacheVersion] = useState(0);
   const [dataError, setDataError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
+
+  // Loads the switcher list once, then restores the last-viewed habit and
+  // month (localStorage — HISTORY PRD makes no server-side change for this),
+  // falling back to the first habit and the current month on a first-ever
+  // open, or when the saved habit no longer exists (a personal habit can be
+  // hard-deleted, unlike a room habit).
+  useEffect(() => {
+    let cancelled = false;
+    getHistoryHabits(initData)
+      .then((list) => {
+        if (cancelled) return;
+        setHabitsList(list);
+        if (list.length === 0) return;
+        const saved = loadLastHabit();
+        const restored = saved
+          ? list.find((h) => h.kind === saved.kind && h.id === saved.habitId)
+          : undefined;
+        setSelected(restored ?? list[0]!);
+        setMonth(loadLastMonth() ?? currentMonthKey());
+      })
+      .catch((err) => {
+        if (!cancelled) setListError(messageForApiError(err, "Couldn't load your habits."));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initData]);
+
   const pageKey = selected !== null && month !== null ? monthCacheKey(selected, month) : null;
   const data = pageKey !== null ? cache.current.get(pageKey) : undefined;
 
