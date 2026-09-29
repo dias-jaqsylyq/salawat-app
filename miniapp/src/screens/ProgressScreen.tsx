@@ -12,6 +12,7 @@ import type {
 import StreakBadge from "../components/StreakBadge.tsx";
 import WeeklyStreakGrid from "../components/WeeklyStreakGrid.tsx";
 import VirtueReminder from "../components/VirtueReminder.tsx";
+import { AnimatedNumber } from "../components/motion/AnimatedNumber.tsx";
 import { formatHijriDate } from "../lib/hijriDate.ts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -153,7 +154,7 @@ export default function ProgressScreen({
                 Today
               </p>
               <p className="text-title numeric font-bold text-foreground">
-                {todayPoints.toLocaleString()}
+                <AnimatedNumber id="progress:today" value={todayPoints} />
               </p>
             </div>
             <div className="rounded-lg bg-surface-2 px-4 py-3">
@@ -161,7 +162,7 @@ export default function ProgressScreen({
                 All-time
               </p>
               <p className="text-title numeric font-bold text-foreground">
-                {totalPoints.toLocaleString()}
+                <AnimatedNumber id="progress:all-time" value={totalPoints} />
               </p>
             </div>
           </div>
@@ -170,7 +171,7 @@ export default function ProgressScreen({
             <p className="text-body font-semibold text-foreground">Streaks</p>
             {streakDisplay === "weekly" ? (
               weekError ? (
-                <p className="text-body text-destructive">{weekError}</p>
+                <p className="text-body text-destructive animate-reveal">{weekError}</p>
               ) : week ? (
                 <WeeklyStreakGrid week={week} />
               ) : (
@@ -183,6 +184,7 @@ export default function ProgressScreen({
                 {allStreaks.map((s) => (
                   <StreakBadge
                     key={s.key}
+                    streakKey={s.key}
                     habitName={s.name}
                     streak={s.streak}
                     unit={s.unit}

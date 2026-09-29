@@ -4,6 +4,7 @@ import "@fontsource-variable/lexend";
 import "@fontsource/scheherazade-new/400.css";
 import "./index.css";
 import App from "./App.tsx";
+import { MotionRoot } from "./components/motion/MotionRoot.tsx";
 
 const root = createRoot(document.getElementById("root")!);
 
@@ -13,14 +14,18 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has("ui-p
   void import("./dev/UiPreview.tsx").then(({ default: UiPreview }) =>
     root.render(
       <StrictMode>
-        <UiPreview />
+        <MotionRoot>
+          <UiPreview />
+        </MotionRoot>
       </StrictMode>
     )
   );
 } else {
   root.render(
     <StrictMode>
-      <App />
+      <MotionRoot>
+        <App />
+      </MotionRoot>
     </StrictMode>
   );
 }

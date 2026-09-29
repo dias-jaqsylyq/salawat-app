@@ -36,10 +36,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
 import AdminHabits from "../components/AdminHabits.tsx";
 import AdminRoom from "../components/AdminRoom.tsx";
+import { AnimatedNumber } from "../components/motion/AnimatedNumber.tsx";
 import LeaderboardScreen from "./LeaderboardScreen.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
@@ -264,8 +265,6 @@ export default function AdminScreen({ initData, roomName }: Props) {
     }
   }
 
-  const countLabel =
-    participantCount === null ? "Loading…" : participantCount.toLocaleString();
 
   return (
     <main className="mx-auto max-w-sm space-y-4 px-4 py-6">
@@ -282,77 +281,41 @@ export default function AdminScreen({ initData, roomName }: Props) {
           <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
             Participants
           </p>
-          <p className="text-title numeric font-bold text-foreground">{countLabel}</p>
+          <p className="text-title numeric font-bold text-foreground">
+            {participantCount === null ? (
+              "Loading…"
+            ) : (
+              <AnimatedNumber id="admin:participants" value={participantCount} />
+            )}
+          </p>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Icon icon={Users} size="md" />
         </div>
       </div>
 
-      <div
-        role="tablist"
+      <SegmentedControl
         aria-label="Admin section"
-        className="grid grid-cols-4 gap-1 rounded-xl bg-surface-2 p-1"
-      >
-        {([
-          { id: "broadcasts" as const, label: "Posts", icon: Megaphone },
-          { id: "habits" as const, label: "Habits", icon: ListChecks },
-          { id: "leaderboard" as const, label: "Board", icon: Trophy },
-          { id: "room" as const, label: "Room", icon: Settings2 },
-        ]).map((item) => {
-          const glyph = item.icon;
-          const active = section === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setSection(item.id)}
-              className={cn(
-                "flex min-h-12 flex-col items-center justify-center gap-1 rounded-lg px-1 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                active
-                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-              )}
-            >
-              <Icon icon={glyph} />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
+        value={section}
+        onChange={setSection}
+        options={[
+          { value: "broadcasts", label: "Posts", icon: Megaphone },
+          { value: "habits", label: "Habits", icon: ListChecks },
+          { value: "leaderboard", label: "Board", icon: Trophy },
+          { value: "room", label: "Room", icon: Settings2 },
+        ]}
+      />
 
       {section === "broadcasts" ? (
         <>
-      <div
-        role="tablist"
+      <SegmentedControl
         aria-label="Broadcast type"
-        className="grid grid-cols-3 gap-1 rounded-xl bg-surface-2 p-1"
-      >
-        {MODES.map((item) => {
-          const glyph = item.icon;
-          const active = mode === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setMode(item.id)}
-              className={cn(
-                "flex min-h-11 items-center justify-center gap-2 rounded-lg px-2 text-footnote font-semibold transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                active
-                  ? "bg-surface-1 text-foreground shadow-sm dark:bg-surface-3"
-                  : "text-muted-foreground hover:text-foreground active:bg-fill-pressed"
-              )}
-            >
-              <Icon icon={glyph} />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
+        size="sm"
+        iconPosition="start"
+        value={mode}
+        onChange={setMode}
+        options={MODES.map((item) => ({ value: item.id, label: item.label, icon: item.icon }))}
+      />
 
       <form onSubmit={(event) => void handleSubmit(event)}>
         <Card>
@@ -552,14 +515,14 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   }`}
             </Button>
             {error && (
-              <p role="alert" className="text-body text-destructive">
+              <p role="alert" className="text-body text-destructive animate-reveal">
                 {error}
               </p>
             )}
             {result && (
               <div
                 aria-live="polite"
-                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-3 text-body text-foreground"
+                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-3 text-body text-foreground animate-reveal"
               >
                 <p className="font-semibold">
                   Sent to {result.sentCount.toLocaleString()} of{" "}

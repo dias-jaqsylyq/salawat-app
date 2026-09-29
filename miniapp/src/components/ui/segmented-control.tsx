@@ -9,17 +9,23 @@ export interface SegmentedOption<T extends string> {
   value: T;
   label: ReactNode;
   icon?: LucideIcon;
+  /** Accessible name when the visible label is terse, e.g. "SQ — Spiritual". */
+  "aria-label"?: string;
   disabled?: boolean;
 }
 
 interface SegmentedControlProps<T extends string> {
-  value: T;
+  /** null: nothing chosen yet — no thumb, and the first segment takes focus. */
+  value: T | null;
   onChange: (value: T) => void;
   options: readonly SegmentedOption<T>[];
   "aria-label": string;
+  id?: string;
   /** sm: 36px tall, footnote text; md: 44px, body text. With icons, each segment
    *  stacks icon over label (48px, footnote) so four segments fit a phone. */
   size?: "sm" | "md";
+  /** Where option icons sit: stacked over the label (default), or inline before it. */
+  iconPosition?: "top" | "start";
   disabled?: boolean;
   className?: string;
 }
@@ -33,14 +39,16 @@ function SegmentedControl<T extends string>({
   onChange,
   options,
   "aria-label": ariaLabel,
+  id,
   size = "md",
+  iconPosition = "top",
   disabled = false,
   className,
 }: SegmentedControlProps<T>) {
   const buttons = useRef<(HTMLButtonElement | null)[]>([]);
   const selected = options.findIndex((option) => option.value === value);
   const isEnabled = (i: number) => !disabled && !options[i].disabled;
-  const stacked = options.some((option) => option.icon);
+  const stacked = iconPosition === "top" && options.some((option) => option.icon);
 
   function select(i: number) {
     if (!isEnabled(i) || i === selected) return;
@@ -71,6 +79,7 @@ function SegmentedControl<T extends string>({
 
   return (
     <div
+      id={id}
       role="radiogroup"
       aria-label={ariaLabel}
       aria-disabled={disabled || undefined}
@@ -98,6 +107,7 @@ function SegmentedControl<T extends string>({
             type="button"
             role="radio"
             aria-checked={checked}
+            aria-label={option["aria-label"]}
             tabIndex={i === Math.max(selected, 0) ? 0 : -1}
             disabled={!isEnabled(i)}
             onClick={() => select(i)}

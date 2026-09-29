@@ -20,6 +20,9 @@ import SettingsScreen from "./screens/SettingsScreen.tsx";
 import AdminScreen from "./screens/AdminScreen.tsx";
 import TabBar, { type Tab } from "./components/TabBar.tsx";
 import { Button } from "@/components/ui/button";
+import { m } from "framer-motion";
+import { PushScreen } from "./components/motion/PushScreen.tsx";
+import { fadeIn } from "./lib/motion.ts";
 
 type LoadState =
   | { status: "loading" }
@@ -279,37 +282,24 @@ export default function App() {
     );
   }
 
+  const subScreen = settingsOpen ? "settings" : historyOpen ? "history" : null;
+
   return (
     <>
-      {settingsOpen ? (
-        // No TabBar here, but the last control still has to clear the home
-        // indicator on gesture-navigation devices.
-        <div className="min-h-screen bg-background pb-[env(safe-area-inset-bottom)]">
-          <SettingsScreen
-            initData={initData}
-            onBack={closeSettings}
-            onSaved={() => void loadProgress()}
-            onLeftRoom={() => {
-              closeSettings();
-              void loadProgress();
-            }}
-          />
-        </div>
-      ) : historyOpen ? (
-        // Same full-screen, no-TabBar pattern as Settings above.
-        <div className="min-h-screen bg-background pb-[env(safe-area-inset-bottom)]">
-          <HistoryScreen
-            initData={initData}
-            isAdmin={isAdmin}
-            onBack={closeHistory}
-            onNavigateAway={navigateAwayFromHistory}
-          />
-        </div>
-      ) : (
-        // Room for the fixed TabBar: its own height (pb-16) *plus* the safe-area
-        // inset the bar itself adds. A flat 4rem left the last ~25px of every
-        // screen hidden behind the bar on devices with a home indicator.
-        <div className="min-h-screen bg-background pb-[calc(4rem+env(safe-area-inset-bottom))]">
+      {/*
+        The tabs stay mounted under a pushed sub-screen, so coming back keeps
+        their state and scroll position. `inert` takes them out of focus order
+        and the accessibility tree meanwhile.
+        Room for the fixed TabBar: its own height (pb-16) *plus* the safe-area
+        inset the bar itself adds. A flat 4rem left the last ~25px of every
+        screen hidden behind the bar on devices with a home indicator.
+      */}
+      <div
+        inert={subScreen !== null}
+        className="min-h-screen bg-background pb-[calc(4rem+env(safe-area-inset-bottom))]"
+      >
+        {/* Keyed by tab: the incoming screen fades in; the outgoing one leaves at once. */}
+        <m.div key={activeTab} variants={fadeIn} initial="initial" animate="animate">
           {activeTab === "progress" && (
             <ProgressScreen
               initData={initData}
@@ -339,9 +329,31 @@ export default function App() {
           {activeTab === "admin" && isAdmin && (
             <AdminScreen initData={initData} roomName={state.progress.room?.name ?? null} />
           )}
-          <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
-        </div>
-      )}
+        </m.div>
+        <TabBar activeTab={activeTab} onChange={handleTabChange} showAdmin={isAdmin} />
+      </div>
+
+      <PushScreen screenKey={subScreen}>
+        {subScreen === "settings" && (
+          <SettingsScreen
+            initData={initData}
+            onBack={closeSettings}
+            onSaved={() => void loadProgress()}
+            onLeftRoom={() => {
+              closeSettings();
+              void loadProgress();
+            }}
+          />
+        )}
+        {subScreen === "history" && (
+          <HistoryScreen
+            initData={initData}
+            isAdmin={isAdmin}
+            onBack={closeHistory}
+            onNavigateAway={navigateAwayFromHistory}
+          />
+        )}
+      </PushScreen>
     </>
   );
 }

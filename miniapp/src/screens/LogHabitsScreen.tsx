@@ -437,7 +437,7 @@ export default function LogHabitsScreen({
 
       {windowError && (
         <div className="space-y-2">
-          <p className="text-body text-destructive">{windowError}</p>
+          <p className="text-body text-destructive animate-reveal">{windowError}</p>
           <Button
             type="button"
             variant="secondary"

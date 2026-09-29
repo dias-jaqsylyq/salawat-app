@@ -64,7 +64,7 @@ export default function HistoryHabitPicker({ habits, selected, onSelect }: Props
         )}
         <Icon
           icon={ChevronDown}
-          className={cn("text-muted-foreground transition-transform", open && "rotate-180")}
+          className={cn("text-muted-foreground transition-transform duration-200 motion-reduce:transition-none", open && "rotate-180")}
         />
       </button>
 
@@ -80,7 +80,7 @@ export default function HistoryHabitPicker({ habits, selected, onSelect }: Props
           <div
             role="listbox"
             aria-label="Choose a habit"
-            className="absolute inset-x-0 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg"
+            className="absolute inset-x-0 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg animate-reveal"
           >
             {sections.map((section) => (
               <div key={section.label} className="py-1">

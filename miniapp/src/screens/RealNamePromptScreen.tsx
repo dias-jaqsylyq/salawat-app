@@ -89,7 +89,7 @@ export default function RealNamePromptScreen({ initData, nickname, onSaved }: Pr
               </p>
             </div>
 
-            {error && <p className="text-body text-destructive">{error}</p>}
+            {error && <p className="text-body text-destructive animate-reveal">{error}</p>}
           </CardContent>
 
           <CardFooter>

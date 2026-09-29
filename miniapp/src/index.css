@@ -264,6 +264,25 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Something that just appeared — an error, a popover, a banner: fades in while
+ * dropping 4px into place. Enter-only; removal is instant. Still under reduced motion.
+ */
+@utility animate-reveal {
+  @apply animate-in fade-in slide-in-from-top-1 duration-200;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+/* Content swapped in place (a row turning into its edit form): a plain fade. */
+@utility animate-fade {
+  @apply animate-in fade-in duration-200;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
 /* Skeleton placeholder: a soft highlight sweeping across surface-2 */
 @keyframes shimmer {
   from {

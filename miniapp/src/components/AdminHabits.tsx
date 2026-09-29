@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { HeightSwap } from "./motion/AnimateHeight.tsx";
 
 interface Props {
   initData: string;
@@ -168,7 +169,7 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
         Scores {habit.period === "weekly" ? "once a week" : "every day"}. To change that,
         deactivate this habit and create a new one.
       </p>
-      {error && <p className="text-body text-destructive">{error}</p>}
+      {error && <p className="text-body text-destructive animate-reveal">{error}</p>}
       <div className="flex gap-2">
         <Button type="button" size="sm" onClick={() => void handleSave()} disabled={saving}>
           {saving ? "Saving…" : "Save"}
@@ -207,75 +208,76 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
     }
   }
 
-  if (editing) {
-    return (
-      <EditHabitRow
-        initData={initData}
-        habit={habit}
-        categoriesEnabled={categoriesEnabled}
-        onSaved={(updated) => {
-          onUpdated(updated);
-          setEditing(false);
-        }}
-        onCancel={() => setEditing(false)}
-      />
-    );
-  }
-
+  // The row and its edit form swap with a crossfade while the height follows.
   return (
-    <div className="space-y-2 px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className="-mx-1 min-w-0 flex-1 rounded-md px-1 text-left transition duration-100 active:scale-[0.97] active:bg-fill-pressed"
-        >
-          <span className="flex items-center gap-2">
-            <span
-              className={cn(
-                "truncate text-body font-semibold",
-                habit.isActive ? "text-foreground" : "text-quaternary line-through"
-              )}
-            >
-              {habit.name}
-            </span>
-            {habit.period === "weekly" && (
-              <Badge className="shrink-0">
-                weekly
-              </Badge>
-            )}
-            {categoriesEnabled && habit.category && (
-              <Badge className="shrink-0">
-                {habit.category}
-              </Badge>
-            )}
-          </span>
-          <span className="text-footnote text-muted-foreground">
-            {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
-          </span>
-          {habit.description && (
-            <span className="mt-1 block truncate text-footnote text-muted-foreground">
-              {habit.description}
-            </span>
-          )}
-          {/* Categories were turned on after this habit was made — the server
-              keeps the old value hidden until the admin re-confirms it (PRD §0). */}
-          {categoriesEnabled && !habit.category && (
-            <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-warning">
-              <Icon icon={AlertTriangle} />
-              Tap to set a category
-            </span>
-          )}
-        </button>
-        <Switch
-          checked={habit.isActive}
-          disabled={togglingActive}
-          onCheckedChange={(checked) => void handleToggleActive(checked)}
-          aria-label={`${habit.isActive ? "Deactivate" : "Activate"} ${habit.name}`}
+    <HeightSwap swapKey={editing ? "edit" : "view"}>
+      {editing ? (
+        <EditHabitRow
+          initData={initData}
+          habit={habit}
+          categoriesEnabled={categoriesEnabled}
+          onSaved={(updated) => {
+            onUpdated(updated);
+            setEditing(false);
+          }}
+          onCancel={() => setEditing(false)}
         />
-      </div>
-      {error && <p className="text-body text-destructive">{error}</p>}
-    </div>
+      ) : (
+        <div className="space-y-2 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="-mx-1 min-w-0 flex-1 rounded-md px-1 text-left transition duration-100 active:scale-[0.97] active:bg-fill-pressed"
+            >
+              <span className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "truncate text-body font-semibold",
+                    habit.isActive ? "text-foreground" : "text-quaternary line-through"
+                  )}
+                >
+                  {habit.name}
+                </span>
+                {habit.period === "weekly" && (
+                  <Badge className="shrink-0">
+                    weekly
+                  </Badge>
+                )}
+                {categoriesEnabled && habit.category && (
+                  <Badge className="shrink-0">
+                    {habit.category}
+                  </Badge>
+                )}
+              </span>
+              <span className="text-footnote text-muted-foreground">
+                {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
+              </span>
+              {habit.description && (
+                <span className="mt-1 block truncate text-footnote text-muted-foreground">
+                  {habit.description}
+                </span>
+              )}
+              {/* Categories were turned on after this habit was made — the server
+                  keeps the old value hidden until the admin re-confirms it (PRD §0). */}
+              {categoriesEnabled && !habit.category && (
+                <span className="mt-1 flex items-center gap-1 text-footnote font-semibold text-warning">
+                  <Icon icon={AlertTriangle} />
+                  Tap to set a category
+                </span>
+              )}
+            </button>
+            <Switch
+              checked={habit.isActive}
+              disabled={togglingActive}
+              onCheckedChange={(checked) => void handleToggleActive(checked)}
+              aria-label={`${habit.isActive ? "Deactivate" : "Activate"} ${habit.name}`}
+            />
+          </div>
+          {error && <p className="text-body text-destructive animate-reveal">{error}</p>}
+        </div>
+      )}
+    </HeightSwap>
   );
 }
 
@@ -385,7 +387,7 @@ function CreateHabitForm({
             />
           )}
 
-          {error && <p className="text-body text-destructive">{error}</p>}
+          {error && <p className="text-body text-destructive animate-reveal">{error}</p>}
         </CardContent>
         <CardContent className="pt-0">
           <Button type="submit" className="w-full" disabled={creating}>
@@ -472,7 +474,7 @@ export default function AdminHabits({ initData, categoriesEnabled }: Props) {
         </CardHeader>
         <CardContent className="p-0">
           {error && (
-            <p role="alert" className="px-4 pb-3 text-body text-destructive">
+            <p role="alert" className="px-4 pb-3 text-body text-destructive animate-reveal">
               {error}
             </p>
           )}
