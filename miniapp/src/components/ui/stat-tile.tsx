@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
+import { AnimatedNumber } from "@/components/motion/AnimatedNumber";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ const TONE = {
 
 interface StatTileProps {
   label: string;
+  /** A number counts to its new value (see AnimatedNumber); anything else shows as is. */
   value: ReactNode;
   unit?: string;
   hint?: ReactNode;
@@ -35,7 +37,7 @@ function StatTile({ label, value, unit, hint, icon, tone = "neutral", loading = 
         <Skeleton shape="block" className="mt-1 h-8 w-20" />
       ) : (
         <p className={cn("mt-1 text-title numeric font-bold", TONE[tone])}>
-          {value}
+          {typeof value === "number" ? <AnimatedNumber value={value} /> : value}
           {unit && <span className="ml-1 text-footnote font-semibold text-muted-foreground">{unit}</span>}
         </p>
       )}

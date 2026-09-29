@@ -40,6 +40,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Textarea } from "@/components/ui/textarea";
 import AdminHabits from "../components/AdminHabits.tsx";
 import AdminRoom from "../components/AdminRoom.tsx";
+import { AnimatedNumber } from "../components/motion/AnimatedNumber.tsx";
 import LeaderboardScreen from "./LeaderboardScreen.tsx";
 
 type AdminMode = "text" | "link" | "pdf";
@@ -264,8 +265,6 @@ export default function AdminScreen({ initData, roomName }: Props) {
     }
   }
 
-  const countLabel =
-    participantCount === null ? "Loading…" : participantCount.toLocaleString();
 
   return (
     <main className="mx-auto max-w-sm space-y-4 px-4 py-6">
@@ -282,7 +281,13 @@ export default function AdminScreen({ initData, roomName }: Props) {
           <p className="text-footnote font-semibold uppercase tracking-wide text-muted-foreground">
             Participants
           </p>
-          <p className="text-title numeric font-bold text-foreground">{countLabel}</p>
+          <p className="text-title numeric font-bold text-foreground">
+            {participantCount === null ? (
+              "Loading…"
+            ) : (
+              <AnimatedNumber id="admin:participants" value={participantCount} />
+            )}
+          </p>
         </div>
         <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
           <Icon icon={Users} size="md" />
