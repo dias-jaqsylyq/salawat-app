@@ -25,7 +25,10 @@ interface Props {
  * viewer has already seen this session crosses into hot. Checked in an effect
  * so a StrictMode double render can't spend the one-shot sighting.
  */
-function useIgnition(streakKey: string, tier: ReturnType<typeof streakTier>): boolean {
+function useIgnition(
+  streakKey: string,
+  tier: ReturnType<typeof streakTier>
+): [boolean, (on: boolean) => void] {
   const reduce = useReducedMotion();
   const [igniting, setIgniting] = useState(false);
   useEffect(() => {
@@ -33,12 +36,12 @@ function useIgnition(streakKey: string, tier: ReturnType<typeof streakTier>): bo
     hapticNotification("success");
     if (!reduce) setIgniting(true);
   }, [streakKey, tier, reduce]);
-  return igniting;
+  return [igniting, setIgniting];
 }
 
 export default function StreakBadge({ streakKey, habitName, streak, unit = "days" }: Props) {
   const tier = streakTier(streak, unit);
-  const igniting = useIgnition(streakKey, tier);
+  const [igniting, setIgniting] = useIgnition(streakKey, tier);
 
   return (
     <div
@@ -57,6 +60,7 @@ export default function StreakBadge({ streakKey, habitName, streak, unit = "days
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: [0, 1, 0], scale: [0.9, 1.04, 1.08] }}
           transition={{ duration: 0.7, ease: "easeOut" }}
+          onAnimationComplete={() => setIgniting(false)}
         />
       )}
       <m.span
