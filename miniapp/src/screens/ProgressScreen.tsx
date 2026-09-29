@@ -170,7 +170,7 @@ export default function ProgressScreen({
             <p className="text-body font-semibold text-foreground">Streaks</p>
             {streakDisplay === "weekly" ? (
               weekError ? (
-                <p className="text-body text-destructive">{weekError}</p>
+                <p className="text-body text-destructive animate-reveal">{weekError}</p>
               ) : week ? (
                 <WeeklyStreakGrid week={week} />
               ) : (

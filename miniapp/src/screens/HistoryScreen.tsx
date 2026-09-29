@@ -212,7 +212,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
         <h2 className="text-title text-foreground">History</h2>
       </div>
 
-      {listError && <p className="text-body text-destructive">{listError}</p>}
+      {listError && <p className="text-body text-destructive animate-reveal">{listError}</p>}
 
       {!listError && habitsList === null && (
         <p className="text-footnote text-muted-foreground">Loading…</p>
@@ -252,7 +252,7 @@ export default function HistoryScreen({ initData, isAdmin, onBack, onNavigateAwa
 
           {dataError && (
             <div className="space-y-2">
-              <p className="text-body text-destructive">{dataError}</p>
+              <p className="text-body text-destructive animate-reveal">{dataError}</p>
               <Button
                 type="button"
                 variant="secondary"

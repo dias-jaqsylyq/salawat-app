@@ -174,7 +174,7 @@ export default function LeaderboardMemberRow({
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-body text-destructive">
+        <p role="alert" className="mt-2 text-body text-destructive animate-reveal">
           {error}
         </p>
       )}

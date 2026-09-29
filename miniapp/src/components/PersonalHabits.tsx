@@ -18,6 +18,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AnimateHeight } from "./motion/AnimateHeight.tsx";
 import { cn } from "@/lib/utils";
 
 /** Must stay in sync with NAME_MAX_LENGTH in salawat-bot's habitValidation. */
@@ -93,7 +94,7 @@ function HabitForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 px-4 py-3">
+    <form onSubmit={handleSubmit} className="space-y-4 px-4 py-3 animate-fade">
       <div className="space-y-2">
         <Label htmlFor={`${idPrefix}-name`}>Name</Label>
         <Input
@@ -116,7 +117,7 @@ function HabitForm({
       )}
 
       {error && (
-        <p role="alert" className="text-body text-destructive">
+        <p role="alert" className="text-body text-destructive animate-reveal">
           {error}
         </p>
       )}
@@ -281,117 +282,121 @@ export default function PersonalHabits({
       </div>
 
       <Card className="overflow-hidden">
-        <CardContent className="divide-y p-0">
-          {habits.length === 0 && !adding && (
-            <EmptyState
-              compact
-              icon={ListChecks}
-              title="Nothing here yet"
-              description="Add a habit only you can see. It never counts for points."
-            />
-          )}
+        {/* Forms opening, edit mode, rows added or removed: the card's height
+            follows instead of jumping. */}
+        <AnimateHeight>
+          <CardContent className="divide-y p-0">
+            {habits.length === 0 && !adding && (
+              <EmptyState
+                compact
+                icon={ListChecks}
+                title="Nothing here yet"
+                description="Add a habit only you can see. It never counts for points."
+              />
+            )}
 
-          {habits.map((habit) => {
-            if (editingId === habit.id) {
+            {habits.map((habit) => {
+              if (editingId === habit.id) {
+                return (
+                  <HabitForm
+                    key={habit.id}
+                    idPrefix={`personal-habit-${habit.id}`}
+                    initial={{ name: habit.name, category: habit.category }}
+                    categoriesEnabled={categoriesEnabled}
+                    submitLabel="Save"
+                    busy={busy}
+                    error={formError}
+                    onSubmit={(values) => void handleEdit(habit.id, values)}
+                    onCancel={() => {
+                      setEditingId(null);
+                      setFormError(null);
+                    }}
+                  />
+                );
+              }
+
+              if (editMode) {
+                return (
+                  <div key={habit.id} className="flex min-h-11 items-center gap-1 pl-2 pr-4 animate-fade">
+                    <button
+                      type="button"
+                      aria-label={`Delete ${habit.name}`}
+                      disabled={busy}
+                      onClick={() => void handleDelete(habit)}
+                      className="flex size-11 shrink-0 items-center justify-center rounded-full transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    >
+                      <span className="flex size-6 items-center justify-center rounded-full bg-destructive text-destructive-foreground">
+                        <Icon icon={Minus} />
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Edit ${habit.name}`}
+                      disabled={busy}
+                      onClick={() => {
+                        setFormError(null);
+                        setEditingId(habit.id);
+                      }}
+                      className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    >
+                      <span className="truncate text-body font-semibold text-foreground">{habit.name}</span>
+                      {categoryBadge(habit)}
+                      <Icon icon={ChevronRight} className="ml-auto text-muted-foreground" />
+                    </button>
+                  </div>
+                );
+              }
+
+              const entry = findEntry(entries, habit.id);
               return (
-                <HabitForm
+                <BinaryHabitRow
                   key={habit.id}
-                  idPrefix={`personal-habit-${habit.id}`}
-                  initial={{ name: habit.name, category: habit.category }}
-                  categoriesEnabled={categoriesEnabled}
-                  submitLabel="Save"
-                  busy={busy}
-                  error={formError}
-                  onSubmit={(values) => void handleEdit(habit.id, values)}
-                  onCancel={() => {
-                    setEditingId(null);
-                    setFormError(null);
-                  }}
+                  name={habit.name}
+                  badge={categoryBadge(habit)}
+                  disabled={entry !== undefined && !entry.editable}
+                  {...toggleProps(habit, entry?.logged ?? false)}
                 />
               );
-            }
+            })}
 
-            if (editMode) {
-              return (
-                <div key={habit.id} className="flex min-h-11 items-center gap-1 pl-2 pr-4">
-                  <button
-                    type="button"
-                    aria-label={`Delete ${habit.name}`}
-                    disabled={busy}
-                    onClick={() => void handleDelete(habit)}
-                    className="flex size-11 shrink-0 items-center justify-center rounded-full transition duration-100 active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    <span className="flex size-6 items-center justify-center rounded-full bg-destructive text-destructive-foreground">
-                      <Icon icon={Minus} />
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Edit ${habit.name}`}
-                    disabled={busy}
-                    onClick={() => {
-                      setFormError(null);
-                      setEditingId(habit.id);
-                    }}
-                    className="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-                  >
-                    <span className="truncate text-body font-semibold text-foreground">{habit.name}</span>
-                    {categoryBadge(habit)}
-                    <Icon icon={ChevronRight} className="ml-auto text-muted-foreground" />
-                  </button>
-                </div>
-              );
-            }
-
-            const entry = findEntry(entries, habit.id);
-            return (
-              <BinaryHabitRow
-                key={habit.id}
-                name={habit.name}
-                badge={categoryBadge(habit)}
-                disabled={entry !== undefined && !entry.editable}
-                {...toggleProps(habit, entry?.logged ?? false)}
+            {adding && (
+              <HabitForm
+                idPrefix="new-personal-habit"
+                initial={{ name: "", category: null }}
+                categoriesEnabled={categoriesEnabled}
+                submitLabel="Add habit"
+                busy={busy}
+                error={formError}
+                onSubmit={(values) => void handleCreate(values)}
+                onCancel={() => {
+                  setAdding(false);
+                  setFormError(null);
+                }}
               />
-            );
-          })}
+            )}
 
-          {adding && (
-            <HabitForm
-              idPrefix="new-personal-habit"
-              initial={{ name: "", category: null }}
-              categoriesEnabled={categoriesEnabled}
-              submitLabel="Add habit"
-              busy={busy}
-              error={formError}
-              onSubmit={(values) => void handleCreate(values)}
-              onCancel={() => {
-                setAdding(false);
-                setFormError(null);
-              }}
-            />
-          )}
-
-          {!adding && !editMode && (
-            <button
-              type="button"
-              onClick={() => {
-                setFormError(null);
-                setAdding(true);
-              }}
-              className={cn(
-                "flex min-h-11 w-full items-center gap-2 px-4 py-3 text-body font-semibold text-primary",
-                "transition duration-100 hover:bg-fill active:bg-fill-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              )}
-            >
-              <Icon icon={Plus} />
-              Add habit
-            </button>
-          )}
-        </CardContent>
+            {!adding && !editMode && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFormError(null);
+                  setAdding(true);
+                }}
+                className={cn(
+                  "flex min-h-11 w-full items-center gap-2 px-4 py-3 text-body font-semibold text-primary",
+                  "transition duration-100 hover:bg-fill active:bg-fill-pressed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                )}
+              >
+                <Icon icon={Plus} />
+                Add habit
+              </button>
+            )}
+          </CardContent>
+        </AnimateHeight>
       </Card>
 
       {rowError && (
-        <p role="alert" className="px-1 text-body text-destructive">
+        <p role="alert" className="px-1 text-body text-destructive animate-reveal">
           {rowError}
         </p>
       )}

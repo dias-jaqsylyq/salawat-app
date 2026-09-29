@@ -124,7 +124,7 @@ export function BinaryHabitRow({
         </span>
       </div>
       {error && (
-        <p role="alert" className="text-footnote text-destructive">
+        <p role="alert" className="text-footnote text-destructive animate-reveal">
           {error}
         </p>
       )}

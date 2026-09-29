@@ -340,7 +340,7 @@ export default function SettingsScreen({
                     </p>
                   )}
                   {leaveError && (
-                    <p role="alert" className="text-body text-destructive">
+                    <p role="alert" className="text-body text-destructive animate-reveal">
                       {leaveError}
                     </p>
                   )}
@@ -349,7 +349,7 @@ export default function SettingsScreen({
             )}
 
             {confirmation && <p className="text-body text-primary">{confirmation}</p>}
-            {error && <p className="text-body text-destructive">{error}</p>}
+            {error && <p className="text-body text-destructive animate-reveal">{error}</p>}
           </CardContent>
 
           <CardFooter>

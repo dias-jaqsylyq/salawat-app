@@ -510,14 +510,14 @@ export default function AdminScreen({ initData, roomName }: Props) {
                   }`}
             </Button>
             {error && (
-              <p role="alert" className="text-body text-destructive">
+              <p role="alert" className="text-body text-destructive animate-reveal">
                 {error}
               </p>
             )}
             {result && (
               <div
                 aria-live="polite"
-                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-3 text-body text-foreground"
+                className="rounded-lg border border-primary/25 bg-primary/10 px-3 py-3 text-body text-foreground animate-reveal"
               >
                 <p className="font-semibold">
                   Sent to {result.sentCount.toLocaleString()} of{" "}

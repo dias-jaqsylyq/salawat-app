@@ -55,25 +55,3 @@ export function HeightSwap({ swapKey, children, className }: { swapKey: string; 
     </AnimateHeight>
   );
 }
-
-/** Content that grows open from nothing and shrinks away, e.g. an inline form. */
-export function Collapse({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
-  const reduce = useReducedMotion();
-  const transition = reduce ? { duration: 0 } : heightTransition;
-  return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <m.div
-          className={className}
-          // Clipped while it grows or shrinks; let out once open, so focus
-          // rings and shadows inside aren't cut off.
-          initial={{ height: 0, opacity: 0, overflow: "hidden" }}
-          animate={{ height: "auto", opacity: 1, transition, transitionEnd: { overflow: "visible" } }}
-          exit={{ height: 0, opacity: 0, overflow: "hidden", transition }}
-        >
-          {children}
-        </m.div>
-      )}
-    </AnimatePresence>
-  );
-}

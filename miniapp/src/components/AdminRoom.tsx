@@ -94,7 +94,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
     return (
       <Card>
         <CardContent className="py-6">
-          <p role="alert" className="text-body text-destructive">
+          <p role="alert" className="text-body text-destructive animate-reveal">
             {error ?? "Couldn't load this room."}
           </p>
         </CardContent>
@@ -242,12 +242,12 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
           </form>
 
           {passwordError && (
-            <p role="alert" className="text-body text-destructive">
+            <p role="alert" className="text-body text-destructive animate-reveal">
               {passwordError}
             </p>
           )}
           {notice && (
-            <p aria-live="polite" className="text-body text-primary">
+            <p aria-live="polite" className="text-body text-primary animate-reveal">
               {notice}
             </p>
           )}
@@ -311,7 +311,7 @@ export default function AdminRoom({ initData, room, loading, error, onRoomChange
             category again in the Habits tab. Turning it off keeps them stored, just unused.
           </p>
           {categoriesError && (
-            <p role="alert" className="text-body text-destructive">
+            <p role="alert" className="text-body text-destructive animate-reveal">
               {categoriesError}
             </p>
           )}

@@ -208,7 +208,7 @@ export default function LeaderboardScreen({ initData, isAdmin, roomName }: Props
 
       {error && (
         <div className="space-y-2">
-          <p className="text-body text-destructive">{error}</p>
+          <p className="text-body text-destructive animate-reveal">{error}</p>
           <Button type="button" variant="secondary" size="sm" onClick={load}>
             Retry
           </Button>
