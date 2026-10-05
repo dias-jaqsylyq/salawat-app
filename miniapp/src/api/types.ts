@@ -36,7 +36,14 @@ export interface Habit {
    */
   description: string | null;
   period: HabitPeriod;
+  /** What a Basic log scores. */
   pointsWeight: number;
+  /**
+   * The optional second level's TOTAL (not a bonus on top of pointsWeight), or
+   * null for a single-level habit — always null on a weekly one. Optional on
+   * the wire only so this build tolerates a server that predates levels.
+   */
+  extendedPoints?: number | null;
   /**
    * Echoed as stored: null in a categories-disabled room, and also null for a
    * habit created before the room turned categories on — the admin re-confirms
@@ -59,14 +66,20 @@ export interface PersonalHabit {
   name: string;
   /** No period and no description: a personal habit is always a daily yes/no. */
   category: HabitCategory | null;
+  /** Offers a second "Extended" level — recorded only, no points. */
+  hasExtended?: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Which level a log records. Names in the UI are fixed: "Basic" and "Extended". */
+export type HabitLevel = "basic" | "extended";
 
 export interface LogPersonalHabitResponse {
   success: true;
   personalHabitId: number;
   value: number;
+  level?: HabitLevel;
   /** The day actually written — the caller's today unless `date` was passed. */
   date: string;
   logged: true;
@@ -86,7 +99,10 @@ export interface UnlogPersonalHabitResponse {
  */
 export interface PersonalHabitLogWindowEntry {
   personalHabitId: number;
+  hasExtended?: boolean;
   logged: boolean;
+  /** The logged level, null when not logged. */
+  level?: HabitLevel | null;
   value: number;
   editable: boolean;
 }
@@ -128,6 +144,8 @@ export interface PersonalHabitStreak {
 }
 
 export interface AdminHabit extends Habit {
+  /** First day Extended may be logged (set when it was switched on), or null. */
+  extendedFrom?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -137,6 +155,7 @@ export interface LogHabitResponse {
   success: true;
   habitId: number;
   value: number;
+  level?: HabitLevel;
   points: number;
   /** The day actually written — the caller's today unless `date` was passed. */
   date: string;
@@ -153,6 +172,7 @@ export interface UnlogHabitResponse {
 export interface TodayHabitEntry {
   habitId: number;
   logged: boolean;
+  level?: HabitLevel | null;
   value: number;
   points: number;
 }
@@ -177,6 +197,12 @@ export interface HabitLogWindowEntry {
   description: string | null;
   period: HabitPeriod;
   pointsWeight: number;
+  extendedPoints?: number | null;
+  /**
+   * Whether Extended may be logged on *this* day: false before the day the
+   * admin switched it on, so the row offers only Off / Basic there.
+   */
+  extendedAvailable?: boolean;
   category: HabitCategory | null;
   /**
    * False for a deactivated habit, listed only on a day of a past week it was
@@ -185,6 +211,8 @@ export interface HabitLogWindowEntry {
    */
   isActive: boolean;
   logged: boolean;
+  /** The logged level, null when not logged. */
+  level?: HabitLevel | null;
   value: number;
   points: number;
   editable: boolean;

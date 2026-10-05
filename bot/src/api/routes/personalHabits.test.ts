@@ -416,7 +416,9 @@ describe("personal habits — backfill", () => {
       const row = body.habits.find((h: any) => h.personalHabitId === created.body.id);
       assert.deepEqual(row, {
         personalHabitId: created.body.id,
+        hasExtended: false,
         logged: true,
+        level: "basic",
         value: 1,
         editable: true,
       });
@@ -458,7 +460,7 @@ describe("personal habits — progress", () => {
 
     const before = call(progressRoute, { telegramId }).body;
     assert.deepEqual(before.personalToday, [
-      { personalHabitId: created.body.id, logged: false, value: 0 },
+      { personalHabitId: created.body.id, logged: false, level: null, value: 0 },
     ]);
     assert.deepEqual(before.personalStreaks, [
       { personalHabitId: created.body.id, streak: 0, unit: "days" },
@@ -468,7 +470,7 @@ describe("personal habits — progress", () => {
 
     const after = call(progressRoute, { telegramId }).body;
     assert.deepEqual(after.personalToday, [
-      { personalHabitId: created.body.id, logged: true, value: 1 },
+      { personalHabitId: created.body.id, logged: true, level: "basic", value: 1 },
     ]);
     assert.equal(after.personalStreaks[0].streak, 1);
     // The point totals are exactly where they were.

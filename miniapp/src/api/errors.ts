@@ -23,6 +23,21 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "Choose a valid habit type.";
     case "invalid_points_weight":
       return "Points must be a whole number between 1 and 1,000,000.";
+    case "invalid_extended_points":
+      return "Extended points must be a whole number between 1 and 1,000,000.";
+    case "extended_points_below_base":
+      return "Extended points can't be lower than the basic points.";
+    case "extended_level_not_allowed":
+      return "Weekly habits have one level only.";
+    case "no_extended_level":
+      return "This habit has no Extended level anymore.";
+    case "extended_not_available_yet":
+      return "Extended wasn't available yet on this day.";
+    case "extended_level_unavailable":
+      return "Extended levels aren't available right now — try again later.";
+    case "invalid_level":
+    case "invalid_has_extended":
+      return "That level is invalid.";
     case "invalid_is_active":
       return "That active/inactive value is invalid.";
     case "invalid_nickname":

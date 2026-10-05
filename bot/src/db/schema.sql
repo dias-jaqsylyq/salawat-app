@@ -102,7 +102,17 @@ CREATE TABLE IF NOT EXISTS habits (
   -- CHECK cannot come along on an ALTER TABLE ADD COLUMN, so a migrated DB
   -- enforces the two values in the application layer (same as streak_display).
   period TEXT NOT NULL DEFAULT 'daily' CHECK (period IN ('daily','weekly')),
+  -- What a Basic log scores.
   points_weight INTEGER NOT NULL,
+  -- Optional second level ("Extended"): the TOTAL a log at that level scores
+  -- (not a bonus on top of points_weight), or NULL for a single-level habit.
+  -- Daily habits only; >= points_weight. Both rules live in the application
+  -- layer (adminHabits.ts), like period's CHECK on a migrated DB.
+  extended_points INTEGER,
+  -- First TIMEZONE-local day (YYYY-MM-DD) on which Extended may be logged: set
+  -- when extended_points goes NULL -> number, kept while only the points are
+  -- edited, cleared with it. Days before it accept Basic only.
+  extended_from TEXT,
   -- Only meaningful while the room's categories_enabled = 1. Kept (not cleared)
   -- when categories are switched off, so nothing is lost — but a re-enable asks
   -- the admin to re-confirm rather than silently resurrecting it (PRD §0).
@@ -130,9 +140,10 @@ CREATE TABLE IF NOT EXISTS habit_logs (
   -- keep pointing at the room it was earned in after the user switches rooms.
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   log_date TEXT NOT NULL,              -- TIMEZONE-local day, 'YYYY-MM-DD'
-  -- Always 1. Every habit is done-or-not; the column survives the retired
-  -- 'quantity' type only because dropping it would rewrite the table for no
-  -- gain, and row *presence* is what streaks and "today" actually read.
+  -- The level logged: 1 = Basic, 2 = Extended (habits.extended_points). Every
+  -- row written before habits had levels holds 1, i.e. Basic. Row *presence* is
+  -- still what streaks, history and "today" read — any level counts as done;
+  -- only points_earned differs between levels.
   value INTEGER NOT NULL,
   -- Frozen at log time, never recomputed on read — see computePoints.
   --
@@ -176,6 +187,9 @@ CREATE TABLE IF NOT EXISTS personal_habits (
   -- application layer): required while the room has categories_enabled = 1,
   -- rejected while it does not.
   category TEXT CHECK (category IS NULL OR category IN ('IQ','SQ','PQ','EQ')),
+  -- 0/1: offers a second "Extended" level. Records the level only — there are
+  -- no points to differ — so no extended_points and no extended_from.
+  extended_enabled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -197,7 +211,7 @@ CREATE TABLE IF NOT EXISTS personal_habit_logs (
   personal_habit_id INTEGER NOT NULL REFERENCES personal_habits(id) ON DELETE CASCADE,
   room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   log_date TEXT NOT NULL,              -- the owner's local day, 'YYYY-MM-DD'
-  value INTEGER NOT NULL,              -- always 1; presence is what matters
+  value INTEGER NOT NULL,              -- 1 = Basic, 2 = Extended; presence = done
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (user_id, personal_habit_id, log_date)

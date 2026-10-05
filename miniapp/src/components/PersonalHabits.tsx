@@ -9,9 +9,11 @@ import type {
   PersonalHabitLogWindowEntry,
 } from "../api/types.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
+import { serverLevel, type LogLevel } from "../lib/logState.ts";
 import { confirmAction } from "../telegram/confirm.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
-import { BinaryHabitRow } from "./HabitLogRow.tsx";
+import { HabitLogRow } from "./HabitLogRow.tsx";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -24,10 +26,10 @@ import { cn } from "@/lib/utils";
 /** Must stay in sync with NAME_MAX_LENGTH in salawat-bot's habitValidation. */
 const NAME_MAX_LENGTH = 100;
 
-/** The switch half of a row, supplied by the Log screen, which owns the optimistic state. */
+/** The control half of a row, supplied by the Log screen, which owns the optimistic state. */
 export type ToggleProps = Pick<
-  ComponentProps<typeof BinaryHabitRow>,
-  "logged" | "error" | "shakeKey" | "onToggle"
+  ComponentProps<typeof HabitLogRow>,
+  "level" | "error" | "shakeKey" | "onLevelChange"
 >;
 
 interface Props {
@@ -40,7 +42,7 @@ interface Props {
   /** The room's setting: when on, a personal habit needs a category too. */
   categoriesEnabled: boolean;
   /** One row's switch: its (optimistic) state and what a flip does. */
-  toggleProps: (habit: PersonalHabit, serverLogged: boolean) => ToggleProps;
+  toggleProps: (habit: PersonalHabit, server: LogLevel) => ToggleProps;
   /** A rename or delete landed — refresh the shared progress state. */
   onLogged: () => void;
   /** The list itself changed — refetch it. */
@@ -57,6 +59,7 @@ function findEntry(
 interface FormValues {
   name: string;
   category: HabitCategory | null;
+  hasExtended: boolean;
 }
 
 interface HabitFormProps {
@@ -83,6 +86,7 @@ function HabitForm({
 }: HabitFormProps) {
   const [name, setName] = useState(initial.name);
   const [category, setCategory] = useState<HabitCategory | null>(initial.category);
+  const [hasExtended, setHasExtended] = useState(initial.hasExtended);
 
   const nameValid = name.trim().length > 0 && name.trim().length <= NAME_MAX_LENGTH;
   const categoryValid = !categoriesEnabled || category !== null;
@@ -90,7 +94,7 @@ function HabitForm({
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (busy || !nameValid || !categoryValid) return;
-    onSubmit({ name: name.trim(), category });
+    onSubmit({ name: name.trim(), category, hasExtended });
   }
 
   return (
@@ -115,6 +119,21 @@ function HabitForm({
           onChange={setCategory}
         />
       )}
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Label htmlFor={`${idPrefix}-extended`}>Extended level</Label>
+          <p className="mt-1 text-footnote text-muted-foreground">
+            Log a day as Basic or Extended — e.g. 30 or 45 minutes.
+          </p>
+        </div>
+        <Switch
+          id={`${idPrefix}-extended`}
+          checked={hasExtended}
+          disabled={busy}
+          onCheckedChange={setHasExtended}
+        />
+      </div>
 
       {error && (
         <p role="alert" className="text-body text-destructive animate-reveal">
@@ -207,6 +226,7 @@ export default function PersonalHabits({
         createPersonalHabit(initData, {
           name: values.name,
           ...(categoriesEnabled ? { category: values.category } : {}),
+          ...(values.hasExtended ? { hasExtended: true } : {}),
         }),
       "Couldn't add that habit.",
       setFormError
@@ -215,11 +235,16 @@ export default function PersonalHabits({
   }
 
   async function handleEdit(personalHabitId: number, values: FormValues) {
+    const current = habits?.find((habit) => habit.id === personalHabitId);
     const ok = await run(
       () =>
         updatePersonalHabit(initData, personalHabitId, {
           name: values.name,
           ...(categoriesEnabled ? { category: values.category } : {}),
+          // Only when changed, so an unrelated rename never depends on it.
+          ...(values.hasExtended !== (current?.hasExtended === true)
+            ? { hasExtended: values.hasExtended }
+            : {}),
         }),
       "Couldn't save that habit.",
       setFormError
@@ -301,7 +326,11 @@ export default function PersonalHabits({
                   <HabitForm
                     key={habit.id}
                     idPrefix={`personal-habit-${habit.id}`}
-                    initial={{ name: habit.name, category: habit.category }}
+                    initial={{
+                      name: habit.name,
+                      category: habit.category,
+                      hasExtended: habit.hasExtended === true,
+                    }}
                     categoriesEnabled={categoriesEnabled}
                     submitLabel="Save"
                     busy={busy}
@@ -349,12 +378,13 @@ export default function PersonalHabits({
 
               const entry = findEntry(entries, habit.id);
               return (
-                <BinaryHabitRow
+                <HabitLogRow
                   key={habit.id}
                   name={habit.name}
                   badge={categoryBadge(habit)}
+                  hasExtended={habit.hasExtended === true}
                   disabled={entry !== undefined && !entry.editable}
-                  {...toggleProps(habit, entry?.logged ?? false)}
+                  {...toggleProps(habit, entry ? serverLevel(entry) : "off")}
                 />
               );
             })}
@@ -362,7 +392,7 @@ export default function PersonalHabits({
             {adding && (
               <HabitForm
                 idPrefix="new-personal-habit"
-                initial={{ name: "", category: null }}
+                initial={{ name: "", category: null, hasExtended: false }}
                 categoriesEnabled={categoriesEnabled}
                 submitLabel="Add habit"
                 busy={busy}

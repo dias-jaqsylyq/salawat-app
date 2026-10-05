@@ -1,4 +1,4 @@
-import { HABIT_CATEGORIES, type HabitCategory } from "../types.js";
+import { HABIT_CATEGORIES, type HabitCategory, type HabitLevel } from "../types.js";
 
 /**
  * Validation shared by the admin habit routes and the personal habit routes.
@@ -97,4 +97,15 @@ export function categoryForCreate(
   if (!categoriesEnabled) return null;
   if (checked.category === undefined || checked.category === null) return undefined;
   return checked.category;
+}
+
+/**
+ * The optional `level` of a log POST. Omitted or null means Basic, so a Mini
+ * App build that predates levels (posting `{}` or `{value: 1}`) keeps logging
+ * exactly what it always did. Anything else that is not a known level is null.
+ */
+export function parseLevel(raw: unknown): HabitLevel | null {
+  if (raw === undefined || raw === null) return "basic";
+  if (raw === "basic" || raw === "extended") return raw;
+  return null;
 }

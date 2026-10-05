@@ -13,9 +13,15 @@ import {
   updatePersonalHabit,
   upsertPersonalHabitLog,
 } from "../../db/repository.js";
-import type { PersonalHabit, User } from "../../types.js";
+import { LEVEL_VALUE, levelOfValue, type PersonalHabit, type User } from "../../types.js";
 import { dailyLogWindow } from "../habitLogWindow.js";
-import { categoryForCreate, checkCategory, isValidHabitName } from "../habitValidation.js";
+import {
+  categoryForCreate,
+  checkCategory,
+  isValidHabitName,
+  parseLevel,
+} from "../habitValidation.js";
+import { hasExtendedLevelColumns } from "../../db/client.js";
 import { parseDateParam, parseIdParam } from "../params.js";
 import { allowRequest } from "../rateLimit.js";
 import { getOwnPersonalHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope.js";
@@ -38,6 +44,7 @@ function personalHabitResponse(habit: PersonalHabit) {
     id: habit.id,
     name: habit.name,
     category: habit.category,
+    hasExtended: habit.extended_enabled === 1,
     createdAt: habit.created_at,
     updatedAt: habit.updated_at,
   };
@@ -61,7 +68,12 @@ export function listPersonalHabitsRoute(req: Request, res: Response): void {
   );
 }
 
-/** POST /api/personal-habits — body `{name, category?}`. */
+/**
+ * POST /api/personal-habits — body `{name, category?, hasExtended?}`.
+ * `hasExtended` (default false) offers a second "Extended" level on the Log
+ * screen. It records the level only: there are no points, and unlike a room
+ * habit no start date — any day in the window may be logged Extended.
+ */
 export function createPersonalHabitRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
   if (!caller) return;
@@ -86,6 +98,9 @@ export function createPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
+  const hasExtended = checkHasExtended(body, res);
+  if (hasExtended === null) return;
+
   if (countPersonalHabits(caller.user.id, caller.roomId) >= MAX_PERSONAL_HABITS_PER_ROOM) {
     res.status(400).json({ success: false, error: "too_many_personal_habits" });
     return;
@@ -95,13 +110,37 @@ export function createPersonalHabitRoute(req: Request, res: Response): void {
     caller.user.id,
     caller.roomId,
     body.name.trim(),
-    category
+    category,
+    hasExtended === true
   );
   res.status(201).json(personalHabitResponse(habit));
 }
 
 /**
- * PATCH /api/personal-habits/:id — body `{name?, category?}`.
+ * Validate an optional `hasExtended`: a boolean, or absent (undefined). Writes
+ * the error itself and returns null when the request cannot proceed —
+ * including turning it on while the DB lacks the column (see
+ * runExtendedLevelMigration).
+ */
+function checkHasExtended(
+  body: Record<string, unknown>,
+  res: Response
+): boolean | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(body, "hasExtended")) return undefined;
+  if (typeof body.hasExtended !== "boolean") {
+    res.status(400).json({ success: false, error: "invalid_has_extended" });
+    return null;
+  }
+  if (!hasExtendedLevelColumns()) {
+    res.status(503).json({ success: false, error: "extended_level_unavailable" });
+    return null;
+  }
+  return body.hasExtended;
+}
+
+/**
+ * PATCH /api/personal-habits/:id — body `{name?, category?, hasExtended?}`.
+ * Switching hasExtended off leaves days already logged Extended as they are.
  * Unlike room habits, the owner edits these themselves; an admin has no route
  * that reaches them at all.
  */
@@ -123,8 +162,9 @@ export function patchPersonalHabitRoute(req: Request, res: Response): void {
   const body = req.body ?? {};
   const hasName = Object.prototype.hasOwnProperty.call(body, "name");
   const hasCategory = Object.prototype.hasOwnProperty.call(body, "category");
+  const hasExtendedField = Object.prototype.hasOwnProperty.call(body, "hasExtended");
 
-  if (!hasName && !hasCategory) {
+  if (!hasName && !hasCategory && !hasExtendedField) {
     res.status(400).json({ success: false, error: "invalid_body" });
     return;
   }
@@ -148,7 +188,14 @@ export function patchPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const habit = updatePersonalHabit(id, { name, category: checked.category });
+  const extendedEnabled = checkHasExtended(body, res);
+  if (extendedEnabled === null) return;
+
+  const habit = updatePersonalHabit(id, {
+    name,
+    category: checked.category,
+    extendedEnabled,
+  });
   res.json(personalHabitResponse(habit));
 }
 
@@ -230,7 +277,9 @@ export function personalHabitLogWindowRoute(req: Request, res: Response): void {
     const log = logs.get(habit.id);
     return {
       personalHabitId: habit.id,
+      hasExtended: habit.extended_enabled === 1,
       logged: log !== undefined,
+      level: log ? levelOfValue(log.value) : null,
       value: log?.value ?? 0,
       editable: date >= dailyLogWindow(caller.user, habit).minDate,
     };
@@ -253,6 +302,9 @@ export function personalHabitLogWindowRoute(req: Request, res: Response): void {
  * back to whichever is later of the window's start, the day the caller
  * joined the room, or the day this personal habit was created (BACKFILL PRD).
  * The response has no `points` field because there are none to report.
+ *
+ * Body `level` is "basic" (default) or "extended"; Extended is refused with
+ * no_extended_level unless the habit has hasExtended on.
  */
 export function logPersonalHabitRoute(req: Request, res: Response): void {
   const id = parseIdParam(req.params.id);
@@ -270,14 +322,22 @@ export function logPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  // Done-or-not: the only value a log can carry is 1. `value` is still accepted
-  // so an older Mini App build posting `{value: 1}` keeps working.
+  // `value` is the pre-levels field, still accepted (only as 1) so an older
+  // Mini App build posting `{value: 1}` keeps working; the level is `level`.
   const body = req.body ?? {};
   if (body.value !== undefined && body.value !== null && body.value !== 1) {
     res.status(400).json({ success: false, error: "invalid_value" });
     return;
   }
-  const value = 1;
+  const level = parseLevel(body.level);
+  if (level === null) {
+    res.status(400).json({ success: false, error: "invalid_level" });
+    return;
+  }
+  if (level === "extended" && habit.extended_enabled !== 1) {
+    res.status(400).json({ success: false, error: "no_extended_level" });
+    return;
+  }
 
   const date = resolvePersonalLogDate(req, res, caller.user, habit);
   if (date === null) return;
@@ -287,11 +347,12 @@ export function logPersonalHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  const log = upsertPersonalHabitLog(habit.id, value, date);
+  const log = upsertPersonalHabitLog(habit.id, LEVEL_VALUE[level], date);
   res.json({
     success: true,
     personalHabitId: habit.id,
     value: log.value,
+    level: levelOfValue(log.value),
     date: log.log_date,
     logged: true,
   });

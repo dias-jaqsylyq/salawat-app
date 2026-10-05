@@ -478,3 +478,92 @@ if (backfilledJoins > 0) {
     `db migration: backfilled users.room_joined_at from created_at for ${backfilledJoins} member(s).`
   );
 }
+
+/**
+ * The two-level ("Extended") habit columns. Kept out of ADDED_COLUMNS on
+ * purpose: that list runs unguarded at boot, and this step must never be able
+ * to stop the bot from starting — see runExtendedLevelMigration().
+ */
+export const EXTENDED_LEVEL_COLUMNS: readonly { table: string; column: string; definition: string }[] = [
+  { table: "habits", column: "extended_points", definition: "INTEGER" },
+  { table: "habits", column: "extended_from", definition: "TEXT" },
+  {
+    table: "personal_habits",
+    column: "extended_enabled",
+    definition: "INTEGER NOT NULL DEFAULT 0",
+  },
+];
+
+/**
+ * Add whichever EXTENDED_LEVEL_COLUMNS are missing. Additive only: three
+ * ALTER TABLE ADD COLUMNs, no rebuild, no DROP, no row rewritten. The log
+ * tables are not touched at all — the level lives in their existing `value`
+ * column, which every row written so far holds as 1, i.e. Basic.
+ *
+ * No `PRAGMA foreign_key_check` gate: ADD COLUMN cannot create or repair a
+ * foreign-key violation, and production already carries orphan rows that a
+ * whole-file check would trip on (the dropQuantityHabits incident).
+ *
+ * Snapshots the file first, but only when there is something to add, and all
+ * ALTERs run in one transaction, so a failure part-way leaves no column added.
+ * Idempotent: a no-op once every column exists. Throws on failure — the boot
+ * call goes through runExtendedLevelMigration(), which does not.
+ *
+ * `columns` is overridable for tests only.
+ */
+export function addExtendedLevelColumns(
+  columns: readonly { table: string; column: string; definition: string }[] = EXTENDED_LEVEL_COLUMNS
+): string[] {
+  const missing = columns.filter(
+    ({ table, column }) => tableExists(table) && !columnNames(table).includes(column)
+  );
+  if (missing.length === 0) return [];
+
+  // A snapshot failure (disk full, permissions) throws here, before any ALTER.
+  const snapshot = snapshotDb("pre-extended-level");
+  console.warn(
+    `db migration: adding ${missing.map((c) => `${c.table}.${c.column}`).join(", ")}. ` +
+      (snapshot ? `Snapshot: ${snapshot}` : `No file snapshot taken (${config.dbPath}).`)
+  );
+  db.transaction(() => {
+    for (const { table, column, definition } of missing) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  })();
+  return missing.map((c) => `${c.table}.${c.column}`);
+}
+
+/** True when every Extended-level column is present, i.e. the feature can be written. */
+export function hasExtendedLevelColumns(): boolean {
+  return EXTENDED_LEVEL_COLUMNS.every(
+    ({ table, column }) => tableExists(table) && columnNames(table).includes(column)
+  );
+}
+
+/**
+ * Boot wrapper for addExtendedLevelColumns(). Deliberately NOT fatal, unlike
+ * the migrations above: if it fails, the transaction has rolled back, the DB is
+ * exactly as before, and the app runs as it did before the feature — every
+ * habit reads as single-level (the missing column is undefined, treated as
+ * NULL) and the admin endpoints that would write the new columns answer
+ * 503 extended_level_unavailable. The next boot simply tries again.
+ */
+export function runExtendedLevelMigration(
+  columns: readonly { table: string; column: string; definition: string }[] = EXTENDED_LEVEL_COLUMNS
+): boolean {
+  try {
+    const added = addExtendedLevelColumns(columns);
+    if (added.length > 0) console.warn(`db migration: added ${added.join(", ")}.`);
+    return true;
+  } catch (err) {
+    console.error(
+      `db migration: adding the Extended-level columns failed; continuing without the ` +
+        `feature (transaction rolled back, database unchanged): ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      err
+    );
+    return false;
+  }
+}
+
+runExtendedLevelMigration();

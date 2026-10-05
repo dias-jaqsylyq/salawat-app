@@ -166,6 +166,17 @@ export type HabitPeriod = "daily" | "weekly";
 
 export const HABIT_PERIODS: readonly HabitPeriod[] = ["daily", "weekly"] as const;
 
+/**
+ * A log's level, stored in habit_logs.value / personal_habit_logs.value — the
+ * column that was "always 1" before habits had two levels, so every existing
+ * row already reads as Basic without a migration.
+ */
+export type HabitLevel = "basic" | "extended";
+export const LEVEL_VALUE: Record<HabitLevel, number> = { basic: 1, extended: 2 };
+export function levelOfValue(value: number): HabitLevel {
+  return value === LEVEL_VALUE.extended ? "extended" : "basic";
+}
+
 export interface Habit {
   id: number;
   room_id: number;
@@ -178,7 +189,20 @@ export interface Habit {
   description: string | null;
   /** Fixed at creation: PATCH /api/admin/habits refuses to change it. */
   period: HabitPeriod;
+  /** What a Basic log scores. */
   points_weight: number;
+  /**
+   * Total points of the optional second level ("Extended"), or NULL for a
+   * single-level habit. Never set on a weekly habit; always >= points_weight
+   * when set. Undefined on a DB whose addExtendedLevelColumns() step failed —
+   * so read it with `?? null`.
+   */
+  extended_points?: number | null;
+  /**
+   * First day (YYYY-MM-DD in config.timezone) a member may log Extended: the
+   * day extended_points last went NULL -> number. NULL while it is NULL.
+   */
+  extended_from?: string | null;
   /**
    * NULL in a room with categories disabled. Preserved (not cleared) when a room
    * turns categories off, but a re-enable asks the admin to re-confirm rather
@@ -201,7 +225,10 @@ export interface HabitLog {
   room_id: number;
   /** TIMEZONE-local day, 'YYYY-MM-DD'. */
   log_date: string;
-  /** Always 1 — presence of the row is what every read actually keys off. */
+  /**
+   * The level logged: 1 = Basic, 2 = Extended (see HabitLevel). Presence of the
+   * row is still what streaks and history key off — any level counts as done.
+   */
   value: number;
   /**
    * Frozen at log time via computePoints — never recomputed on read.
@@ -230,6 +257,12 @@ export interface PersonalHabit {
   name: string;
   /** NULL in a room with categories disabled; required when they are enabled. */
   category: HabitCategory | null;
+  /**
+   * SQLite 0/1: offers a second "Extended" level. No points (a personal habit
+   * has none) and no start date — it only records the level reached.
+   * Undefined if the migration step failed; read as 0.
+   */
+  extended_enabled?: number;
   created_at: string;
   updated_at: string;
 }
@@ -241,6 +274,7 @@ export interface PersonalHabitLog {
   personal_habit_id: number;
   room_id: number;
   log_date: string;
+  /** 1 = Basic, 2 = Extended (see HabitLevel). */
   value: number;
   created_at: string;
   updated_at: string;

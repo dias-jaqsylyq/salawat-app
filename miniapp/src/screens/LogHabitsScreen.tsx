@@ -23,18 +23,20 @@ import { hapticMedium, hapticNotification } from "../lib/haptics.ts";
 import { CATEGORY_META, groupHabitsByCategory } from "../lib/habitCategories.ts";
 import {
   dayProgress,
-  effectiveLogged,
+  effectiveLevel,
   logKey,
   markedDatesWith,
+  serverLevel,
   toggleFeedback,
   withOverride,
   withoutOverrides,
   type DayProgress,
   type DaySnapshot,
   type LogKind,
+  type LogLevel,
   type Overrides,
 } from "../lib/logState.ts";
-import { BinaryHabitRow } from "../components/HabitLogRow.tsx";
+import { HabitLogRow } from "../components/HabitLogRow.tsx";
 import WeekDayPicker from "../components/WeekDayPicker.tsx";
 import PersonalHabits, { type ToggleProps } from "../components/PersonalHabits.tsx";
 import { Badge } from "@/components/ui/badge";
@@ -74,6 +76,7 @@ function toLogRows(logWindow: HabitLogWindowResponse): LogRow[] {
     description: entry.description,
     period: entry.period,
     pointsWeight: entry.pointsWeight,
+    extendedPoints: entry.extendedPoints ?? null,
     category: entry.category,
     entry,
   }));
@@ -112,11 +115,13 @@ function HabitRows({ habits, toggleProps }: HabitRowsProps) {
         {habits.map((habit) => {
           const { entry } = habit;
           return (
-            <BinaryHabitRow
+            <HabitLogRow
               key={habit.id}
               name={habit.name}
               description={habit.description}
               pointsWeight={habit.pointsWeight}
+              extendedPoints={habit.extendedPoints}
+              extendedAvailable={entry.extendedAvailable ?? false}
               weekly={habit.period === "weekly"}
               countedThisWeek={entry.countedThisWeek ?? false}
               disabled={!entry.editable}
@@ -239,7 +244,8 @@ export default function LogHabitsScreen({
   const requestSeq = useRef(0);
 
   /*
-   * Optimistic toggles (UI audit A22). A flip lands in `overrides` at once and
+   * Optimistic toggles (UI audit A22). A flip — or a level tap — lands in
+   * `overrides` at once and
    * the request goes out behind it; the switch never waits. Per habit-day at
    * most one request is in flight: flips made meanwhile only move the desired
    * value, and the running request loop sends whatever is desired once it
@@ -318,11 +324,12 @@ export default function LogHabitsScreen({
     const { date } = logWindow;
     const room = logWindow.habits.map((entry) => ({
       ...entry,
-      logged: effectiveLogged(ov, logKey(date, "room", entry.habitId), entry.logged),
+      logged: effectiveLevel(ov, logKey(date, "room", entry.habitId), serverLevel(entry)) !== "off",
     }));
     const personal = (personalHabits ?? []).map((habit) => {
       const entry = personalLogWindow?.habits.find((e) => e.personalHabitId === habit.id);
-      return effectiveLogged(ov, logKey(date, "personal", habit.id), entry?.logged ?? false);
+      const server = entry ? serverLevel(entry) : "off";
+      return effectiveLevel(ov, logKey(date, "personal", habit.id), server) !== "off";
     });
     return {
       marks: room.filter((r) => r.logged).length + personal.filter(Boolean).length,
@@ -330,9 +337,9 @@ export default function LogHabitsScreen({
     };
   }
 
-  async function toggle(key: string, date: string, checked: boolean, send: (logged: boolean) => Promise<unknown>) {
+  async function toggle(key: string, date: string, level: LogLevel, send: (level: LogLevel) => Promise<unknown>) {
     const before = snapshot(overridesRef.current);
-    applyOverrides(withOverride(overridesRef.current, key, checked));
+    applyOverrides(withOverride(overridesRef.current, key, level));
     if (toggleFeedback(before, snapshot(overridesRef.current)) === "tap") hapticMedium();
     else hapticNotification("success");
 
@@ -342,7 +349,7 @@ export default function LogHabitsScreen({
 
     inFlight.current.add(key);
     try {
-      let sent: boolean;
+      let sent: LogLevel;
       do {
         sent = overridesRef.current[key]!;
         await send(sent);
@@ -369,30 +376,34 @@ export default function LogHabitsScreen({
   function toggleProps(
     kind: LogKind,
     id: number,
-    serverLogged: boolean,
-    send: (date: string, logged: boolean) => Promise<unknown>
+    server: LogLevel,
+    send: (date: string, level: LogLevel) => Promise<unknown>
   ): ToggleProps {
     const date = logWindow!.date;
     const key = logKey(date, kind, id);
     const failure = failures[key];
     return {
-      logged: effectiveLogged(overrides, key, serverLogged),
+      level: effectiveLevel(overrides, key, server),
       error: failure?.message ?? null,
       shakeKey: failure?.shakeKey ?? 0,
-      onToggle: (checked) => void toggle(key, date, checked, (logged) => send(date, logged)),
+      onLevelChange: (level) => void toggle(key, date, level, (wanted) => send(date, wanted)),
     };
   }
 
+  // Basic is sent as an omitted level, exactly what this screen sent before
+  // habits had levels.
   const roomToggleProps = (habit: LogRow) =>
-    toggleProps("room", habit.id, habit.entry.logged, (date, logged) =>
-      logged ? logHabit(initData, habit.id, undefined, date) : deleteHabitLog(initData, habit.id, date)
+    toggleProps("room", habit.id, serverLevel(habit.entry), (date, level) =>
+      level === "off"
+        ? deleteHabitLog(initData, habit.id, date)
+        : logHabit(initData, habit.id, level === "extended" ? "extended" : undefined, date)
     );
 
-  const personalToggleProps = (habit: PersonalHabit, serverLogged: boolean) =>
-    toggleProps("personal", habit.id, serverLogged, (date, logged) =>
-      logged
-        ? logPersonalHabit(initData, habit.id, undefined, date)
-        : deletePersonalHabitLog(initData, habit.id, date)
+  const personalToggleProps = (habit: PersonalHabit, server: LogLevel) =>
+    toggleProps("personal", habit.id, server, (date, level) =>
+      level === "off"
+        ? deletePersonalHabitLog(initData, habit.id, date)
+        : logPersonalHabit(initData, habit.id, level === "extended" ? "extended" : undefined, date)
     );
 
   // Grouping is the room's choice, not the habit's: a room with categories off
