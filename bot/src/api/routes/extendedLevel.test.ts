@@ -463,3 +463,61 @@ describe("privacy", () => {
     assert.equal(bobRow.points, 0);
   });
 });
+
+describe("a database whose Extended-level migration failed", () => {
+  it("keeps every single-level path working and answers 503 only for Extended writes", async () => {
+    const { runExtendedLevelMigration } = await import("../../db/client.js");
+    const admin = makeUser();
+    const before = makeReading();
+    db.exec(`
+      ALTER TABLE habits DROP COLUMN extended_points;
+      ALTER TABLE habits DROP COLUMN extended_from;
+      ALTER TABLE personal_habits DROP COLUMN extended_enabled;
+    `);
+    try {
+      const single = call(createHabitRoute, {
+        telegramId: admin,
+        body: { name: "Plain", pointsWeight: 2 },
+      });
+      assert.equal(single.status, 201);
+      assert.equal(single.body.extendedPoints, null);
+      const patched = call(patchHabitRoute, {
+        telegramId: admin,
+        params: { id: String(single.body.id) },
+        body: { name: "Plain renamed", pointsWeight: 3 },
+      });
+      assert.equal(patched.status, 200);
+
+      const extended = call(createHabitRoute, {
+        telegramId: admin,
+        body: { name: "Two levels", pointsWeight: 1, extendedPoints: 2 },
+      });
+      assert.equal(extended.status, 503);
+      assert.equal(extended.body.error, "extended_level_unavailable");
+      const off = call(patchHabitRoute, {
+        telegramId: admin,
+        params: { id: String(single.body.id) },
+        body: { extendedPoints: null },
+      });
+      assert.equal(off.status, 503);
+
+      // Logging still works, as Basic; Extended is simply not offered.
+      const member = makeUser();
+      assert.equal(log(member, before.id, {}).body.points, 1);
+      assert.equal(log(member, before.id, { level: "extended" }).body.error, "no_extended_level");
+      assert.equal(windowRow(member, before.id).extendedPoints, null);
+
+      const personal = call(createPersonalHabitRoute, { telegramId: member, body: { name: "Walk" } });
+      assert.equal(personal.status, 201);
+      assert.equal(
+        call(createPersonalHabitRoute, {
+          telegramId: member,
+          body: { name: "Walk 2", hasExtended: true },
+        }).status,
+        503
+      );
+    } finally {
+      assert.equal(runExtendedLevelMigration(), true);
+    }
+  });
+});

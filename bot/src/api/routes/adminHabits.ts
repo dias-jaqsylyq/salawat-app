@@ -44,6 +44,12 @@ function checkExtendedPoints(
   basePoints: number,
   res: Response
 ): extendedPoints is number | null {
+  // First: without the columns even switching off cannot be written (see
+  // runExtendedLevelMigration), and that is a server state, not a bad request.
+  if (!hasExtendedLevelColumns()) {
+    res.status(503).json({ success: false, error: "extended_level_unavailable" });
+    return false;
+  }
   if (extendedPoints === null) return true;
   if (!isValidPointsWeight(extendedPoints)) {
     res.status(400).json({ success: false, error: "invalid_extended_points" });
@@ -55,10 +61,6 @@ function checkExtendedPoints(
   }
   if (extendedPoints < basePoints) {
     res.status(400).json({ success: false, error: "extended_points_below_base" });
-    return false;
-  }
-  if (!hasExtendedLevelColumns()) {
-    res.status(503).json({ success: false, error: "extended_level_unavailable" });
     return false;
   }
   return true;
@@ -106,8 +108,13 @@ export function createHabitRoute(req: Request, res: Response): void {
     return;
   }
 
+  // Omitted/null is a plain single-level habit and never touches the new
+  // columns, so it is not checked (and keeps working without them).
   const extendedPoints: unknown = body.extendedPoints ?? null;
-  if (!checkExtendedPoints(extendedPoints, rawPeriod as HabitPeriod, body.pointsWeight, res)) {
+  if (
+    extendedPoints !== null &&
+    !checkExtendedPoints(extendedPoints, rawPeriod as HabitPeriod, body.pointsWeight, res)
+  ) {
     return;
   }
 
