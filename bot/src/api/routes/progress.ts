@@ -13,6 +13,7 @@ import {
   listPersonalHabits,
 } from "../../db/repository.js";
 import { getCurrentWeekBounds, getUserTodayKey } from "../../utils/challenge.js";
+import { levelOfValue } from "../../types.js";
 import { userNeedsRealName } from "../realName.js";
 import { resolveCallerRoom, roomResponse } from "../roomScope.js";
 
@@ -87,6 +88,7 @@ export function progressRoute(req: Request, res: Response): void {
     return {
       habitId: habit.id,
       logged: log !== undefined,
+      level: log ? levelOfValue(log.value) : null,
       value: log?.value ?? 0,
       points: log?.points_earned ?? 0,
     };
@@ -121,6 +123,7 @@ export function progressRoute(req: Request, res: Response): void {
     return {
       personalHabitId: habit.id,
       logged: log !== undefined,
+      level: log ? levelOfValue(log.value) : null,
       value: log?.value ?? 0,
     };
   });

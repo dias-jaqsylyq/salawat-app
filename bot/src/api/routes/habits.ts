@@ -4,12 +4,14 @@ import {
   deleteHabitLog,
   getLoggedDatesInRange,
   getUserHabitLogsForDate,
+  isExtendedAvailableOn,
   listHabits,
   upsertHabitLog,
   weekCarrierRow,
 } from "../../db/repository.js";
-import type { Habit, User } from "../../types.js";
+import { LEVEL_VALUE, levelOfValue, type Habit, type User } from "../../types.js";
 import { dailyLogWindow } from "../habitLogWindow.js";
+import { parseLevel } from "../habitValidation.js";
 import { dayKeyFromSqliteUtc, getUserTimezone } from "../../utils/challenge.js";
 import { weekBoundsOfDateKey } from "../../utils/dates.js";
 import { parseDateParam, parseIdParam } from "../params.js";
@@ -25,6 +27,8 @@ import { getRoomHabit, requireCallerRoom, resolveCallerRoom } from "../roomScope
  * from the room's own categoriesEnabled (GET /api/progress). `period` says
  * whether a habit scores once a day or once a week; weekly habits are listed
  * among the daily ones, in the same categories, and are not a separate section.
+ * `extendedPoints` is the Extended level's total, or null for a single-level
+ * habit (always null on a weekly one).
  */
 export function listHabitsRoute(req: Request, res: Response): void {
   const caller = resolveCallerRoom(req);
@@ -39,6 +43,7 @@ export function listHabitsRoute(req: Request, res: Response): void {
     description: habit.description,
     period: habit.period,
     pointsWeight: habit.points_weight,
+    extendedPoints: habit.extended_points ?? null,
     category: habit.category,
   }));
   res.json(habits);
@@ -70,6 +75,13 @@ export function listHabitsRoute(req: Request, res: Response): void {
  *
  * Every entry carries the habit's own display fields, so the Log screen can
  * render a retired habit that GET /api/habits (active only) no longer lists.
+ *
+ * `level` is the logged level ("basic" | "extended", null when not logged),
+ * `extendedPoints` the habit's Extended total (null for single-level), and
+ * `extendedAvailable` whether Extended may be logged on *this* `date` — false
+ * before the day the admin switched it on (extended_from), so the client offers
+ * only Off / Basic there. A day already logged Extended keeps showing its level
+ * even if Extended was later switched off.
  *
  * `markedDates` lists every day of the whole window (not just `date`) that
  * carries any mark — room habit or personal, this room only — so the day
@@ -123,9 +135,12 @@ export function habitLogWindowRoute(req: Request, res: Response): void {
       description: habit.description,
       period: habit.period,
       pointsWeight: habit.points_weight,
+      extendedPoints: habit.extended_points ?? null,
+      extendedAvailable: isExtendedAvailableOn(habit, date),
       category: habit.category,
       isActive,
       logged: log !== undefined,
+      level: log ? levelOfValue(log.value) : null,
       value: log?.value ?? 0,
       points: log?.points_earned ?? 0,
       editable: isActive && date >= dailyLogWindow(caller.user, habit).minDate,
@@ -198,6 +213,13 @@ function resolveLogDate(req: Request, res: Response, user: User, habit: Habit): 
  * dailyLogWindow. DAILY and WEEKLY habits share the same window: a WEEKLY
  * habit's carrier-row bookkeeping (upsertHabitLog) already keys off whichever
  * date it is given, not "today".
+ *
+ * Body `level` is "basic" (the default) or "extended". Re-posting a day with
+ * the other level switches it in place: one row per day, its points_earned
+ * recomputed from the habit as it is now. Extended is refused on a weekly
+ * habit (extended_level_not_allowed), on a habit without a second level
+ * (no_extended_level), and on any day before the admin switched it on
+ * (extended_not_available_yet) — all after the usual window checks.
  */
 export function logHabitRoute(req: Request, res: Response): void {
   const habitId = parseIdParam(req.params.id);
@@ -219,30 +241,48 @@ export function logHabitRoute(req: Request, res: Response): void {
     return;
   }
 
-  // Every habit is done-or-not, so the only value a log can carry is 1. The
-  // field is still accepted (and still validated) so a Mini App build that
-  // predates the change keeps working by posting `{value: 1}`.
+  // `value` is the pre-levels field: still accepted (and still only as 1) so
+  // an old Mini App build posting `{value: 1}` keeps working. The level comes
+  // from `level` only.
   const body = req.body ?? {};
   if (body.value !== undefined && body.value !== null && body.value !== 1) {
     res.status(400).json({ success: false, error: "invalid_value" });
     return;
   }
-  const value = 1;
+  const level = parseLevel(body.level);
+  if (level === null) {
+    res.status(400).json({ success: false, error: "invalid_level" });
+    return;
+  }
+  if (level === "extended" && habit.period === "weekly") {
+    res.status(400).json({ success: false, error: "extended_level_not_allowed" });
+    return;
+  }
+  if (level === "extended" && (habit.extended_points ?? null) === null) {
+    res.status(400).json({ success: false, error: "no_extended_level" });
+    return;
+  }
 
   const date = resolveLogDate(req, res, caller.user, habit);
   if (date === null) return;
+
+  if (level === "extended" && !isExtendedAvailableOn(habit, date)) {
+    res.status(400).json({ success: false, error: "extended_not_available_yet" });
+    return;
+  }
 
   if (!allowRequest(req.telegramId, HABIT_LOG_RATE_LIMIT_PER_MINUTE)) {
     res.status(429).json({ success: false, error: "rate_limited" });
     return;
   }
 
-  const log = upsertHabitLog(caller.user.id, habit.id, value, date);
+  const log = upsertHabitLog(caller.user.id, habit.id, LEVEL_VALUE[level], date);
 
   res.json({
     success: true,
     habitId: habit.id,
     value: log.value,
+    level: levelOfValue(log.value),
     points: log.points_earned,
     date: log.log_date,
     logged: true,

@@ -2,11 +2,13 @@ import { db } from "./client.js";
 import { generateRoomPassword } from "../utils/roomPassword.js";
 import { streakFromLoggedDays, streakFromLoggedWeeks } from "../utils/streak.js";
 import { weekBoundsOfDateKey } from "../utils/dates.js";
+import { getDayKeyInTimezone } from "../utils/challenge.js";
 import type {
   CreateUserReminders,
   ExportRow,
   Habit,
   HabitCategory,
+  HabitLevel,
   HabitLog,
   HabitPeriod,
   LeaderboardRow,
@@ -21,6 +23,7 @@ import type {
   UserRole,
   WeeklyLeaderboardRow,
 } from "../types.js";
+import { levelOfValue } from "../types.js";
 
 export function getUserByTelegramId(telegramId: number): User | undefined {
   return db
@@ -1240,8 +1243,10 @@ export function resetAllChallengeData(): {
 }
 
 /**
- * What one log row is worth: the habit's flat points_weight, unless a weekly
- * habit has already banked this week somewhere else, in which case 0.
+ * What one log row is worth: the habit's points_weight for a Basic log, or its
+ * extended_points (a total, not a bonus) for an Extended one — unless a weekly
+ * habit has already banked this week somewhere else, in which case 0. Weekly
+ * habits never have an extended level, so the two rules never meet.
  *
  * Called once at write time in upsertHabitLog and frozen into
  * habit_logs.points_earned — never recompute from habits.points_weight when
@@ -1252,11 +1257,37 @@ export function resetAllChallengeData(): {
  * when some *other* day of the same week already carries the weight.
  */
 export function computePoints(
-  habit: { period: HabitPeriod; points_weight: number },
-  weekAlreadyBanked = false
+  habit: { period: HabitPeriod; points_weight: number; extended_points?: number | null },
+  weekAlreadyBanked = false,
+  level: HabitLevel = "basic"
 ): number {
   if (habit.period === "weekly" && weekAlreadyBanked) return 0;
+  if (level === "extended") {
+    const extended = habit.extended_points ?? null;
+    if (extended === null) {
+      // Callers validate first (logHabitRoute); reaching this is a bug, and
+      // silently scoring it as Basic would hide it.
+      throw new Error("computePoints: extended level requested on a single-level habit");
+    }
+    return extended;
+  }
   return habit.points_weight;
+}
+
+/**
+ * Whether a member may log Extended for this habit on `logDate`: the habit has
+ * a second level, and `logDate` is on or after the day it was switched on.
+ * Days before that offer Basic only. A habit enabled before extended_from
+ * existed cannot happen — the column ships in the same step as extended_points.
+ */
+export function isExtendedAvailableOn(
+  habit: { period: HabitPeriod; extended_points?: number | null; extended_from?: string | null },
+  logDate: string
+): boolean {
+  if (habit.period !== "daily") return false;
+  if ((habit.extended_points ?? null) === null) return false;
+  const from = habit.extended_from ?? null;
+  return from !== null && logDate >= from;
 }
 
 /**
@@ -1299,14 +1330,37 @@ export function createHabit(
   pointsWeight: number,
   category: HabitCategory | null = null,
   period: HabitPeriod = "daily",
-  description: string | null = null
+  description: string | null = null,
+  /** Total for the Extended level, or null for a single-level habit. Daily only. */
+  extendedPoints: number | null = null
 ): Habit {
-  const result = db
-    .prepare(
-      `INSERT INTO habits (room_id, name, description, period, points_weight, category)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(roomId, name, description, period, pointsWeight, category);
+  // The extended columns are only named when used, so creating a single-level
+  // habit keeps working on a DB whose addExtendedLevelColumns() step failed.
+  const result =
+    extendedPoints === null
+      ? db
+          .prepare(
+            `INSERT INTO habits (room_id, name, description, period, points_weight, category)
+             VALUES (?, ?, ?, ?, ?, ?)`
+          )
+          .run(roomId, name, description, period, pointsWeight, category)
+      : db
+          .prepare(
+            `INSERT INTO habits
+               (room_id, name, description, period, points_weight, category,
+                extended_points, extended_from)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            roomId,
+            name,
+            description,
+            period,
+            pointsWeight,
+            category,
+            extendedPoints,
+            getDayKeyInTimezone()
+          );
   return getHabitById(Number(result.lastInsertRowid)) ?? (() => {
     throw new Error(`Failed to load habit just created (rowid ${result.lastInsertRowid})`);
   })();
@@ -1329,6 +1383,12 @@ export function updateHabit(
     isActive: boolean;
     /** null clears the category (a room that turned categories off). */
     category: HabitCategory | null;
+    /**
+     * null switches the Extended level off; a number switches it on or edits
+     * its points; undefined leaves it alone. Existing logs keep their frozen
+     * points and level either way.
+     */
+    extendedPoints: number | null;
   }>
 ): Habit {
   const current = getHabitById(id);
@@ -1355,6 +1415,24 @@ export function updateHabit(
          updated_at = datetime('now')
      WHERE id = ?`
   ).run(name, description, pointsWeight, isActive, category, isActive, id);
+
+  if (patch.extendedPoints !== undefined) {
+    // extended_from marks the NULL -> number transition only: editing the
+    // points keeps it, switching off clears it, and switching on again starts
+    // a fresh date, so days in between offer Basic only.
+    const wasOn = (current.extended_points ?? null) !== null;
+    const from =
+      patch.extendedPoints === null
+        ? null
+        : wasOn
+          ? (current.extended_from ?? getDayKeyInTimezone())
+          : getDayKeyInTimezone();
+    db.prepare("UPDATE habits SET extended_points = ?, extended_from = ? WHERE id = ?").run(
+      patch.extendedPoints,
+      from,
+      id
+    );
+  }
 
   return getHabitById(id) ?? (() => {
     throw new Error(`Failed to reload habit ${id} after update`);
@@ -1391,6 +1469,10 @@ export function deactivateHabit(id: number): Habit {
  * a second row worth nothing, because the week is already paid for. The whole
  * check-and-write runs in one transaction, so two taps racing each other cannot
  * both decide the week is unbanked and award it twice.
+ *
+ * `value` is the level (1 = Basic, 2 = Extended — LEVEL_VALUE). Switching a
+ * day between levels is this same upsert: the row's level and points_earned are
+ * rewritten from the habit as it is now, and no other day moves.
  */
 export function upsertHabitLog(
   userId: number,
@@ -1408,7 +1490,7 @@ export function upsertHabitLog(
     // Re-marking the day that already carries the week keeps it carrying: only
     // some *other* day holding the points makes this row worth 0.
     const weekAlreadyBanked = carrier !== undefined && carrier.log_date !== logDate;
-    const pointsEarned = computePoints(habit, weekAlreadyBanked);
+    const pointsEarned = computePoints(habit, weekAlreadyBanked, levelOfValue(value));
 
     db.prepare(
       `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
@@ -1663,14 +1745,23 @@ export function createPersonalHabit(
   userId: number,
   roomId: number,
   name: string,
-  category: HabitCategory | null
+  category: HabitCategory | null,
+  extendedEnabled = false
 ): PersonalHabit {
-  const result = db
-    .prepare(
-      `INSERT INTO personal_habits (user_id, room_id, name, category)
-       VALUES (?, ?, ?, ?)`
-    )
-    .run(userId, roomId, name, category);
+  // Same rule as createHabit: the new column is only named when used.
+  const result = extendedEnabled
+    ? db
+        .prepare(
+          `INSERT INTO personal_habits (user_id, room_id, name, category, extended_enabled)
+           VALUES (?, ?, ?, ?, 1)`
+        )
+        .run(userId, roomId, name, category)
+    : db
+        .prepare(
+          `INSERT INTO personal_habits (user_id, room_id, name, category)
+           VALUES (?, ?, ?, ?)`
+        )
+        .run(userId, roomId, name, category);
   return getPersonalHabitById(Number(result.lastInsertRowid))!;
 }
 
@@ -1678,6 +1769,8 @@ export interface PersonalHabitUpdate {
   name?: string;
   /** undefined leaves it alone; null clears it (categories off). */
   category?: HabitCategory | null;
+  /** undefined leaves it alone. Switching off keeps existing level-2 logs. */
+  extendedEnabled?: boolean;
 }
 
 /**
@@ -1697,6 +1790,12 @@ export function updatePersonalHabit(id: number, update: PersonalHabitUpdate): Pe
     update.category === undefined ? current.category : update.category,
     id
   );
+  if (update.extendedEnabled !== undefined) {
+    db.prepare("UPDATE personal_habits SET extended_enabled = ? WHERE id = ?").run(
+      update.extendedEnabled ? 1 : 0,
+      id
+    );
+  }
   return getPersonalHabitById(id)!;
 }
 
@@ -1705,7 +1804,10 @@ export function deletePersonalHabit(id: number): void {
   db.prepare("DELETE FROM personal_habits WHERE id = ?").run(id);
 }
 
-/** Upsert the owner's local-today value. No points are computed or stored. */
+/**
+ * Upsert one of the owner's days. `value` is the level (1 = Basic,
+ * 2 = Extended). No points are computed or stored.
+ */
 export function upsertPersonalHabitLog(
   personalHabitId: number,
   value: number,

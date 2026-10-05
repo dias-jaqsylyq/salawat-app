@@ -11,8 +11,16 @@ process.env.BOT_TOKEN ??= "client-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH = join(dataDir, "salawat.db");
 
-const { addMissingColumns, backfillRoomJoinedAt, db, dropQuantityHabits, resetForMultiRoom } =
-  await import("./client.js");
+const {
+  addExtendedLevelColumns,
+  addMissingColumns,
+  backfillRoomJoinedAt,
+  db,
+  dropQuantityHabits,
+  hasExtendedLevelColumns,
+  resetForMultiRoom,
+  runExtendedLevelMigration,
+} = await import("./client.js");
 const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
   await import("./repository.js");
 
@@ -502,5 +510,132 @@ describe("dropQuantityHabits — a database that already has orphaned rows", () 
       12
     );
     assert.equal((db.pragma("foreign_key_check") as unknown[]).length, 12);
+  });
+});
+
+describe("addExtendedLevelColumns — a production-shaped database", () => {
+  /**
+   * The live DB as the previous deploy left it: today's schema minus the three
+   * Extended-level columns, real rows in every table the step touches, and
+   * habit_logs rows whose user is gone (production carries 426 of them).
+   */
+  function seedPreExtendedDatabase(): void {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      DROP TABLE IF EXISTS personal_habit_logs;
+      DROP TABLE IF EXISTS personal_habits;
+      DROP TABLE IF EXISTS habit_logs;
+      DROP TABLE IF EXISTS habits;
+      DROP TABLE IF EXISTS room_admins;
+      DROP TABLE IF EXISTS pending_registrations;
+      DROP TABLE IF EXISTS users;
+      DROP TABLE IF EXISTS rooms;
+    `);
+    db.exec(schemaSql());
+    db.exec(`
+      ALTER TABLE habits DROP COLUMN extended_points;
+      ALTER TABLE habits DROP COLUMN extended_from;
+      ALTER TABLE personal_habits DROP COLUMN extended_enabled;
+
+      INSERT INTO rooms (id, name, password) VALUES (1, 'Live room', 'live-room-pass');
+      INSERT INTO users (id, telegram_id, nickname, current_room_id)
+        VALUES (1, 500000041, 'LiveMember', 1);
+      INSERT INTO habits (id, room_id, name, description, period, points_weight)
+        VALUES (1, 1, 'Reading', '30 min', 'daily', 1),
+               (2, 1, 'Charity', NULL, 'weekly', 5);
+      INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+        VALUES (1, 1, 1, '2026-09-14', 1, 1),
+               (1, 2, 1, '2026-09-14', 1, 5),
+               (1, 2, 1, '2026-09-15', 1, 0);
+      INSERT INTO personal_habits (id, user_id, room_id, name) VALUES (1, 1, 1, 'Walk');
+      INSERT INTO personal_habit_logs (user_id, personal_habit_id, room_id, log_date, value)
+        VALUES (1, 1, 1, '2026-09-14', 1);
+    `);
+    const orphan = db.prepare(
+      `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+       VALUES (999, 1, 1, ?, 1, 1)`
+    );
+    for (let i = 0; i < 25; i++) orphan.run(`orphan-${i}`);
+    db.pragma("foreign_keys = ON");
+  }
+
+  function dump(): unknown {
+    return {
+      habits: db.prepare("SELECT id, room_id, name, description, period, points_weight, is_active, created_at FROM habits ORDER BY id").all(),
+      habit_logs: db.prepare("SELECT * FROM habit_logs ORDER BY id").all(),
+      personal_habits: db.prepare("SELECT id, user_id, room_id, name, category, created_at FROM personal_habits ORDER BY id").all(),
+      personal_habit_logs: db.prepare("SELECT * FROM personal_habit_logs ORDER BY id").all(),
+    };
+  }
+
+  function extendedSnapshots(): string[] {
+    return readdirSync(dataDir).filter((f) => f.startsWith("salawat.pre-extended-level-"));
+  }
+
+  it("adds the three columns, snapshots first, and leaves every row and orphan as it was", () => {
+    seedPreExtendedDatabase();
+    const before = dump();
+    const orphansBefore = (db.pragma("foreign_key_check") as unknown[]).length;
+    assert.equal(orphansBefore, 25, "the seed should start out with orphans");
+    assert.equal(hasExtendedLevelColumns(), false);
+    const snapshotsBefore = extendedSnapshots().length;
+
+    assert.deepEqual(addExtendedLevelColumns(), [
+      "habits.extended_points",
+      "habits.extended_from",
+      "personal_habits.extended_enabled",
+    ]);
+
+    assert.equal(hasExtendedLevelColumns(), true);
+    assert.equal(extendedSnapshots().length, snapshotsBefore + 1);
+    assert.deepEqual(dump(), before);
+    assert.equal((db.pragma("foreign_key_check") as unknown[]).length, 25);
+
+    // Every habit starts single-level, every personal habit without Extended,
+    // and every existing log reads as Basic (value 1).
+    assert.deepEqual(
+      db.prepare("SELECT DISTINCT extended_points, extended_from FROM habits").all(),
+      [{ extended_points: null, extended_from: null }]
+    );
+    assert.deepEqual(db.prepare("SELECT DISTINCT extended_enabled FROM personal_habits").all(), [
+      { extended_enabled: 0 },
+    ]);
+    assert.deepEqual(db.prepare("SELECT DISTINCT value FROM habit_logs").all(), [{ value: 1 }]);
+    assert.deepEqual(db.prepare("SELECT DISTINCT value FROM personal_habit_logs").all(), [
+      { value: 1 },
+    ]);
+  });
+
+  it("is idempotent: a second run adds nothing and takes no snapshot", () => {
+    const snapshotsBefore = extendedSnapshots().length;
+    const before = dump();
+    assert.deepEqual(addExtendedLevelColumns(), []);
+    assert.equal(runExtendedLevelMigration(), true);
+    assert.equal(extendedSnapshots().length, snapshotsBefore);
+    assert.deepEqual(dump(), before);
+  });
+
+  it("a failing ALTER does not throw at boot, and rolls back the columns added before it", () => {
+    seedPreExtendedDatabase();
+    const before = dump();
+    const ok = runExtendedLevelMigration([
+      { table: "habits", column: "extended_points", definition: "INTEGER" },
+      // ADD COLUMN NOT NULL with no default is refused by SQLite.
+      { table: "habits", column: "always_fails", definition: "INTEGER NOT NULL" },
+    ]);
+    assert.equal(ok, false);
+    assert.ok(!columnNames("habits").includes("extended_points"), "rolled back");
+    assert.ok(!columnNames("habits").includes("always_fails"));
+    assert.deepEqual(dump(), before);
+
+    // Without the columns the app keeps working single-level: creating a habit
+    // never names them, and reading one sees no extended level.
+    const habit = createHabit(1, "Works without the column", 2);
+    assert.equal(habit.extended_points ?? null, null);
+    db.prepare("DELETE FROM habits WHERE id = ?").run(habit.id);
+
+    // The real step still succeeds afterwards (the next boot).
+    assert.equal(runExtendedLevelMigration(), true);
+    assert.equal(hasExtendedLevelColumns(), true);
   });
 });
