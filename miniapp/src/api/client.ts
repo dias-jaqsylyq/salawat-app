@@ -9,6 +9,7 @@ import type {
   DeletePersonalHabitResponse,
   Habit,
   HabitCategory,
+  HabitLevel,
   HabitLogWindowResponse,
   HabitPeriod,
   HistoryHabitListEntry,
@@ -93,21 +94,22 @@ export function getHabitLogWindow(
 }
 
 /**
- * POST /api/habits/:id/log — upsert one day's value (today when `date` is
- * omitted). Omit `value` for a binary habit. May target any earlier day
+ * POST /api/habits/:id/log — upsert one day's level (today when `date` is
+ * omitted). Omitted `level` logs Basic; re-posting a day with the other level
+ * switches it in place. May target any earlier day
  * within the backfill window the server allows (BACKFILL PRD) — daily and
  * weekly habits share the same window.
  */
 export function logHabit(
   initData: string,
   habitId: number,
-  value?: number,
+  level?: HabitLevel,
   date?: string
 ): Promise<LogHabitResponse> {
   const path = date === undefined ? `/api/habits/${habitId}/log` : `/api/habits/${habitId}/log?date=${date}`;
   return request(initData, path, {
     method: "POST",
-    body: JSON.stringify(value === undefined ? {} : { value }),
+    body: JSON.stringify(level === undefined ? {} : { level }),
   });
 }
 
@@ -129,7 +131,7 @@ export function getPersonalHabits(initData: string): Promise<PersonalHabit[]> {
 
 export function createPersonalHabit(
   initData: string,
-  payload: { name: string; category?: HabitCategory | null }
+  payload: { name: string; category?: HabitCategory | null; hasExtended?: boolean }
 ): Promise<PersonalHabit> {
   return request(initData, "/api/personal-habits", {
     method: "POST",
@@ -140,7 +142,7 @@ export function createPersonalHabit(
 export function updatePersonalHabit(
   initData: string,
   personalHabitId: number,
-  payload: { name?: string; category?: HabitCategory | null }
+  payload: { name?: string; category?: HabitCategory | null; hasExtended?: boolean }
 ): Promise<PersonalHabit> {
   return request(initData, `/api/personal-habits/${personalHabitId}`, {
     method: "PATCH",
@@ -179,7 +181,7 @@ export function getPersonalHabitLogWindow(
 export function logPersonalHabit(
   initData: string,
   personalHabitId: number,
-  value?: number,
+  level?: HabitLevel,
   date?: string
 ): Promise<LogPersonalHabitResponse> {
   const path =
@@ -188,7 +190,7 @@ export function logPersonalHabit(
       : `/api/personal-habits/${personalHabitId}/log?date=${date}`;
   return request(initData, path, {
     method: "POST",
-    body: JSON.stringify(value === undefined ? {} : { value }),
+    body: JSON.stringify(level === undefined ? {} : { level }),
   });
 }
 
@@ -294,6 +296,8 @@ export function createHabit(
     period?: HabitPeriod;
     /** The free-text goal line; omitted or empty means the habit has none. */
     description?: string | null;
+    /** Extended level's total (>= pointsWeight, daily only); omitted/null = single-level. */
+    extendedPoints?: number | null;
   }
 ): Promise<AdminHabit> {
   return request(initData, "/api/admin/habits", {
@@ -312,6 +316,8 @@ export function patchHabit(
     category?: HabitCategory;
     /** null clears the goal line. `period` is create-only and rejected here. */
     description?: string | null;
+    /** A number switches Extended on or edits it; null switches it off. */
+    extendedPoints?: number | null;
   }
 ): Promise<AdminHabit> {
   return request(initData, `/api/admin/habits/${id}`, {

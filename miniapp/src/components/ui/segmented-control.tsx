@@ -18,6 +18,11 @@ interface SegmentedControlProps<T extends string> {
   /** null: nothing chosen yet — no thumb, and the first segment takes focus. */
   value: T | null;
   onChange: (value: T) => void;
+  /**
+   * Tapping the segment that is already selected normally does nothing; with
+   * this set it calls back instead (e.g. tap the selected level to clear it).
+   */
+  onReselect?: (value: T) => void;
   options: readonly SegmentedOption<T>[];
   "aria-label": string;
   id?: string;
@@ -37,6 +42,7 @@ interface SegmentedControlProps<T extends string> {
 function SegmentedControl<T extends string>({
   value,
   onChange,
+  onReselect,
   options,
   "aria-label": ariaLabel,
   id,
@@ -51,7 +57,13 @@ function SegmentedControl<T extends string>({
   const stacked = iconPosition === "top" && options.some((option) => option.icon);
 
   function select(i: number) {
-    if (!isEnabled(i) || i === selected) return;
+    if (!isEnabled(i)) return;
+    if (i === selected) {
+      if (!onReselect) return;
+      hapticSelection();
+      onReselect(options[i].value);
+      return;
+    }
     hapticSelection();
     onChange(options[i].value);
   }
@@ -71,7 +83,8 @@ function SegmentedControl<T extends string>({
       const order = options.map((_, i) => i);
       target = (event.key === "Home" ? order : order.reverse()).find(isEnabled);
     }
-    if (target === undefined) return;
+    // Arrow keys move the selection; they never clear it via onReselect.
+    if (target === undefined || target === selected) return;
     event.preventDefault();
     select(target);
     buttons.current[target]?.focus();

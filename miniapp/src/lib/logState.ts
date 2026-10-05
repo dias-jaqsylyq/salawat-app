@@ -11,15 +11,34 @@ export function logKey(date: string, kind: LogKind, id: number): string {
   return `${date}:${kind}:${id}`;
 }
 
-/** Desired `logged` per logKey, for toggles the server hasn't confirmed yet. */
-export type Overrides = Readonly<Record<string, boolean>>;
+/**
+ * A habit's state on one day. "off" is unlogged; a single-level habit only
+ * ever moves between "off" and "basic".
+ */
+export type LogLevel = "off" | "basic" | "extended";
 
-export function effectiveLogged(overrides: Overrides, key: string, serverLogged: boolean): boolean {
-  return overrides[key] ?? serverLogged;
+/** The server's state for a day, as a LogLevel. A missing `level` (older server) is Basic. */
+export function serverLevel(entry: { logged: boolean; level?: "basic" | "extended" | null }): LogLevel {
+  return entry.logged ? (entry.level ?? "basic") : "off";
 }
 
-export function withOverride(overrides: Overrides, key: string, logged: boolean): Overrides {
-  return { ...overrides, [key]: logged };
+/** Desired level per logKey, for changes the server hasn't confirmed yet. */
+export type Overrides = Readonly<Record<string, LogLevel>>;
+
+export function effectiveLevel(overrides: Overrides, key: string, server: LogLevel): LogLevel {
+  return overrides[key] ?? server;
+}
+
+export function withOverride(overrides: Overrides, key: string, level: LogLevel): Overrides {
+  return { ...overrides, [key]: level };
+}
+
+/**
+ * The level a tap on a level segment asks for: tapping the one already
+ * selected clears the day (back to Off), anything else selects it.
+ */
+export function levelAfterTap(current: LogLevel, tapped: LogLevel): LogLevel {
+  return tapped === current ? "off" : tapped;
 }
 
 export function withoutOverrides(overrides: Overrides, keys: Iterable<string>): Overrides {

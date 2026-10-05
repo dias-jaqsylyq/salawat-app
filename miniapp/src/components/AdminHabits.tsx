@@ -4,6 +4,7 @@ import { Icon } from "@/components/ui/icon";
 import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminHabit, HabitCategory, HabitPeriod } from "../api/types.ts";
+import { validateExtendedPoints } from "../lib/extendedLevel.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
 import HabitPeriodPicker from "./HabitPeriodPicker.tsx";
@@ -65,6 +66,69 @@ function GoalLineField({
   );
 }
 
+/**
+ * The optional second level ("Extended"): a toggle, and while it is on, the
+ * points a day logged at that level is worth in total. Daily habits only — the
+ * caller doesn't render it for a weekly one.
+ */
+function ExtendedLevelField({
+  id,
+  enabled,
+  points,
+  disabled,
+  onEnabledChange,
+  onPointsChange,
+}: {
+  id: string;
+  enabled: boolean;
+  points: string;
+  disabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  onPointsChange: (points: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <Label htmlFor={`${id}-toggle`}>Extended level</Label>
+          <p className="mt-1 text-footnote text-muted-foreground">
+            Members pick Basic or Extended when they log. Use the goal line to say what each means.
+          </p>
+        </div>
+        <Switch
+          id={`${id}-toggle`}
+          checked={enabled}
+          disabled={disabled}
+          onCheckedChange={onEnabledChange}
+        />
+      </div>
+      {enabled && (
+        <div className="space-y-2 animate-fade">
+          <Label htmlFor={`${id}-points`}>Extended points (total)</Label>
+          <Input
+            id={`${id}-points`}
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={points}
+            onChange={(e) => onPointsChange(e.target.value)}
+            disabled={disabled}
+            placeholder="e.g. 2"
+          />
+          <p className="text-footnote text-muted-foreground">
+            What an Extended day is worth in all — not added on top. Members can pick it from
+            today on; days already logged keep their points.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pts(n: number): string {
+  return `${n} ${n === 1 ? "pt" : "pts"}`;
+}
+
 function validateHabitForm(name: string, pointsWeight: string): string | null {
   const trimmed = name.trim();
   if (trimmed.length === 0 || trimmed.length > NAME_MAX_LENGTH) {
@@ -90,11 +154,18 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
   const [description, setDescription] = useState(habit.description ?? "");
   const [pointsWeight, setPointsWeight] = useState(String(habit.pointsWeight));
   const [category, setCategory] = useState<HabitCategory | null>(habit.category);
+  const storedExtended = habit.extendedPoints ?? null;
+  const [extendedEnabled, setExtendedEnabled] = useState(storedExtended !== null);
+  const [extendedPoints, setExtendedPoints] = useState(
+    storedExtended === null ? "" : String(storedExtended)
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSave() {
-    const validationError = validateHabitForm(name, pointsWeight);
+    const validationError =
+      validateHabitForm(name, pointsWeight) ??
+      validateExtendedPoints(extendedEnabled, extendedPoints, pointsWeight, MAX_POINTS_WEIGHT);
     if (validationError) {
       setError(validationError);
       return;
@@ -103,6 +174,8 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
       setError("Choose a category for this habit.");
       return;
     }
+    // Sent only when it changed, so an unrelated edit never touches it.
+    const wantedExtended = extendedEnabled ? Number(extendedPoints) : null;
     setSaving(true);
     setError(null);
     try {
@@ -115,6 +188,7 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
         // Omitted when the room has categories off — the API rejects a category
         // it isn't using.
         ...(categoriesEnabled && category !== null ? { category } : {}),
+        ...(wantedExtended !== storedExtended ? { extendedPoints: wantedExtended } : {}),
       });
       onSaved(updated);
     } catch (err) {
@@ -154,6 +228,16 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
           disabled={saving}
         />
       </div>
+      {habit.period === "daily" && (
+        <ExtendedLevelField
+          id={`habit-extended-${habit.id}`}
+          enabled={extendedEnabled}
+          points={extendedPoints}
+          disabled={saving}
+          onEnabledChange={setExtendedEnabled}
+          onPointsChange={setExtendedPoints}
+        />
+      )}
       {categoriesEnabled && (
         <CategoryPicker
           id={`habit-category-${habit.id}`}
@@ -251,7 +335,9 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
                 )}
               </span>
               <span className="text-footnote text-muted-foreground">
-                {habit.pointsWeight} pts{habit.period === "weekly" ? " / week" : ""}
+                {habit.extendedPoints != null
+                  ? `${pts(habit.pointsWeight)}, ${pts(habit.extendedPoints)} extended`
+                  : `${habit.pointsWeight} pts${habit.period === "weekly" ? " / week" : ""}`}
               </span>
               {habit.description && (
                 <span className="mt-1 block truncate text-footnote text-muted-foreground">
@@ -295,13 +381,18 @@ function CreateHabitForm({
   const [period, setPeriod] = useState<HabitPeriod>("daily");
   const [pointsWeight, setPointsWeight] = useState("");
   const [category, setCategory] = useState<HabitCategory | null>(null);
+  const [extendedEnabled, setExtendedEnabled] = useState(false);
+  const [extendedPoints, setExtendedPoints] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (creating) return;
-    const validationError = validateHabitForm(name, pointsWeight);
+    const withExtended = period === "daily" && extendedEnabled;
+    const validationError =
+      validateHabitForm(name, pointsWeight) ??
+      validateExtendedPoints(withExtended, extendedPoints, pointsWeight, MAX_POINTS_WEIGHT);
     if (validationError) {
       setError(validationError);
       return;
@@ -319,6 +410,7 @@ function CreateHabitForm({
         period,
         pointsWeight: Number(pointsWeight),
         ...(categoriesEnabled && category !== null ? { category } : {}),
+        ...(withExtended ? { extendedPoints: Number(extendedPoints) } : {}),
       });
       onCreated(habit);
       setName("");
@@ -326,6 +418,8 @@ function CreateHabitForm({
       setPeriod("daily");
       setPointsWeight("");
       setCategory(null);
+      setExtendedEnabled(false);
+      setExtendedPoints("");
     } catch (err) {
       setError(messageForApiError(err, "Couldn't create that habit."));
     } finally {
@@ -377,6 +471,18 @@ function CreateHabitForm({
               placeholder="e.g. 1"
             />
           </div>
+
+          {/* Weekly habits score once a week; a second level has no place there. */}
+          {period === "daily" && (
+            <ExtendedLevelField
+              id="new-habit-extended"
+              enabled={extendedEnabled}
+              points={extendedPoints}
+              disabled={creating}
+              onEnabledChange={setExtendedEnabled}
+              onPointsChange={setExtendedPoints}
+            />
+          )}
 
           {categoriesEnabled && (
             <CategoryPicker
