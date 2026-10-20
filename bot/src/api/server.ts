@@ -7,6 +7,7 @@ import {
   BROADCAST_RATE_LIMIT_PER_MINUTE,
   PERSONAL_HABIT_MUTATION_RATE_LIMIT_PER_MINUTE,
   ROOM_ACTION_RATE_LIMIT_PER_MINUTE,
+  STATS_RATE_LIMIT_PER_MINUTE,
   config,
 } from "../config.js";
 import type { MyContext } from "../context.js";
@@ -34,6 +35,7 @@ import { progressRoute } from "./routes/progress.js";
 import { progressWeekRoute } from "./routes/progressWeek.js";
 import { historyHabitsRoute, historyMonthRoute } from "./routes/progressHistory.js";
 import { leaderboardRoute } from "./routes/leaderboard.js";
+import { statsRoute } from "./routes/stats.js";
 import { adminExportCsvRoute, exportRoute } from "./routes/export.js";
 import { resetRoute } from "./routes/reset.js";
 import { getProfileRoute, patchProfileRoute } from "./routes/profile.js";
@@ -135,6 +137,12 @@ export function createApiServer(bot: Bot<MyContext>) {
   app.get("/api/progress/history/habits", telegramAuth, historyHabitsRoute);
   app.get("/api/progress/history", telegramAuth, historyMonthRoute);
   app.get("/api/leaderboard", telegramAuth, leaderboardRoute);
+  app.get(
+    "/api/stats",
+    telegramAuth,
+    rateLimited(STATS_RATE_LIMIT_PER_MINUTE),
+    statsRoute
+  );
   app.get("/api/profile", telegramAuth, getProfileRoute);
   app.patch("/api/profile", telegramAuth, patchProfileRoute);
   app.post(

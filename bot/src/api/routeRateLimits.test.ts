@@ -61,6 +61,8 @@ const MUST_BE_USER_LIMITED = [
   "DELETE /api/admin/participants/:telegramId/admin",
   "DELETE /api/admin/participants/:telegramId",
   "GET /api/admin/export-csv",
+  // A read, but it aggregates every member's logs in the room.
+  "GET /api/stats",
   "POST /api/admin/broadcast",
   "POST /api/admin/broadcast-file",
 ];

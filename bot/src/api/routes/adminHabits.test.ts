@@ -6,9 +6,16 @@ process.env.BOT_TOKEN ??= "admin-habits-route-test";
 process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
-const { createHabit, createRoom, createUser, listHabits, setUserCurrentRoom } = await import(
-  "../../db/repository.js"
-);
+const {
+  createHabit,
+  createRoom,
+  createUser,
+  getUserByTelegramId,
+  listHabits,
+  setUserCurrentRoom,
+  upsertHabitLog,
+} = await import("../../db/repository.js");
+const { db, runAmountMigration } = await import("../../db/client.js");
 const { createHabitRoute, listAdminHabitsRoute, patchHabitRoute } = await import(
   "./adminHabits.js"
 );
@@ -241,5 +248,147 @@ describe("period and description", () => {
     const renamed = callPatch(created.body.id, { name: "Still weekly", period: "daily" });
     assert.equal(renamed.body.name, "Still weekly");
     assert.equal(renamed.body.period, "weekly");
+  });
+});
+
+describe("habit amounts (unit + amount per completion)", () => {
+  const adminUserId = () => getUserByTelegramId(ADMIN_TELEGRAM_ID)!.id;
+
+  it("creates a habit with a unit and amounts, and lists them", () => {
+    const created = callCreate({
+      name: "Quran reading",
+      pointsWeight: 2,
+      extendedPoints: 3,
+      unitLabel: "  min  ",
+      amountBasic: 30,
+      amountExtended: 45.5,
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.unitLabel, "min");
+    assert.equal(created.body.amountBasic, 30);
+    assert.equal(created.body.amountExtended, 45.5);
+    assert.equal(created.body.hasLoggedAmounts, false);
+
+    const listed = callList().body.find((h: any) => h.id === created.body.id);
+    assert.equal(listed.unitLabel, "min");
+  });
+
+  it("a habit without a unit answers nulls, so an old client sees nothing new to handle", () => {
+    const created = callCreate({ name: "No unit", pointsWeight: 1 });
+    assert.equal(created.body.unitLabel, null);
+    assert.equal(created.body.amountBasic, null);
+    assert.equal(created.body.amountExtended, null);
+  });
+
+  it("validates the unit label", () => {
+    for (const unitLabel of ["x".repeat(17), "<b>", "min>", "a\u0007b", 5]) {
+      const result = callCreate({ name: "Bad unit", pointsWeight: 1, unitLabel, amountBasic: 1 });
+      assert.equal(result.status, 400, JSON.stringify(unitLabel));
+      assert.equal(result.body.error, "invalid_unit_label");
+    }
+    assert.equal(
+      callCreate({ name: "Max unit", pointsWeight: 1, unitLabel: "x".repeat(16) }).status,
+      201
+    );
+  });
+
+  it("validates amounts: finite, > 0, at most 100000, decimals allowed", () => {
+    for (const amountBasic of [0, -1, 100001, Number.NaN, Infinity, "30"]) {
+      const result = callCreate({ name: "Bad amount", pointsWeight: 1, unitLabel: "min", amountBasic });
+      assert.equal(result.status, 400, String(amountBasic));
+      assert.equal(result.body.error, "invalid_amount");
+    }
+    assert.equal(
+      callCreate({ name: "Half juz", pointsWeight: 1, unitLabel: "juz", amountBasic: 0.5 }).status,
+      201
+    );
+    assert.equal(
+      callCreate({ name: "Max amount", pointsWeight: 1, unitLabel: "min", amountBasic: 100000 }).status,
+      201
+    );
+  });
+
+  it("enforces the pairing rules", () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [{ amountBasic: 30 }, "amount_requires_unit"],
+      [{ unitLabel: "min", amountBasic: 30, amountExtended: 45 }, "amount_extended_not_allowed"],
+      [
+        { extendedPoints: 3, unitLabel: "min", amountExtended: 45 },
+        "amount_extended_requires_basic",
+      ],
+      [
+        { extendedPoints: 3, unitLabel: "min", amountBasic: 30, amountExtended: 20 },
+        "amount_extended_below_basic",
+      ],
+    ];
+    for (const [extra, error] of cases) {
+      const result = callCreate({ name: "Pairing", pointsWeight: 2, ...extra });
+      assert.equal(result.status, 400, error);
+      assert.equal(result.body.error, error);
+    }
+
+    const habit = callCreate({ name: "Pairing patch", pointsWeight: 2, extendedPoints: 3 }).body;
+    callPatch(habit.id, { unitLabel: "min", amountBasic: 30, amountExtended: 40 });
+    assert.equal(callPatch(habit.id, { unitLabel: null }).body.error, "amount_requires_unit");
+    assert.equal(
+      callPatch(habit.id, { amountBasic: 50 }).body.error,
+      "amount_extended_below_basic"
+    );
+    // Clearing all three together is fine.
+    const cleared = callPatch(habit.id, { unitLabel: "", amountBasic: null, amountExtended: null });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.unitLabel, null);
+  });
+
+  it("switching Extended off together with amount fields drops the stored Extended amount", () => {
+    const habit = callCreate({
+      name: "Extended off",
+      pointsWeight: 2,
+      extendedPoints: 3,
+      unitLabel: "min",
+      amountBasic: 30,
+      amountExtended: 45,
+    }).body;
+    const off = callPatch(habit.id, { extendedPoints: null, unitLabel: "min", amountBasic: 30 });
+    assert.equal(off.status, 200);
+    assert.equal(off.body.amountExtended, null);
+  });
+
+  it("the first amount backfills existing logs, and hasLoggedAmounts turns on", () => {
+    const habit = makeHabit("Backfilled via route", 1);
+    upsertHabitLog(adminUserId(), habit.id, 1, "2026-05-04");
+    assert.equal(callList().body.find((h: any) => h.id === habit.id).hasLoggedAmounts, false);
+
+    const patched = callPatch(habit.id, { unitLabel: "pages", amountBasic: 2 });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.hasLoggedAmounts, true);
+    const row = db
+      .prepare("SELECT amount_logged FROM habit_logs WHERE habit_id = ?")
+      .get(habit.id) as { amount_logged: number };
+    assert.equal(row.amount_logged, 2);
+  });
+
+  it("answers 503 for amount writes when the columns are missing, and nothing else breaks", () => {
+    const habit = makeHabit("Before the columns went", 1);
+    db.exec(`
+      ALTER TABLE habits DROP COLUMN unit_label;
+      ALTER TABLE habits DROP COLUMN amount_basic;
+      ALTER TABLE habits DROP COLUMN amount_extended;
+      ALTER TABLE habits DROP COLUMN amount_backfilled_at;
+      ALTER TABLE habit_logs DROP COLUMN amount_logged;
+    `);
+    try {
+      const plain = callCreate({ name: "Plain without columns", pointsWeight: 2 });
+      assert.equal(plain.status, 201);
+      assert.equal(plain.body.unitLabel, null);
+      assert.equal(callList().status, 200);
+      assert.equal(callPatch(habit.id, { name: "Renamed without columns" }).status, 200);
+      const unit = callPatch(habit.id, { unitLabel: "min", amountBasic: 5 });
+      assert.equal(unit.status, 503);
+      assert.equal(unit.body.error, "amounts_unavailable");
+      assert.equal(upsertHabitLog(adminUserId(), habit.id, 1, "2026-05-05").points_earned, 1);
+    } finally {
+      assert.equal(runAmountMigration(), true);
+    }
   });
 });

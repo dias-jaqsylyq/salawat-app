@@ -74,6 +74,12 @@ export const BROADCAST_RATE_LIMIT_PER_MINUTE = 3;
  */
 export const ROOM_ACTION_RATE_LIMIT_PER_MINUTE = 10;
 /**
+ * Max GET /api/stats requests per telegram user per rolling minute. Unlike
+ * the other reads this one aggregates every member's logs in the room, so it
+ * gets a limit of its own even though they have none.
+ */
+export const STATS_RATE_LIMIT_PER_MINUTE = 30;
+/**
  * Max requests per client IP per rolling minute against the two
  * ADMIN_EXPORT_SECRET-gated endpoints (GET /api/admin/export,
  * POST /api/admin/reset).
