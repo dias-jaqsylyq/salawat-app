@@ -8,6 +8,8 @@ process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH ??= ":memory:";
 
 const {
+  backfillHabitAmounts,
+  computeAmount,
   computePoints,
   createHabit,
   createRoom,
@@ -426,5 +428,134 @@ describe("getWeeklyLeaderboard", () => {
     assert.equal(byId.get(scorer), 13);
     // A member with no points this week is still on the board, at 0.
     assert.equal(byId.get(idler), 0);
+  });
+});
+
+describe("amounts per completion", () => {
+  function amountHabit(
+    name: string,
+    period: "daily" | "weekly",
+    amounts: { unitLabel: string; amountBasic: number; amountExtended?: number },
+    extendedPoints: number | null = null
+  ) {
+    return createHabit(room.id, name, 2, null, period, null, extendedPoints, {
+      unitLabel: amounts.unitLabel,
+      amountBasic: amounts.amountBasic,
+      amountExtended: amounts.amountExtended ?? null,
+    });
+  }
+
+  function amountOf(userId: number, habitId: number, date: string): number | null | undefined {
+    return (
+      db
+        .prepare("SELECT amount_logged FROM habit_logs WHERE user_id = ? AND habit_id = ? AND log_date = ?")
+        .get(userId, habitId, date) as { amount_logged: number | null } | undefined
+    )?.amount_logged;
+  }
+
+  it("computeAmount: null without an amount, Extended falls back to Basic, weekly non-carrier 0", () => {
+    assert.equal(computeAmount({ period: "daily" }), null);
+    assert.equal(computeAmount({ period: "daily", amount_basic: 30 }), 30);
+    assert.equal(computeAmount({ period: "daily", amount_basic: 30 }, false, "extended"), 30);
+    assert.equal(
+      computeAmount({ period: "daily", amount_basic: 30, amount_extended: 45 }, false, "extended"),
+      45
+    );
+    assert.equal(computeAmount({ period: "weekly", amount_basic: 1 }, true), 0);
+    assert.equal(computeAmount({ period: "weekly", amount_basic: 1 }, false), 1);
+  });
+
+  it("freezes the amount on write: a later amount or unit change leaves old rows alone", () => {
+    const user = makeUser();
+    const habit = amountHabit("Frozen amount", "daily", { unitLabel: "min", amountBasic: 30 });
+    upsertHabitLog(user, habit.id, 1, "2026-03-02");
+
+    updateHabit(habit.id, { unitLabel: "pages", amountBasic: 10 });
+    upsertHabitLog(user, habit.id, 1, "2026-03-03");
+
+    assert.equal(amountOf(user, habit.id, "2026-03-02"), 30);
+    assert.equal(amountOf(user, habit.id, "2026-03-03"), 10);
+    // A brand-new habit with an amount has nothing to backfill, and the edit
+    // above must not have backfilled anything either.
+    assert.notEqual(getHabitById(habit.id)!.amount_backfilled_at, null);
+  });
+
+  it("re-marking a day or switching its level rewrites the amount from the habit as it is now", () => {
+    const user = makeUser();
+    const habit = amountHabit(
+      "Level switch",
+      "daily",
+      { unitLabel: "min", amountBasic: 30, amountExtended: 45 },
+      3
+    );
+    upsertHabitLog(user, habit.id, 1, "2026-03-04");
+    assert.equal(amountOf(user, habit.id, "2026-03-04"), 30);
+    upsertHabitLog(user, habit.id, 2, "2026-03-04");
+    assert.equal(amountOf(user, habit.id, "2026-03-04"), 45);
+    deleteHabitLog(user, habit.id, "2026-03-04");
+    assert.equal(amountOf(user, habit.id, "2026-03-04"), undefined);
+  });
+
+  it("weekly: only the carrier holds the amount, and unmarking it hands the amount on with the points", () => {
+    const user = makeUser();
+    const habit = amountHabit("Weekly amount", "weekly", { unitLabel: "times", amountBasic: 1 });
+    // Monday 2026-03-09 .. Sunday 2026-03-15.
+    upsertHabitLog(user, habit.id, 1, "2026-03-10");
+    upsertHabitLog(user, habit.id, 1, "2026-03-12");
+    assert.equal(amountOf(user, habit.id, "2026-03-10"), 1);
+    assert.equal(amountOf(user, habit.id, "2026-03-12"), 0);
+
+    // The handover passes the deleted row's frozen amount, not the habit's current one.
+    updateHabit(habit.id, { amountBasic: 5 });
+    deleteHabitLog(user, habit.id, "2026-03-10");
+    assert.equal(amountOf(user, habit.id, "2026-03-12"), 1);
+    assert.equal(getUserHabitLogsForDate(user, "2026-03-12").get(habit.id)!.points_earned, 2);
+  });
+
+  it("backfills existing logs once, on the first amount; never again after a clear and re-set", () => {
+    const user = makeUser();
+    const daily = createHabit(room.id, "Backfill daily", 2, null, "daily", null, 3);
+    const weekly = makeHabit("Backfill weekly", 2, "weekly");
+    upsertHabitLog(user, daily.id, 1, "2026-04-06");
+    upsertHabitLog(user, daily.id, 2, "2026-04-07");
+    upsertHabitLog(user, weekly.id, 1, "2026-04-06");
+    upsertHabitLog(user, weekly.id, 1, "2026-04-08");
+    // Written while the habits had no unit: nothing to freeze yet.
+    assert.equal(amountOf(user, daily.id, "2026-04-06"), null);
+
+    updateHabit(daily.id, { unitLabel: "min", amountBasic: 30, amountExtended: 45 });
+    updateHabit(weekly.id, { unitLabel: "times", amountBasic: 1 });
+    assert.equal(amountOf(user, daily.id, "2026-04-06"), 30, "Basic log gets the Basic amount");
+    assert.equal(amountOf(user, daily.id, "2026-04-07"), 45, "Extended log gets the Extended amount");
+    assert.equal(amountOf(user, weekly.id, "2026-04-06"), 1, "the carrier gets the amount");
+    assert.equal(amountOf(user, weekly.id, "2026-04-08"), 0, "a non-carrier day gets 0");
+    assert.equal(backfillHabitAmounts(daily.id), 0, "a second call is a no-op");
+
+    // Clear the unit, log a day, set it again: that day keeps no amount.
+    updateHabit(daily.id, { unitLabel: null, amountBasic: null, amountExtended: null });
+    upsertHabitLog(user, daily.id, 1, "2026-04-08");
+    updateHabit(daily.id, { unitLabel: "min", amountBasic: 60 });
+    assert.equal(amountOf(user, daily.id, "2026-04-08"), null);
+    assert.equal(amountOf(user, daily.id, "2026-04-06"), 30);
+  });
+
+  it("backfill: an Extended log with no Extended amount gets the Basic one", () => {
+    const user = makeUser();
+    const habit = createHabit(room.id, "Backfill fallback", 2, null, "daily", null, 3);
+    upsertHabitLog(user, habit.id, 2, "2026-04-13");
+    updateHabit(habit.id, { unitLabel: "min", amountBasic: 20 });
+    assert.equal(amountOf(user, habit.id, "2026-04-13"), 20);
+  });
+
+  it("switching the Extended level off clears the Extended amount", () => {
+    const habit = amountHabit(
+      "Extended off",
+      "daily",
+      { unitLabel: "min", amountBasic: 30, amountExtended: 45 },
+      3
+    );
+    const updated = updateHabit(habit.id, { extendedPoints: null });
+    assert.equal(updated.amount_extended, null);
+    assert.equal(updated.amount_basic, 30);
   });
 });

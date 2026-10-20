@@ -145,8 +145,9 @@ export default function ProgressScreen({
         <CardContent className="space-y-6">
           {/*
             Today's total lives here and only here: it is a personal figure, and
-            the leaderboard deliberately has no counterpart to it — there is no
-            group total anywhere in the app.
+            the leaderboard deliberately has no counterpart to it. (The Stats
+            tab's room points are an all-time total over everyone, never a
+            per-member figure.)
           */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-lg bg-surface-2 px-4 py-3">

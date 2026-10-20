@@ -26,6 +26,7 @@ import type {
   ProfileResponse,
   ProfileUpdate,
   ProgressResponse,
+  StatsResponse,
   UnlogHabitResponse,
   UnlogPersonalHabitResponse,
   WeeklyProgressResponse,
@@ -252,6 +253,11 @@ export function getLeaderboard(initData: string): Promise<LeaderboardResponse> {
   return request(initData, "/api/leaderboard");
 }
 
+/** GET /api/stats — the caller's room, all time, aggregated over every member. */
+export function getStats(initData: string): Promise<StatsResponse> {
+  return request(initData, "/api/stats");
+}
+
 export function getProfile(initData: string): Promise<ProfileResponse> {
   return request(initData, "/api/profile");
 }
@@ -285,6 +291,16 @@ export function getAdminHabits(initData: string): Promise<AdminHabit[]> {
   return request(initData, "/api/admin/habits");
 }
 
+/**
+ * The optional per-completion estimate. An amount needs a unit; the Extended
+ * amount needs the Basic one and an Extended level. null clears.
+ */
+interface HabitAmountFields {
+  unitLabel?: string | null;
+  amountBasic?: number | null;
+  amountExtended?: number | null;
+}
+
 /** `category` is required in a categories-enabled room and rejected in one without. */
 export function createHabit(
   initData: string,
@@ -298,7 +314,7 @@ export function createHabit(
     description?: string | null;
     /** Extended level's total (>= pointsWeight, daily only); omitted/null = single-level. */
     extendedPoints?: number | null;
-  }
+  } & HabitAmountFields
 ): Promise<AdminHabit> {
   return request(initData, "/api/admin/habits", {
     method: "POST",
@@ -318,7 +334,7 @@ export function patchHabit(
     description?: string | null;
     /** A number switches Extended on or edits it; null switches it off. */
     extendedPoints?: number | null;
-  }
+  } & HabitAmountFields
 ): Promise<AdminHabit> {
   return request(initData, `/api/admin/habits/${id}`, {
     method: "PATCH",

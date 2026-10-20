@@ -177,6 +177,13 @@ export function levelOfValue(value: number): HabitLevel {
   return value === LEVEL_VALUE.extended ? "extended" : "basic";
 }
 
+/** A habit's per-completion estimate as the admin routes pass it around. */
+export interface HabitAmounts {
+  unitLabel: string | null;
+  amountBasic: number | null;
+  amountExtended: number | null;
+}
+
 export interface Habit {
   id: number;
   room_id: number;
@@ -203,6 +210,18 @@ export interface Habit {
    * day extended_points last went NULL -> number. NULL while it is NULL.
    */
   extended_from?: string | null;
+  /**
+   * Display label of one completion's amount ("min", "pages"), or NULL for a
+   * habit with no estimate. amount_basic / amount_extended are what a Basic /
+   * Extended log is worth in that unit, frozen into habit_logs.amount_logged
+   * at write time. All undefined on a DB whose addAmountColumns() step failed —
+   * read them with `?? null`.
+   */
+  unit_label?: string | null;
+  amount_basic?: number | null;
+  amount_extended?: number | null;
+  /** When the one-time backfill of older logs' amounts ran; never cleared. */
+  amount_backfilled_at?: string | null;
   /**
    * NULL in a room with categories disabled. Preserved (not cleared) when a room
    * turns categories off, but a re-enable asks the admin to re-confirm rather
@@ -237,6 +256,12 @@ export interface HabitLog {
    * weight and the rest carry 0, so the week is worth points_weight once.
    */
   points_earned: number;
+  /**
+   * The habit's amount per completion at log time, frozen like points_earned;
+   * NULL when the habit had no unit then (undefined without the column). A
+   * weekly habit's non-carrier rows hold 0.
+   */
+  amount_logged?: number | null;
   created_at: string;
   updated_at: string;
 }

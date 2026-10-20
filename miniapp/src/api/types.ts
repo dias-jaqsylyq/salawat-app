@@ -146,6 +146,17 @@ export interface PersonalHabitStreak {
 export interface AdminHabit extends Habit {
   /** First day Extended may be logged (set when it was switched on), or null. */
   extendedFrom?: string | null;
+  /**
+   * The optional estimate of one completion: a short unit label ("min") and
+   * what a Basic / Extended log is worth in it. Frozen into each log when it
+   * is written, so an edit only reaches new logs. Optional on the wire so this
+   * build tolerates a server that predates amounts.
+   */
+  unitLabel?: string | null;
+  amountBasic?: number | null;
+  amountExtended?: number | null;
+  /** Some log already carries an amount — renaming the unit relabels it. */
+  hasLoggedAmounts?: boolean;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -443,6 +454,44 @@ export interface LeaderboardEntry {
   isYou: boolean;
   /** Only ever set when `isYou`. */
   points?: number;
+}
+
+/** One room habit on the Stats tab: room-wide aggregates, never anyone's own figures. */
+export interface StatsHabit {
+  id: number;
+  name: string;
+  /** Null when the room has categories disabled. */
+  category: HabitCategory | null;
+  /** False for a deactivated habit, shown muted as "Paused". */
+  active: boolean;
+  /** All time, the whole room: one per day, or one per member-week for a weekly habit. */
+  completions: number;
+  /** Sum of the amounts frozen into the logs — a lower bound; null without a unit. */
+  estimatedAmount: number | null;
+  unit: string | null;
+  /** Completions per week, oldest first; null = a week before the habit existed. */
+  weekly: (number | null)[];
+  /** The current, unfinished week's position in `weekly` (the last). */
+  currentWeekIndex: number;
+  /** The best closed week, or null when every closed week is 0. */
+  bestWeekIndex: number | null;
+}
+
+export interface StatsResponse {
+  /** Null for a member between rooms. */
+  room: {
+    /** Current members. */
+    memberCount: number;
+    /** All-time points of every log in the room, members who left included. */
+    totalPoints: number;
+    /** The room's creation day, YYYY-MM-DD. */
+    since: string;
+  } | null;
+  categoriesEnabled: boolean;
+  /** The Monday of each week in a habit's `weekly`, oldest first. */
+  weekStarts: string[];
+  /** Creation order; group with groupHabitsByCategory, as the Log screen does. */
+  habits: StatsHabit[];
 }
 
 /** Which window a board covers. Members only ever get "weekly". */

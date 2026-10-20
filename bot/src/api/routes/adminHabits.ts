@@ -1,11 +1,18 @@
 import type { Request, Response } from "express";
-import { hasExtendedLevelColumns } from "../../db/client.js";
-import { createHabit, listHabits, updateHabit } from "../../db/repository.js";
-import type { Habit, HabitPeriod } from "../../types.js";
+import { hasAmountColumns, hasExtendedLevelColumns } from "../../db/client.js";
+import {
+  createHabit,
+  getHabitIdsWithLoggedAmounts,
+  listHabits,
+  updateHabit,
+} from "../../db/repository.js";
+import type { Habit, HabitAmounts, HabitPeriod } from "../../types.js";
 import {
   categoryForCreate,
   checkCategory,
   checkDescription,
+  checkUnitLabel,
+  isValidAmount,
   isValidHabitName,
 } from "../habitValidation.js";
 import { parseIdParam } from "../params.js";
@@ -13,7 +20,12 @@ import { getRoomHabit, requireCallerRoom } from "../roomScope.js";
 
 const MAX_POINTS_WEIGHT = 1_000_000;
 
-function habitResponse(habit: Habit) {
+/**
+ * `hasLoggedAmounts` tells the Admin form that relabelling the unit would
+ * relabel amounts already frozen into logs (they are not converted), so it
+ * asks for confirmation first.
+ */
+function habitResponse(habit: Habit, hasLoggedAmounts = false) {
   return {
     id: habit.id,
     name: habit.name,
@@ -22,6 +34,10 @@ function habitResponse(habit: Habit) {
     pointsWeight: habit.points_weight,
     extendedPoints: habit.extended_points ?? null,
     extendedFrom: habit.extended_from ?? null,
+    unitLabel: habit.unit_label ?? null,
+    amountBasic: habit.amount_basic ?? null,
+    amountExtended: habit.amount_extended ?? null,
+    hasLoggedAmounts,
     category: habit.category,
     isActive: habit.is_active === 1,
     createdAt: habit.created_at,
@@ -66,17 +82,90 @@ function checkExtendedPoints(
   return true;
 }
 
+const AMOUNT_FIELDS = ["unitLabel", "amountBasic", "amountExtended"] as const;
+
+/**
+ * Validate the optional per-completion estimate of a create or PATCH body
+ * against the habit it would end up on, and return the fields to write
+ * (absent = leave alone). Writes the error itself and returns null.
+ *
+ * The rules, checked on the habit as it will be after the request: an amount
+ * needs a unit, an Extended amount needs a Basic one and an Extended level,
+ * and is at least the Basic one. A label alone is allowed — it just has no
+ * estimate behind it yet.
+ */
+function checkAmounts(
+  body: Record<string, unknown>,
+  stored: HabitAmounts,
+  hasExtendedLevel: boolean,
+  res: Response
+): Partial<HabitAmounts> | null {
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key);
+  if (!AMOUNT_FIELDS.some(has)) return {};
+  if (!hasAmountColumns()) {
+    res.status(503).json({ success: false, error: "amounts_unavailable" });
+    return null;
+  }
+
+  const patch: Partial<HabitAmounts> = {};
+  const unit = checkUnitLabel(body.unitLabel, has("unitLabel"));
+  if (!unit.ok) {
+    res.status(400).json({ success: false, error: unit.error });
+    return null;
+  }
+  if (unit.unitLabel !== undefined) patch.unitLabel = unit.unitLabel;
+  for (const key of ["amountBasic", "amountExtended"] as const) {
+    if (!has(key)) continue;
+    const raw = body[key] ?? null;
+    if (raw !== null && !isValidAmount(raw)) {
+      res.status(400).json({ success: false, error: "invalid_amount" });
+      return null;
+    }
+    patch[key] = raw as number | null;
+  }
+
+  const unitLabel = patch.unitLabel !== undefined ? patch.unitLabel : stored.unitLabel;
+  const basic = patch.amountBasic !== undefined ? patch.amountBasic : stored.amountBasic;
+  // A stored Extended amount on a habit losing its Extended level is cleared
+  // with the level (updateHabit), so it is not held against this request.
+  const extended =
+    patch.amountExtended !== undefined
+      ? patch.amountExtended
+      : hasExtendedLevel
+        ? stored.amountExtended
+        : null;
+
+  let error: string | null = null;
+  if (basic !== null && unitLabel === null) error = "amount_requires_unit";
+  else if (extended !== null && !hasExtendedLevel) error = "amount_extended_not_allowed";
+  else if (extended !== null && basic === null) error = "amount_extended_requires_basic";
+  else if (extended !== null && basic !== null && extended < basic) {
+    error = "amount_extended_below_basic";
+  }
+  if (error !== null) {
+    res.status(400).json({ success: false, error });
+    return null;
+  }
+  return patch;
+}
+
 /** GET /api/admin/habits — every habit of the caller's room, including inactive ones. */
 export function listAdminHabitsRoute(req: Request, res: Response): void {
   const caller = requireCallerRoom(req, res);
   if (!caller) return;
 
-  res.json(listHabits({ roomId: caller.roomId }).map((habit) => habitResponse(habit)));
+  const withAmounts = getHabitIdsWithLoggedAmounts(caller.roomId);
+  res.json(
+    listHabits({ roomId: caller.roomId }).map((habit) =>
+      habitResponse(habit, withAmounts.has(habit.id))
+    )
+  );
 }
 
 /**
  * POST /api/admin/habits — create a habit in the caller's own room.
- * Body: `{name, pointsWeight, category?, period?, description?, extendedPoints?}`,
+ * Body: `{name, pointsWeight, category?, period?, description?, extendedPoints?,
+ * unitLabel?, amountBasic?, amountExtended?}`,
  * where `category` is required when the room has categories enabled and
  * rejected when it does not, and `period` defaults to "daily".
  *
@@ -118,6 +207,14 @@ export function createHabitRoute(req: Request, res: Response): void {
     return;
   }
 
+  const amounts = checkAmounts(
+    body,
+    { unitLabel: null, amountBasic: null, amountExtended: null },
+    extendedPoints !== null,
+    res
+  );
+  if (amounts === null) return;
+
   const describedCheck = checkDescription(
     body.description,
     Object.prototype.hasOwnProperty.call(body, "description")
@@ -147,14 +244,22 @@ export function createHabitRoute(req: Request, res: Response): void {
     category,
     rawPeriod as HabitPeriod,
     describedCheck.description ?? null,
-    extendedPoints
+    extendedPoints,
+    amounts.unitLabel === undefined && amounts.amountBasic === undefined
+      ? null
+      : {
+          unitLabel: amounts.unitLabel ?? null,
+          amountBasic: amounts.amountBasic ?? null,
+          amountExtended: amounts.amountExtended ?? null,
+        }
   );
   res.status(201).json(habitResponse(habit));
 }
 
 /**
  * PATCH /api/admin/habits/:id — edit a habit of the caller's own room. Body:
- * `{name?, description?, pointsWeight?, isActive?, category?, extendedPoints?}`. A habit
+ * `{name?, description?, pointsWeight?, isActive?, category?, extendedPoints?,
+ * unitLabel?, amountBasic?, amountExtended?}`. A habit
  * belonging to another room 404s: being an admin of your room is never
  * authority over someone else's (PRD §3a).
  *
@@ -169,6 +274,12 @@ export function createHabitRoute(req: Request, res: Response): void {
  * and level either way. The extended >= base rule is checked against the
  * habit as it will be after this PATCH, so raising only pointsWeight above the
  * stored extendedPoints is refused too.
+ *
+ * `unitLabel` / `amountBasic` / `amountExtended`: the per-completion estimate
+ * the Stats tab sums. Like points, an edit only reaches logs written after it
+ * — except the very first time an amount is set, when the habit's existing
+ * logs are given one once (backfillHabitAmounts). A unit rename relabels the
+ * whole history; the old amounts are not converted.
  *
  * Non-destructive and reversible (unlike POST /api/admin/reset), so no
  * YES-confirm needed.
@@ -196,6 +307,9 @@ export function patchHabitRoute(req: Request, res: Response): void {
   const hasIsActive = Object.prototype.hasOwnProperty.call(body, "isActive");
   const hasCategory = Object.prototype.hasOwnProperty.call(body, "category");
   const hasExtendedPoints = Object.prototype.hasOwnProperty.call(body, "extendedPoints");
+  const hasAmountField = AMOUNT_FIELDS.some((key) =>
+    Object.prototype.hasOwnProperty.call(body, key)
+  );
 
   if (
     !hasName &&
@@ -203,7 +317,8 @@ export function patchHabitRoute(req: Request, res: Response): void {
     !hasPointsWeight &&
     !hasIsActive &&
     !hasCategory &&
-    !hasExtendedPoints
+    !hasExtendedPoints &&
+    !hasAmountField
   ) {
     res.status(400).json({ success: false, error: "invalid_body" });
     return;
@@ -248,6 +363,20 @@ export function patchHabitRoute(req: Request, res: Response): void {
     }
   }
 
+  const amounts = checkAmounts(
+    body,
+    {
+      unitLabel: current.unit_label ?? null,
+      amountBasic: current.amount_basic ?? null,
+      amountExtended: current.amount_extended ?? null,
+    },
+    extendedPoints !== undefined
+      ? extendedPoints !== null
+      : (current.extended_points ?? null) !== null,
+    res
+  );
+  if (amounts === null) return;
+
   let isActive: boolean | undefined;
   if (hasIsActive) {
     if (typeof body.isActive !== "boolean") {
@@ -274,6 +403,7 @@ export function patchHabitRoute(req: Request, res: Response): void {
     isActive,
     category: checked.category,
     extendedPoints,
+    ...amounts,
   });
-  res.json(habitResponse(habit));
+  res.json(habitResponse(habit, getHabitIdsWithLoggedAmounts(caller.roomId).has(habit.id)));
 }

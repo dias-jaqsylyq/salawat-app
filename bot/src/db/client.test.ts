@@ -12,17 +12,28 @@ process.env.TIMEZONE ??= "Asia/Hong_Kong";
 process.env.DB_PATH = join(dataDir, "salawat.db");
 
 const {
+  addAmountColumns,
   addExtendedLevelColumns,
   addMissingColumns,
   backfillRoomJoinedAt,
   db,
   dropQuantityHabits,
+  hasAmountColumns,
   hasExtendedLevelColumns,
   resetForMultiRoom,
+  runAmountMigration,
   runExtendedLevelMigration,
 } = await import("./client.js");
-const { createHabit, createRoom, createUser, getUserByTelegramId, setUserCurrentRoom } =
-  await import("./repository.js");
+const {
+  createHabit,
+  createRoom,
+  createUser,
+  deleteHabitLog,
+  getRoomHabitTotals,
+  getUserByTelegramId,
+  setUserCurrentRoom,
+  upsertHabitLog,
+} = await import("./repository.js");
 
 after(() => {
   db.close();
@@ -637,5 +648,134 @@ describe("addExtendedLevelColumns — a production-shaped database", () => {
     // The real step still succeeds afterwards (the next boot).
     assert.equal(runExtendedLevelMigration(), true);
     assert.equal(hasExtendedLevelColumns(), true);
+  });
+});
+
+describe("addAmountColumns — a production-shaped database with orphans", () => {
+  /**
+   * Today's schema minus the five amount columns, with real rows in every
+   * table the step touches and the kinds of orphan production carries: logs
+   * whose user is gone, and a log whose habit is gone.
+   */
+  function seedPreAmountsDatabase(): void {
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      DROP TABLE IF EXISTS personal_habit_logs;
+      DROP TABLE IF EXISTS personal_habits;
+      DROP TABLE IF EXISTS habit_logs;
+      DROP TABLE IF EXISTS habits;
+      DROP TABLE IF EXISTS room_admins;
+      DROP TABLE IF EXISTS pending_registrations;
+      DROP TABLE IF EXISTS users;
+      DROP TABLE IF EXISTS rooms;
+    `);
+    db.exec(schemaSql());
+    db.exec(`
+      ALTER TABLE habits DROP COLUMN unit_label;
+      ALTER TABLE habits DROP COLUMN amount_basic;
+      ALTER TABLE habits DROP COLUMN amount_extended;
+      ALTER TABLE habits DROP COLUMN amount_backfilled_at;
+      ALTER TABLE habit_logs DROP COLUMN amount_logged;
+
+      INSERT INTO rooms (id, name, password) VALUES (1, 'Live room', 'live-room-pass');
+      INSERT INTO users (id, telegram_id, nickname, current_room_id)
+        VALUES (1, 500000051, 'LiveMember', 1);
+      INSERT INTO habits (id, room_id, name, description, period, points_weight, extended_points, extended_from)
+        VALUES (1, 1, 'Reading', '30 min', 'daily', 1, 2, '2026-09-01'),
+               (2, 1, 'Charity', NULL, 'weekly', 5, NULL, NULL);
+      INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+        VALUES (1, 1, 1, '2026-09-14', 2, 2),
+               (1, 2, 1, '2026-09-14', 1, 5),
+               (1, 2, 1, '2026-09-15', 1, 0),
+               (1, 77, 1, '2026-09-15', 1, 3);
+      INSERT INTO personal_habits (id, user_id, room_id, name) VALUES (1, 1, 1, 'Walk');
+    `);
+    const orphan = db.prepare(
+      `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned)
+       VALUES (999, 1, 1, ?, 1, 1)`
+    );
+    for (let i = 0; i < 10; i++) orphan.run(`orphan-${i}`);
+    db.pragma("foreign_keys = ON");
+  }
+
+  const LOG_COLUMNS = "id, user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at";
+  function dump(): unknown {
+    return {
+      habits: db
+        .prepare("SELECT id, room_id, name, description, period, points_weight, extended_points, is_active, created_at FROM habits ORDER BY id")
+        .all(),
+      habit_logs: db.prepare(`SELECT ${LOG_COLUMNS} FROM habit_logs ORDER BY id`).all(),
+      personal_habits: db.prepare("SELECT id, user_id, room_id, name FROM personal_habits ORDER BY id").all(),
+    };
+  }
+
+  function amountSnapshots(): string[] {
+    return readdirSync(dataDir).filter((f) => f.startsWith("salawat.pre-amounts-"));
+  }
+
+  it("adds the five columns, snapshots first, and leaves every row and orphan as it was", () => {
+    seedPreAmountsDatabase();
+    const before = dump();
+    const orphansBefore = (db.pragma("foreign_key_check") as unknown[]).length;
+    assert.equal(orphansBefore, 11, "the seed should start out with orphans");
+    assert.equal(hasAmountColumns(), false);
+    const snapshotsBefore = amountSnapshots().length;
+
+    assert.deepEqual(addAmountColumns(), [
+      "habits.unit_label",
+      "habits.amount_basic",
+      "habits.amount_extended",
+      "habits.amount_backfilled_at",
+      "habit_logs.amount_logged",
+    ]);
+
+    assert.equal(hasAmountColumns(), true);
+    assert.equal(amountSnapshots().length, snapshotsBefore + 1);
+    assert.deepEqual(dump(), before);
+    assert.equal((db.pragma("foreign_key_check") as unknown[]).length, orphansBefore);
+    // Nothing is backfilled by the migration itself: that only happens when an
+    // admin sets an amount.
+    assert.deepEqual(db.prepare("SELECT DISTINCT amount_logged FROM habit_logs").all(), [
+      { amount_logged: null },
+    ]);
+    assert.deepEqual(db.prepare("SELECT DISTINCT unit_label, amount_basic FROM habits").all(), [
+      { unit_label: null, amount_basic: null },
+    ]);
+  });
+
+  it("is idempotent: a second run adds nothing and takes no snapshot", () => {
+    const snapshotsBefore = amountSnapshots().length;
+    const before = dump();
+    assert.deepEqual(addAmountColumns(), []);
+    assert.equal(runAmountMigration(), true);
+    assert.equal(amountSnapshots().length, snapshotsBefore);
+    assert.deepEqual(dump(), before);
+  });
+
+  it("a failing ALTER does not throw at boot, rolls back, and logging keeps working without the columns", () => {
+    seedPreAmountsDatabase();
+    const before = dump();
+    const ok = runAmountMigration([
+      { table: "habit_logs", column: "amount_logged", definition: "REAL" },
+      // ADD COLUMN NOT NULL with no default is refused by SQLite.
+      { table: "habits", column: "always_fails", definition: "REAL NOT NULL" },
+    ]);
+    assert.equal(ok, false);
+    assert.ok(!columnNames("habit_logs").includes("amount_logged"), "rolled back");
+    assert.ok(!columnNames("habits").includes("always_fails"));
+    assert.deepEqual(dump(), before);
+
+    // Writes and stats never name a missing column.
+    const log = upsertHabitLog(1, 2, 1, "2026-09-21");
+    assert.equal(log.points_earned, 5);
+    deleteHabitLog(1, 2, "2026-09-14");
+    const totals = getRoomHabitTotals(1);
+    assert.equal(totals.get(1)!.completions, 1, "the orphan-user rows do not count");
+    assert.equal(totals.get(1)!.amount, null);
+    assert.equal(totals.has(77), false, "a log whose habit is gone does not count");
+
+    // The real step still succeeds afterwards (the next boot).
+    assert.equal(runAmountMigration(), true);
+    assert.equal(hasAmountColumns(), true);
   });
 });

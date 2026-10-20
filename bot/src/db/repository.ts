@@ -1,4 +1,4 @@
-import { db } from "./client.js";
+import { db, hasAmountColumns } from "./client.js";
 import { generateRoomPassword } from "../utils/roomPassword.js";
 import { streakFromLoggedDays, streakFromLoggedWeeks } from "../utils/streak.js";
 import { weekBoundsOfDateKey } from "../utils/dates.js";
@@ -10,6 +10,7 @@ import type {
   HabitCategory,
   HabitLevel,
   HabitLog,
+  HabitAmounts,
   HabitPeriod,
   LeaderboardRow,
   PendingRegistration,
@@ -23,7 +24,7 @@ import type {
   UserRole,
   WeeklyLeaderboardRow,
 } from "../types.js";
-import { levelOfValue } from "../types.js";
+import { LEVEL_VALUE, levelOfValue } from "../types.js";
 
 export function getUserByTelegramId(telegramId: number): User | undefined {
   return db
@@ -1275,6 +1276,32 @@ export function computePoints(
 }
 
 /**
+ * What one log row is worth in the habit's unit — the amount twin of
+ * computePoints, frozen into habit_logs.amount_logged at write time and never
+ * recomputed on read, so a later unit or amount edit is not retroactive.
+ *
+ * NULL when the habit has no amount (no estimate to make). A weekly habit's
+ * non-carrier rows get 0, so the week holds one completion's amount however
+ * many days are marked. Extended without its own amount falls back to the
+ * Basic one: the figure is a lower bound, never an overstatement.
+ */
+export function computeAmount(
+  habit: {
+    period: HabitPeriod;
+    amount_basic?: number | null;
+    amount_extended?: number | null;
+  },
+  weekAlreadyBanked = false,
+  level: HabitLevel = "basic"
+): number | null {
+  const basic = habit.amount_basic ?? null;
+  if (basic === null) return null;
+  if (habit.period === "weekly" && weekAlreadyBanked) return 0;
+  if (level === "extended") return habit.amount_extended ?? basic;
+  return basic;
+}
+
+/**
  * Whether a member may log Extended for this habit on `logDate`: the habit has
  * a second level, and `logDate` is on or after the day it was switched on.
  * Days before that offer Basic only. A habit enabled before extended_from
@@ -1332,7 +1359,9 @@ export function createHabit(
   period: HabitPeriod = "daily",
   description: string | null = null,
   /** Total for the Extended level, or null for a single-level habit. Daily only. */
-  extendedPoints: number | null = null
+  extendedPoints: number | null = null,
+  /** Optional per-completion estimate (see habits.unit_label). Validated by the caller. */
+  amounts: HabitAmounts | null = null
 ): Habit {
   // The extended columns are only named when used, so creating a single-level
   // habit keeps working on a DB whose addExtendedLevelColumns() step failed.
@@ -1361,6 +1390,22 @@ export function createHabit(
             extendedPoints,
             getDayKeyInTimezone()
           );
+  if (amounts !== null && amounts.unitLabel !== null) {
+    // A brand-new habit has no logs to backfill, so the marker is set straight
+    // away: amounts edited later only ever reach new logs.
+    db.prepare(
+      `UPDATE habits
+       SET unit_label = ?, amount_basic = ?, amount_extended = ?,
+           amount_backfilled_at = CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END
+       WHERE id = ?`
+    ).run(
+      amounts.unitLabel,
+      amounts.amountBasic,
+      amounts.amountExtended,
+      amounts.amountBasic,
+      result.lastInsertRowid
+    );
+  }
   return getHabitById(Number(result.lastInsertRowid)) ?? (() => {
     throw new Error(`Failed to load habit just created (rowid ${result.lastInsertRowid})`);
   })();
@@ -1389,8 +1434,20 @@ export function updateHabit(
      * points and level either way.
      */
     extendedPoints: number | null;
+    /**
+     * The per-completion estimate. null clears, undefined leaves alone. Only
+     * new logs see a change; the first time amountBasic is set, the habit's
+     * existing logs are given an amount once (backfillHabitAmounts).
+     */
+    unitLabel: string | null;
+    amountBasic: number | null;
+    amountExtended: number | null;
   }>
 ): Habit {
+  return db.transaction(() => updateHabitInTransaction(id, patch))();
+}
+
+function updateHabitInTransaction(id: number, patch: Parameters<typeof updateHabit>[1]): Habit {
   const current = getHabitById(id);
   if (!current) {
     throw new Error(`updateHabit: habit ${id} not found`);
@@ -1432,11 +1489,79 @@ export function updateHabit(
       from,
       id
     );
+    // An Extended amount means nothing without the level it belongs to.
+    if (patch.extendedPoints === null && hasAmountColumns()) {
+      db.prepare("UPDATE habits SET amount_extended = NULL WHERE id = ?").run(id);
+    }
+  }
+
+  if (
+    patch.unitLabel !== undefined ||
+    patch.amountBasic !== undefined ||
+    patch.amountExtended !== undefined
+  ) {
+    const pick = <T>(next: T | undefined, stored: T | null | undefined): T | null =>
+      next !== undefined ? next : (stored ?? null);
+    db.prepare(
+      "UPDATE habits SET unit_label = ?, amount_basic = ?, amount_extended = ? WHERE id = ?"
+    ).run(
+      pick(patch.unitLabel, current.unit_label),
+      pick(patch.amountBasic, current.amount_basic),
+      // Switched off above in this same call: `current` predates that.
+      patch.extendedPoints === null ? null : pick(patch.amountExtended, current.amount_extended),
+      id
+    );
+    backfillHabitAmounts(id);
   }
 
   return getHabitById(id) ?? (() => {
     throw new Error(`Failed to reload habit ${id} after update`);
   })();
+}
+
+/**
+ * The one-time history fill: the first time a habit gets an amount, every log
+ * it already has is given one, as if the amount had been set all along —
+ * Basic rows the Basic amount, Extended rows the Extended one (or Basic when
+ * there is none), and a weekly habit's non-carrier rows 0. Then
+ * amount_backfilled_at is stamped and this never runs for the habit again, so
+ * from here on an amount edit only reaches new logs, like points.
+ *
+ * Only fills rows with no amount yet, so it can never overwrite a frozen one.
+ * A no-op while the habit has no amount, or once it has been backfilled.
+ * Returns the number of rows filled.
+ */
+export function backfillHabitAmounts(habitId: number): number {
+  const habit = getHabitById(habitId);
+  if (!habit) return 0;
+  const basic = habit.amount_basic ?? null;
+  if (basic === null || (habit.amount_backfilled_at ?? null) !== null) return 0;
+
+  const fill = db.transaction(() => {
+    const filled = db
+      .prepare(
+        `UPDATE habit_logs
+         SET amount_logged = CASE
+               WHEN ? = 'weekly' AND points_earned = 0 THEN 0
+               WHEN value = ? THEN ?
+               ELSE ?
+             END
+         WHERE habit_id = ? AND room_id = ? AND amount_logged IS NULL`
+      )
+      .run(
+        habit.period,
+        LEVEL_VALUE.extended,
+        habit.amount_extended ?? basic,
+        basic,
+        habit.id,
+        habit.room_id
+      ).changes;
+    db.prepare("UPDATE habits SET amount_backfilled_at = datetime('now') WHERE id = ?").run(
+      habit.id
+    );
+    return filled;
+  });
+  return fill();
 }
 
 export function listHabits(options: { activeOnly?: boolean; roomId?: number } = {}): Habit[] {
@@ -1492,14 +1617,30 @@ export function upsertHabitLog(
     const weekAlreadyBanked = carrier !== undefined && carrier.log_date !== logDate;
     const pointsEarned = computePoints(habit, weekAlreadyBanked, levelOfValue(value));
 
-    db.prepare(
-      `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-       ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
-         value = excluded.value,
-         points_earned = excluded.points_earned,
-         updated_at = excluded.updated_at`
-    ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned);
+    if (hasAmountColumns()) {
+      const amountLogged = computeAmount(habit, weekAlreadyBanked, levelOfValue(value));
+      db.prepare(
+        `INSERT INTO habit_logs
+           (user_id, habit_id, room_id, log_date, value, points_earned, amount_logged, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+         ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
+           value = excluded.value,
+           points_earned = excluded.points_earned,
+           amount_logged = excluded.amount_logged,
+           updated_at = excluded.updated_at`
+      ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned, amountLogged);
+    } else {
+      // Without the column (addAmountColumns() failed) logging works exactly
+      // as it did before amounts existed.
+      db.prepare(
+        `INSERT INTO habit_logs (user_id, habit_id, room_id, log_date, value, points_earned, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+         ON CONFLICT(user_id, habit_id, log_date) DO UPDATE SET
+           value = excluded.value,
+           points_earned = excluded.points_earned,
+           updated_at = excluded.updated_at`
+      ).run(userId, habitId, habit.room_id, logDate, value, pointsEarned);
+    }
 
     return db
       .prepare(
@@ -1551,9 +1692,18 @@ export function deleteHabitLog(userId: number, habitId: number, logDate: string)
       .get(userId, habitId, weekStart, weekEnd) as { id: number } | undefined;
     if (!successor) return;
 
-    db.prepare(
-      "UPDATE habit_logs SET points_earned = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(row.points_earned, successor.id);
+    // The amount goes along with the points, again the deleted row's frozen
+    // value rather than the habit's current one.
+    if (hasAmountColumns()) {
+      db.prepare(
+        `UPDATE habit_logs SET points_earned = ?, amount_logged = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(row.points_earned, row.amount_logged ?? null, successor.id);
+    } else {
+      db.prepare(
+        "UPDATE habit_logs SET points_earned = ?, updated_at = datetime('now') WHERE id = ?"
+      ).run(row.points_earned, successor.id);
+    }
   });
   remove();
 }
@@ -2011,6 +2161,126 @@ export function getExportRows(roomId?: number): ExportRow[] {
               u.telegram_last_name AS telegram_last_name,`,
     roomId
   ) as ExportRow[];
+}
+
+/* ------------------------------------------------------------------------- *
+ * Room stats (GET /api/stats)
+ *
+ * What the whole room has done together, per habit — aggregates only, never a
+ * row per member. Three rules shared by every query below:
+ *
+ *  - Counted by habit_logs.room_id, not by current membership, so a member who
+ *    left keeps contributing (a kick or a room switch already deleted theirs).
+ *  - INNER JOIN users: a row whose user no longer exists (written while
+ *    foreign_keys was off — production carries some) counts for nothing, as in
+ *    every other read. Joining habits on room_id as well drops a row whose
+ *    habit is gone or belongs to another room.
+ *  - One completion is one row for a daily habit, and the week's carrier row
+ *    (points_earned > 0, see upsertHabitLog) for a weekly one — so marking
+ *    three days of a weekly habit is still one completion.
+ *
+ * Personal habits live in other tables and are never read here.
+ * ------------------------------------------------------------------------- */
+
+const STATS_LOGS_FROM = `
+  FROM habit_logs l
+  JOIN habits h ON h.id = l.habit_id AND h.room_id = l.room_id
+  JOIN users u ON u.id = l.user_id`;
+const IS_COMPLETION = `(h.period = 'daily' OR l.points_earned > 0)`;
+
+/** Room points over every log ever written in this room, departed members included. */
+export function getRoomTotalPoints(roomId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(l.points_earned), 0) AS total ${STATS_LOGS_FROM}
+       WHERE l.room_id = ?`
+    )
+    .get(roomId) as { total: number };
+  return row.total;
+}
+
+export interface HabitStatsTotals {
+  completions: number;
+  /** SUM(amount_logged): null when no row has an amount (or the column is missing). */
+  amount: number | null;
+  /** Earliest log_date, for where the habit's bars start. */
+  firstLogDate: string;
+}
+
+/** All-time completions and amount per habit of this room. Habits with no logs are absent. */
+export function getRoomHabitTotals(roomId: number): Map<number, HabitStatsTotals> {
+  const amount = hasAmountColumns() ? "SUM(l.amount_logged)" : "NULL";
+  const rows = db
+    .prepare(
+      `SELECT l.habit_id AS habit_id,
+              SUM(CASE WHEN ${IS_COMPLETION} THEN 1 ELSE 0 END) AS completions,
+              ${amount} AS amount,
+              MIN(l.log_date) AS first_log_date
+       ${STATS_LOGS_FROM}
+       WHERE l.room_id = ?
+       GROUP BY l.habit_id`
+    )
+    .all(roomId) as {
+    habit_id: number;
+    completions: number;
+    amount: number | null;
+    first_log_date: string;
+  }[];
+  return new Map(
+    rows.map((r) => [
+      r.habit_id,
+      { completions: r.completions, amount: r.amount, firstLogDate: r.first_log_date },
+    ])
+  );
+}
+
+/**
+ * Completions per habit in each of `weeks` (inclusive YYYY-MM-DD bounds,
+ * oldest first, as the caller got them from the week helpers). Returns one
+ * array per habit with logs in the window, index-aligned with `weeks`.
+ */
+export function getRoomHabitWeeklyCompletions(
+  roomId: number,
+  weeks: readonly { weekStart: string; weekEnd: string }[]
+): Map<number, number[]> {
+  const result = new Map<number, number[]>();
+  if (weeks.length === 0) return result;
+  const bucket = weeks.map((_, i) => `WHEN l.log_date BETWEEN ? AND ? THEN ${i}`).join(" ");
+  const bounds = weeks.flatMap((w) => [w.weekStart, w.weekEnd]);
+  const rows = db
+    .prepare(
+      `SELECT l.habit_id AS habit_id, CASE ${bucket} END AS week_index, COUNT(*) AS completions
+       ${STATS_LOGS_FROM}
+       WHERE l.room_id = ? AND l.log_date BETWEEN ? AND ? AND ${IS_COMPLETION}
+       GROUP BY l.habit_id, week_index`
+    )
+    .all(...bounds, roomId, weeks[0]!.weekStart, weeks[weeks.length - 1]!.weekEnd) as {
+    habit_id: number;
+    week_index: number | null;
+    completions: number;
+  }[];
+  for (const row of rows) {
+    if (row.week_index === null) continue;
+    const counts = result.get(row.habit_id) ?? weeks.map(() => 0);
+    counts[row.week_index] = row.completions;
+    result.set(row.habit_id, counts);
+  }
+  return result;
+}
+
+/**
+ * Habits of this room with at least one log carrying a frozen amount — the
+ * Admin form warns before relabelling the unit of one of those, since the old
+ * amounts are not converted.
+ */
+export function getHabitIdsWithLoggedAmounts(roomId: number): Set<number> {
+  if (!hasAmountColumns()) return new Set();
+  const rows = db
+    .prepare(
+      "SELECT DISTINCT habit_id FROM habit_logs WHERE room_id = ? AND amount_logged IS NOT NULL"
+    )
+    .all(roomId) as { habit_id: number }[];
+  return new Set(rows.map((r) => r.habit_id));
 }
 
 /** This user's habit_logs rows for one TIMEZONE-local day, keyed by habit_id. */

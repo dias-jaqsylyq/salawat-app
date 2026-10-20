@@ -109,3 +109,37 @@ export function parseLevel(raw: unknown): HabitLevel | null {
   if (raw === "basic" || raw === "extended") return raw;
   return null;
 }
+
+/** "min", "pages", "times" — a label, not a sentence. */
+export const UNIT_LABEL_MAX_LENGTH = 16;
+/** Upper bound of one completion's amount, Basic or Extended. */
+export const MAX_AMOUNT = 100_000;
+
+/**
+ * Normalise a `unitLabel` from a request body, with checkDescription's
+ * conventions: omitted is undefined (leave alone), and null, "" and whitespace
+ * all clear it. Control characters and angle brackets are refused outright
+ * rather than stripped — the label is shown verbatim next to a number.
+ */
+export type UnitLabelCheck =
+  | { ok: true; unitLabel: string | null | undefined }
+  | { ok: false; error: string };
+
+const FORBIDDEN_UNIT_CHARS = /[\u0000-\u001f\u007f-\u009f<>]/;
+
+export function checkUnitLabel(raw: unknown, provided: boolean): UnitLabelCheck {
+  if (!provided || raw === undefined) return { ok: true, unitLabel: undefined };
+  if (raw === null) return { ok: true, unitLabel: null };
+  if (typeof raw !== "string") return { ok: false, error: "invalid_unit_label" };
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return { ok: true, unitLabel: null };
+  if (trimmed.length > UNIT_LABEL_MAX_LENGTH || FORBIDDEN_UNIT_CHARS.test(trimmed)) {
+    return { ok: false, error: "invalid_unit_label" };
+  }
+  return { ok: true, unitLabel: trimmed };
+}
+
+/** An amount per completion: finite, > 0, at most MAX_AMOUNT. Decimals allowed. */
+export function isValidAmount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= MAX_AMOUNT;
+}

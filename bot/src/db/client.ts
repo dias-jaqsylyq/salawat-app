@@ -494,11 +494,12 @@ export const EXTENDED_LEVEL_COLUMNS: readonly { table: string; column: string; d
   },
 ];
 
+type GuardedColumn = { table: string; column: string; definition: string };
+
 /**
- * Add whichever EXTENDED_LEVEL_COLUMNS are missing. Additive only: three
- * ALTER TABLE ADD COLUMNs, no rebuild, no DROP, no row rewritten. The log
- * tables are not touched at all — the level lives in their existing `value`
- * column, which every row written so far holds as 1, i.e. Basic.
+ * Add whichever of `columns` are missing, for the migrations that must never
+ * stop the bot from booting (Extended level, amounts). Additive only: plain
+ * ALTER TABLE ADD COLUMNs, no rebuild, no DROP, no row rewritten.
  *
  * No `PRAGMA foreign_key_check` gate: ADD COLUMN cannot create or repair a
  * foreign-key violation, and production already carries orphan rows that a
@@ -507,20 +508,16 @@ export const EXTENDED_LEVEL_COLUMNS: readonly { table: string; column: string; d
  * Snapshots the file first, but only when there is something to add, and all
  * ALTERs run in one transaction, so a failure part-way leaves no column added.
  * Idempotent: a no-op once every column exists. Throws on failure — the boot
- * call goes through runExtendedLevelMigration(), which does not.
- *
- * `columns` is overridable for tests only.
+ * calls go through runGuardedMigration(), which does not.
  */
-export function addExtendedLevelColumns(
-  columns: readonly { table: string; column: string; definition: string }[] = EXTENDED_LEVEL_COLUMNS
-): string[] {
+function addGuardedColumns(columns: readonly GuardedColumn[], snapshotLabel: string): string[] {
   const missing = columns.filter(
     ({ table, column }) => tableExists(table) && !columnNames(table).includes(column)
   );
   if (missing.length === 0) return [];
 
   // A snapshot failure (disk full, permissions) throws here, before any ALTER.
-  const snapshot = snapshotDb("pre-extended-level");
+  const snapshot = snapshotDb(snapshotLabel);
   console.warn(
     `db migration: adding ${missing.map((c) => `${c.table}.${c.column}`).join(", ")}. ` +
       (snapshot ? `Snapshot: ${snapshot}` : `No file snapshot taken (${config.dbPath}).`)
@@ -533,31 +530,30 @@ export function addExtendedLevelColumns(
   return missing.map((c) => `${c.table}.${c.column}`);
 }
 
-/** True when every Extended-level column is present, i.e. the feature can be written. */
-export function hasExtendedLevelColumns(): boolean {
-  return EXTENDED_LEVEL_COLUMNS.every(
+function hasColumns(columns: readonly GuardedColumn[]): boolean {
+  return columns.every(
     ({ table, column }) => tableExists(table) && columnNames(table).includes(column)
   );
 }
 
 /**
- * Boot wrapper for addExtendedLevelColumns(). Deliberately NOT fatal, unlike
- * the migrations above: if it fails, the transaction has rolled back, the DB is
- * exactly as before, and the app runs as it did before the feature — every
- * habit reads as single-level (the missing column is undefined, treated as
- * NULL) and the admin endpoints that would write the new columns answer
- * 503 extended_level_unavailable. The next boot simply tries again.
+ * Boot wrapper for addGuardedColumns(). Deliberately NOT fatal, unlike the
+ * migrations above: if it fails, the transaction has rolled back, the DB is
+ * exactly as before, and the app runs as it did before the feature. The next
+ * boot simply tries again.
  */
-export function runExtendedLevelMigration(
-  columns: readonly { table: string; column: string; definition: string }[] = EXTENDED_LEVEL_COLUMNS
+function runGuardedMigration(
+  columns: readonly GuardedColumn[],
+  snapshotLabel: string,
+  feature: string
 ): boolean {
   try {
-    const added = addExtendedLevelColumns(columns);
+    const added = addGuardedColumns(columns, snapshotLabel);
     if (added.length > 0) console.warn(`db migration: added ${added.join(", ")}.`);
     return true;
   } catch (err) {
     console.error(
-      `db migration: adding the Extended-level columns failed; continuing without the ` +
+      `db migration: adding the ${feature} columns failed; continuing without the ` +
         `feature (transaction rolled back, database unchanged): ` +
         `${err instanceof Error ? err.message : String(err)}`,
       err
@@ -566,4 +562,66 @@ export function runExtendedLevelMigration(
   }
 }
 
+/**
+ * Add whichever EXTENDED_LEVEL_COLUMNS are missing (see addGuardedColumns). The
+ * log tables are not touched at all — the level lives in their existing
+ * `value` column, which every row written so far holds as 1, i.e. Basic.
+ *
+ * `columns` is overridable for tests only.
+ */
+export function addExtendedLevelColumns(
+  columns: readonly GuardedColumn[] = EXTENDED_LEVEL_COLUMNS
+): string[] {
+  return addGuardedColumns(columns, "pre-extended-level");
+}
+
+/** True when every Extended-level column is present, i.e. the feature can be written. */
+export function hasExtendedLevelColumns(): boolean {
+  return hasColumns(EXTENDED_LEVEL_COLUMNS);
+}
+
+/**
+ * Boot wrapper for addExtendedLevelColumns(). If it fails, every habit reads as
+ * single-level (the missing column is undefined, treated as NULL) and the
+ * admin endpoints that would write the new columns answer
+ * 503 extended_level_unavailable.
+ */
+export function runExtendedLevelMigration(
+  columns: readonly GuardedColumn[] = EXTENDED_LEVEL_COLUMNS
+): boolean {
+  return runGuardedMigration(columns, "pre-extended-level", "Extended-level");
+}
+
 runExtendedLevelMigration();
+
+/**
+ * The per-completion amount columns behind the Stats tab's estimates. Same
+ * non-fatal treatment as the Extended level: without them every habit simply
+ * has no unit, logs are written without an amount, GET /api/stats shows counts
+ * only, and the admin endpoints that would write a unit answer
+ * 503 amounts_unavailable.
+ */
+export const AMOUNT_COLUMNS: readonly GuardedColumn[] = [
+  { table: "habits", column: "unit_label", definition: "TEXT" },
+  { table: "habits", column: "amount_basic", definition: "REAL" },
+  { table: "habits", column: "amount_extended", definition: "REAL" },
+  { table: "habits", column: "amount_backfilled_at", definition: "TEXT" },
+  { table: "habit_logs", column: "amount_logged", definition: "REAL" },
+];
+
+/** `columns` is overridable for tests only. */
+export function addAmountColumns(columns: readonly GuardedColumn[] = AMOUNT_COLUMNS): string[] {
+  return addGuardedColumns(columns, "pre-amounts");
+}
+
+/** True when every amount column is present, i.e. units can be written and read. */
+export function hasAmountColumns(): boolean {
+  return hasColumns(AMOUNT_COLUMNS);
+}
+
+/** Boot wrapper for addAmountColumns(); never throws. */
+export function runAmountMigration(columns: readonly GuardedColumn[] = AMOUNT_COLUMNS): boolean {
+  return runGuardedMigration(columns, "pre-amounts", "amount");
+}
+
+runAmountMigration();

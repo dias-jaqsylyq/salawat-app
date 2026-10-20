@@ -1,5 +1,5 @@
 import { Brain, Dumbbell, Heart, Sparkles, type LucideIcon } from "lucide-react";
-import type { Habit, HabitCategory } from "../api/types.ts";
+import type { HabitCategory } from "../api/types.ts";
 
 /**
  * Display order for the four fixed categories (MULTI ROOM PRD §3): SQ → IQ →
@@ -22,7 +22,10 @@ export const CATEGORY_META: Record<HabitCategory, CategoryMeta> = {
   PQ: { label: "Physical", icon: Dumbbell },
 };
 
-export interface HabitGroup<T extends Habit> {
+/** Anything with a category — a Log row, a Stats habit. */
+type Categorised = { category: HabitCategory | null };
+
+export interface HabitGroup<T extends Categorised> {
   /** Null for the trailing uncategorized group. */
   category: HabitCategory | null;
   habits: T[];
@@ -36,7 +39,7 @@ export interface HabitGroup<T extends Habit> {
  * until an admin re-confirms each one (PRD §0), and those habits must stay
  * loggable in the meantime.
  */
-export function groupHabitsByCategory<T extends Habit>(habits: T[]): HabitGroup<T>[] {
+export function groupHabitsByCategory<T extends Categorised>(habits: T[]): HabitGroup<T>[] {
   const groups: HabitGroup<T>[] = [];
 
   for (const category of CATEGORY_ORDER) {

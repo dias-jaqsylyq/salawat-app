@@ -113,6 +113,19 @@ CREATE TABLE IF NOT EXISTS habits (
   -- when extended_points goes NULL -> number, kept while only the points are
   -- edited, cleared with it. Days before it accept Basic only.
   extended_from TEXT,
+  -- Optional estimate of what one completion is worth, for the Stats tab's
+  -- "at least 870 min". unit_label is a short display label ("min", "pages");
+  -- amount_basic (> 0) needs it, and amount_extended (>= amount_basic) is only
+  -- set on a habit with an Extended level. All three are read when a log is
+  -- written and frozen into habit_logs.amount_logged — like points_weight, a
+  -- later edit never touches an old row. Rules live in adminHabits.ts.
+  unit_label TEXT,
+  amount_basic REAL,
+  amount_extended REAL,
+  -- When amount_basic was first set and this habit's older logs were given an
+  -- amount once (backfillHabitAmounts). Never cleared, so clearing and setting
+  -- the amount again does not backfill a second time.
+  amount_backfilled_at TEXT,
   -- Only meaningful while the room's categories_enabled = 1. Kept (not cleared)
   -- when categories are switched off, so nothing is lost — but a re-enable asks
   -- the admin to re-confirm rather than silently resurrecting it (PRD §0).
@@ -154,6 +167,11 @@ CREATE TABLE IF NOT EXISTS habit_logs (
   -- the earliest surviving row of the week, so unmarking one day never silently
   -- erases a week that is still marked elsewhere.
   points_earned INTEGER NOT NULL,
+  -- The habit's amount per completion at log time (habits.amount_basic or
+  -- amount_extended), frozen exactly like points_earned, or NULL when the habit
+  -- had no unit then. Follows the same carrier-row rule for a weekly habit: the
+  -- row carrying the week holds the amount, the others 0.
+  amount_logged REAL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (user_id, habit_id, log_date)
