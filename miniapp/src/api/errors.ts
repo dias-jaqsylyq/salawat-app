@@ -35,6 +35,20 @@ export function messageForApiError(err: unknown, fallback: string): string {
       return "Extended wasn't available yet on this day.";
     case "extended_level_unavailable":
       return "Extended levels aren't available right now — try again later.";
+    case "invalid_unit_label":
+      return "Unit must be 1–16 characters, without < or >.";
+    case "invalid_amount":
+      return "Amount must be a number above 0 and at most 100,000.";
+    case "amount_requires_unit":
+      return "Enter a unit for the amount.";
+    case "amount_extended_requires_basic":
+      return "Enter the basic amount first.";
+    case "amount_extended_not_allowed":
+      return "Only habits with an Extended level have an Extended amount.";
+    case "amount_extended_below_basic":
+      return "The Extended amount can't be lower than the basic amount.";
+    case "amounts_unavailable":
+      return "Amounts aren't available right now — try again later.";
     case "invalid_level":
     case "invalid_has_extended":
       return "That level is invalid.";

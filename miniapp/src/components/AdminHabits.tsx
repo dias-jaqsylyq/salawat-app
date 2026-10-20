@@ -5,6 +5,14 @@ import { createHabit, getAdminHabits, patchHabit } from "../api/client.ts";
 import { messageForApiError } from "../api/errors.ts";
 import type { AdminHabit, HabitCategory, HabitPeriod } from "../api/types.ts";
 import { validateExtendedPoints } from "../lib/extendedLevel.ts";
+import {
+  amountInput,
+  parseAmountFields,
+  UNIT_LABEL_MAX_LENGTH,
+  type AmountFields,
+} from "../lib/habitAmount.ts";
+import { formatNumber } from "../lib/formatAmount.ts";
+import { confirmAction } from "../telegram/confirm.ts";
 import { CATEGORY_META } from "../lib/habitCategories.ts";
 import CategoryPicker from "./CategoryPicker.tsx";
 import HabitPeriodPicker from "./HabitPeriodPicker.tsx";
@@ -125,6 +133,125 @@ function ExtendedLevelField({
   );
 }
 
+/**
+ * The optional estimate behind the Stats tab ("at least 870 min"): a unit and
+ * what one completion is worth in it, plus an Extended amount while the habit
+ * has that level. Logs only say done / not done, so this is the only place an
+ * amount ever comes from.
+ */
+function AmountField({
+  id,
+  unit,
+  basic,
+  extended,
+  withExtended,
+  disabled,
+  onUnitChange,
+  onBasicChange,
+  onExtendedChange,
+}: {
+  id: string;
+  unit: string;
+  basic: string;
+  extended: string;
+  withExtended: boolean;
+  disabled: boolean;
+  onUnitChange: (value: string) => void;
+  onBasicChange: (value: string) => void;
+  onExtendedChange: (value: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-body font-semibold text-foreground">Amount (optional)</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <Label htmlFor={`${id}-unit`}>Unit</Label>
+          <Input
+            id={`${id}-unit`}
+            value={unit}
+            onChange={(e) => onUnitChange(e.target.value)}
+            maxLength={UNIT_LABEL_MAX_LENGTH}
+            disabled={disabled}
+            placeholder="e.g. min"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor={`${id}-basic`}>{withExtended ? "Per Basic day" : "Per completion"}</Label>
+          <Input
+            id={`${id}-basic`}
+            type="text"
+            inputMode="decimal"
+            value={basic}
+            onChange={(e) => onBasicChange(e.target.value)}
+            disabled={disabled}
+            placeholder="e.g. 30"
+          />
+        </div>
+      </div>
+      {withExtended && (
+        <div className="space-y-2 animate-fade">
+          <Label htmlFor={`${id}-extended`}>Per Extended day</Label>
+          <Input
+            id={`${id}-extended`}
+            type="text"
+            inputMode="decimal"
+            value={extended}
+            onChange={(e) => onExtendedChange(e.target.value)}
+            disabled={disabled}
+            placeholder="e.g. 45"
+          />
+        </div>
+      )}
+      <p className="text-footnote text-muted-foreground">
+        Stats shows the room an estimate like “at least 870 min”. Setting it the first time also
+        counts the logs this habit already has; after that, changes apply to new logs only.
+      </p>
+    </div>
+  );
+}
+
+/** "30 min each" for the habit list, or null without an amount. */
+function amountSummary(habit: AdminHabit): string | null {
+  const unit = habit.unitLabel ?? null;
+  const basic = habit.amountBasic ?? null;
+  if (unit === null || basic === null) return null;
+  const extended = habit.amountExtended ?? null;
+  return extended !== null
+    ? `${formatNumber(basic)} / ${formatNumber(extended)} ${unit}`
+    : `${formatNumber(basic)} ${unit} each`;
+}
+
+/**
+ * Old amounts are frozen into the logs under the old unit and not converted,
+ * so relabelling (or dropping) the unit of a habit that already has some asks
+ * first. Resolves true when the save may go ahead.
+ */
+async function confirmUnitChange(habit: AdminHabit, nextUnit: string | null): Promise<boolean> {
+  const stored = habit.unitLabel ?? null;
+  if (!habit.hasLoggedAmounts || stored === null || nextUnit === stored) return true;
+  return confirmAction(
+    nextUnit === null
+      ? {
+          title: "Remove the unit?",
+          message: `Stats will stop showing an estimate for this habit. Amounts already logged in “${stored}” are kept, not converted.`,
+          okText: "Remove",
+        }
+      : {
+          title: "Rename the unit?",
+          message: `Amounts already logged in “${stored}” are not converted — they will show as “${nextUnit}” from now on.`,
+          okText: "Rename",
+        }
+  );
+}
+
+function sameAmounts(habit: AdminHabit, fields: AmountFields): boolean {
+  return (
+    (habit.unitLabel ?? null) === fields.unitLabel &&
+    (habit.amountBasic ?? null) === fields.amountBasic &&
+    (habit.amountExtended ?? null) === fields.amountExtended
+  );
+}
+
 function pts(n: number): string {
   return `${n} ${n === 1 ? "pt" : "pts"}`;
 }
@@ -159,6 +286,9 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
   const [extendedPoints, setExtendedPoints] = useState(
     storedExtended === null ? "" : String(storedExtended)
   );
+  const [unit, setUnit] = useState(habit.unitLabel ?? "");
+  const [amountBasic, setAmountBasic] = useState(amountInput(habit.amountBasic));
+  const [amountExtended, setAmountExtended] = useState(amountInput(habit.amountExtended));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -174,8 +304,16 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
       setError("Choose a category for this habit.");
       return;
     }
-    // Sent only when it changed, so an unrelated edit never touches it.
+    const withExtended = habit.period === "daily" && extendedEnabled;
+    const amounts = parseAmountFields(unit, amountBasic, amountExtended, withExtended);
+    if (!amounts.ok) {
+      setError(amounts.error);
+      return;
+    }
+    // Both sent only when they changed, so an unrelated edit never touches them.
     const wantedExtended = extendedEnabled ? Number(extendedPoints) : null;
+    const amountsChanged = !sameAmounts(habit, amounts.fields);
+    if (amountsChanged && !(await confirmUnitChange(habit, amounts.fields.unitLabel))) return;
     setSaving(true);
     setError(null);
     try {
@@ -189,6 +327,7 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
         // it isn't using.
         ...(categoriesEnabled && category !== null ? { category } : {}),
         ...(wantedExtended !== storedExtended ? { extendedPoints: wantedExtended } : {}),
+        ...(amountsChanged ? amounts.fields : {}),
       });
       onSaved(updated);
     } catch (err) {
@@ -238,6 +377,17 @@ function EditHabitRow({ initData, habit, categoriesEnabled, onSaved, onCancel }:
           onPointsChange={setExtendedPoints}
         />
       )}
+      <AmountField
+        id={`habit-amount-${habit.id}`}
+        unit={unit}
+        basic={amountBasic}
+        extended={amountExtended}
+        withExtended={habit.period === "daily" && extendedEnabled}
+        disabled={saving}
+        onUnitChange={setUnit}
+        onBasicChange={setAmountBasic}
+        onExtendedChange={setAmountExtended}
+      />
       {categoriesEnabled && (
         <CategoryPicker
           id={`habit-category-${habit.id}`}
@@ -338,6 +488,7 @@ function HabitRow({ initData, habit, categoriesEnabled, onUpdated }: HabitRowPro
                 {habit.extendedPoints != null
                   ? `${pts(habit.pointsWeight)}, ${pts(habit.extendedPoints)} extended`
                   : `${habit.pointsWeight} pts${habit.period === "weekly" ? " / week" : ""}`}
+                {amountSummary(habit) !== null && ` · ${amountSummary(habit)}`}
               </span>
               {habit.description && (
                 <span className="mt-1 block truncate text-footnote text-muted-foreground">
@@ -383,6 +534,9 @@ function CreateHabitForm({
   const [category, setCategory] = useState<HabitCategory | null>(null);
   const [extendedEnabled, setExtendedEnabled] = useState(false);
   const [extendedPoints, setExtendedPoints] = useState("");
+  const [unit, setUnit] = useState("");
+  const [amountBasic, setAmountBasic] = useState("");
+  const [amountExtended, setAmountExtended] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -401,6 +555,12 @@ function CreateHabitForm({
       setError("Choose a category for this habit.");
       return;
     }
+    const amounts = parseAmountFields(unit, amountBasic, amountExtended, withExtended);
+    if (!amounts.ok) {
+      setError(amounts.error);
+      return;
+    }
+    const { unitLabel, amountBasic: basic, amountExtended: extended } = amounts.fields;
     setCreating(true);
     setError(null);
     try {
@@ -411,6 +571,8 @@ function CreateHabitForm({
         pointsWeight: Number(pointsWeight),
         ...(categoriesEnabled && category !== null ? { category } : {}),
         ...(withExtended ? { extendedPoints: Number(extendedPoints) } : {}),
+        // Omitted when empty, so a create works against a server without amounts.
+        ...(unitLabel !== null ? { unitLabel, amountBasic: basic, amountExtended: extended } : {}),
       });
       onCreated(habit);
       setName("");
@@ -420,6 +582,9 @@ function CreateHabitForm({
       setCategory(null);
       setExtendedEnabled(false);
       setExtendedPoints("");
+      setUnit("");
+      setAmountBasic("");
+      setAmountExtended("");
     } catch (err) {
       setError(messageForApiError(err, "Couldn't create that habit."));
     } finally {
@@ -483,6 +648,18 @@ function CreateHabitForm({
               onPointsChange={setExtendedPoints}
             />
           )}
+
+          <AmountField
+            id="new-habit-amount"
+            unit={unit}
+            basic={amountBasic}
+            extended={amountExtended}
+            withExtended={period === "daily" && extendedEnabled}
+            disabled={creating}
+            onUnitChange={setUnit}
+            onBasicChange={setAmountBasic}
+            onExtendedChange={setAmountExtended}
+          />
 
           {categoriesEnabled && (
             <CategoryPicker

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Layers, ListChecks, Sparkles } from "lucide-react";
+import { ListChecks, Sparkles } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import {
   deleteHabitLog,
@@ -12,7 +12,6 @@ import {
 import { messageForApiError } from "../api/errors.ts";
 import type {
   Habit,
-  HabitCategory,
   HabitLogWindowEntry,
   HabitLogWindowResponse,
   PersonalHabit,
@@ -20,7 +19,7 @@ import type {
   RegisteredProgress,
 } from "../api/types.ts";
 import { hapticMedium, hapticNotification } from "../lib/haptics.ts";
-import { CATEGORY_META, groupHabitsByCategory } from "../lib/habitCategories.ts";
+import { groupHabitsByCategory } from "../lib/habitCategories.ts";
 import {
   dayProgress,
   effectiveLevel,
@@ -36,10 +35,10 @@ import {
   type LogLevel,
   type Overrides,
 } from "../lib/logState.ts";
+import CategoryHeading from "../components/CategoryHeading.tsx";
 import { HabitLogRow } from "../components/HabitLogRow.tsx";
 import WeekDayPicker from "../components/WeekDayPicker.tsx";
 import PersonalHabits, { type ToggleProps } from "../components/PersonalHabits.tsx";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -132,29 +131,6 @@ function HabitRows({ habits, toggleProps }: HabitRowsProps) {
         })}
       </CardContent>
     </Card>
-  );
-}
-
-/** The full name leads; the code is a small badge beside it. */
-function CategoryHeading({ category }: { category: HabitCategory | null }) {
-  // Habits an admin hasn't categorised yet still need a home — see
-  // groupHabitsByCategory.
-  if (category === null) {
-    return (
-      <div className="flex items-center gap-2 px-1">
-        <Icon icon={Layers} size="md" className="text-muted-foreground" />
-        <h3 className="text-headline text-foreground">Uncategorized</h3>
-      </div>
-    );
-  }
-
-  const { label, icon: glyph } = CATEGORY_META[category];
-  return (
-    <div className="flex items-center gap-2 px-1">
-      <Icon icon={glyph} size="md" className="text-primary" />
-      <h3 className="text-headline text-foreground">{label}</h3>
-      <Badge size="sm">{category}</Badge>
-    </div>
   );
 }
 

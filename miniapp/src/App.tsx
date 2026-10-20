@@ -16,6 +16,7 @@ import LogHabitsScreen from "./screens/LogHabitsScreen.tsx";
 import ProgressScreen from "./screens/ProgressScreen.tsx";
 import HistoryScreen from "./screens/HistoryScreen.tsx";
 import LeaderboardScreen from "./screens/LeaderboardScreen.tsx";
+import StatsScreen from "./screens/StatsScreen.tsx";
 import SettingsScreen from "./screens/SettingsScreen.tsx";
 import AdminScreen from "./screens/AdminScreen.tsx";
 import TabBar, { type Tab } from "./components/TabBar.tsx";
@@ -326,6 +327,7 @@ export default function App() {
               roomName={state.progress.room?.name ?? null}
             />
           )}
+          {activeTab === "stats" && <StatsScreen initData={initData} />}
           {activeTab === "admin" && isAdmin && (
             <AdminScreen initData={initData} roomName={state.progress.room?.name ?? null} />
           )}

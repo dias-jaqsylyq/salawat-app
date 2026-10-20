@@ -1,13 +1,14 @@
-import { ChartColumn, Plus, Shield, Trophy, type LucideIcon } from "lucide-react";
+import { ChartColumn, Plus, Shield, Trophy, UsersRound, type LucideIcon } from "lucide-react";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
-export type Tab = "progress" | "log" | "leaderboard" | "admin";
+export type Tab = "progress" | "log" | "leaderboard" | "stats" | "admin";
 
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "progress", label: "Progress", icon: ChartColumn },
   { id: "log", label: "Log", icon: Plus },
   { id: "leaderboard", label: "Leaderboard", icon: Trophy },
+  { id: "stats", label: "Stats", icon: UsersRound },
   { id: "admin", label: "Admin", icon: Shield },
 ];
 
@@ -39,13 +40,13 @@ export default function TabBar({
             disabled={disabled}
             onClick={() => onChange(tab.id)}
             className={cn(
-              "flex flex-1 flex-col items-center gap-1 py-2 text-caption font-semibold transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
+              "flex min-w-0 flex-1 flex-col items-center gap-1 py-2 text-caption font-semibold transition duration-100 active:scale-[0.97] active:bg-fill-pressed",
               isActive ? "text-primary" : "text-muted-foreground",
               disabled && "pointer-events-none opacity-60"
             )}
           >
             <Icon icon={glyph} size="md" />
-            {tab.label}
+            <span className="max-w-full truncate">{tab.label}</span>
           </button>
         );
       })}
